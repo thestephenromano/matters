@@ -212,3 +212,18 @@ fn containing_view_lists_the_task() {
         );
     }
 }
+
+#[test]
+fn logbook_lists_every_finished_task_its_badge_counts() {
+    let db = Database::open_in_memory().unwrap();
+    let engine = QueryEngine::new(&db);
+    for i in 0..60 {
+        let id = format!("done-{i:02}");
+        db.create_task(&Task::new(id.as_str(), id.as_str(), 0.0)).unwrap();
+        db.complete_task(&id).unwrap();
+    }
+    let listed = engine.tasks_in(&View::Logbook, today()).unwrap();
+    assert_eq!(listed.len(), 60);
+    assert_eq!(engine.counts(today()).unwrap().logbook, listed.len());
+    assert_eq!(engine.logbook(10).unwrap().len(), 10, "the bounded slice still works");
+}

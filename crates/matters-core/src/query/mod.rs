@@ -83,8 +83,8 @@ const PROJECT_WHERE: &str = "project_id = ?1 AND status IN ('open', 'completed')
 /// Stable order for manually sorted lists; `id` breaks exact ties.
 const MANUAL_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
 
-/// How many finished tasks the Logbook view lists.
-pub const LOGBOOK_LIMIT: usize = 50;
+/// Logbook order: most recently finished first.
+const LOGBOOK_ORDER: &str = "completed_at DESC, updated_at DESC, id ASC";
 
 pub struct QueryEngine<'a> {
     db: &'a Database,
@@ -122,7 +122,8 @@ impl<'a> QueryEngine<'a> {
                 .collect(),
             View::Anytime => self.anytime(reference_date)?,
             View::Someday => self.someday_tasks()?,
-            View::Logbook => self.logbook(LOGBOOK_LIMIT)?,
+            // Every finished task, so the list matches its badge count.
+            View::Logbook => self.select_tasks(LOGBOOK_WHERE, LOGBOOK_ORDER, [])?,
             View::Project(id) => self.project_tasks(id)?,
         })
     }
@@ -200,12 +201,12 @@ impl<'a> QueryEngine<'a> {
         self.select_tasks(SOMEDAY_WHERE, MANUAL_ORDER, [])
     }
 
-    /// Most recently finished first.
+    /// The `limit` most recently finished tasks.
     pub fn logbook(&self, limit: usize) -> Result<Vec<Task>> {
         self.select_tasks(
             LOGBOOK_WHERE,
-            "completed_at DESC, updated_at DESC, id ASC LIMIT ?1",
-            params![limit as i64],
+            &format!("{LOGBOOK_ORDER} LIMIT ?1"),
+            params![i64::try_from(limit).unwrap_or(i64::MAX)],
         )
     }
 
