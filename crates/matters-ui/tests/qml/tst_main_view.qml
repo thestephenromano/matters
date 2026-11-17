@@ -39,6 +39,15 @@ Item {
             return null;
         }
 
+        function indexOf(title) {
+            for (let i = 0; i < list.count; ++i) {
+                const item = list.itemAtIndex(i);
+                if (item && item.title === title)
+                    return i;
+            }
+            return -1;
+        }
+
         function waitForRow(title) {
             tryVerify(() => rowFor(title) !== null, 2000, "row '" + title + "' should be listed");
             return rowFor(title);
@@ -138,6 +147,31 @@ Item {
             compare(notes.text, "abc");
             wait(900);
             compare(row.notes, "abc");
+        }
+
+        // Issue #1: rows changing elsewhere in the list must not take focus
+        // from the notes being edited.
+        function test_notes_keep_focus_when_other_rows_change() {
+            const above = addToToday("focus-a");
+            const row = addToToday("focus-b");
+            verify(indexOf("focus-a") < indexOf("focus-b"), "focus-a is listed above focus-b");
+            clickRowBody(row);
+            const notes = findChild(row, "notesInput");
+            mouseClick(notes);
+            verify(notes.activeFocus);
+
+            controller.deleteTask(above.taskId); // a row above disappears
+            waitForNoRow("focus-a");
+            wait(50);
+            const f = testCase.Window.window.activeFocusItem;
+            verify(notes.activeFocus, "after a removal, focus is on " + f + (f === row ? " (the edited row)" : (f && f.title !== undefined ? " (row " + f.title + ")" : "")) + ", currentIndex " + list.currentIndex);
+
+            controller.addTask("focus-c");
+            waitForRow("focus-c");
+            wait(50);
+            verify(notes.activeFocus, "after an insertion, focus is on " + testCase.Window.window.activeFocusItem);
+            keyClick("x");
+            compare(notes.text, "x");
         }
 
         function test_quick_find_result_opens_the_containing_view() {

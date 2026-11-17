@@ -455,7 +455,11 @@ Item {
                             font.pixelSize: 15
                         }
 
-                        delegate: Rectangle {
+                        // A FocusScope: when the ListView focuses a row (it does so
+                        // for its current item as rows come and go), focus goes to
+                        // whatever inside the row last had it, such as the notes
+                        // editor, instead of the row itself (issue #1).
+                        delegate: FocusScope {
                             id: taskRow
                             objectName: "taskRow"
                             required property string taskId
@@ -469,10 +473,14 @@ Item {
 
                             width: taskListView.width
                             height: isExpanded ? expandedContent.height + 56 : 48
-                            radius: 8
-                            color: rowHover.hovered || isExpanded ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
-                            border.color: isExpanded ? root.colBorder : "transparent"
-                            border.width: 1
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 8
+                                color: rowHover.hovered || taskRow.isExpanded ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                border.color: taskRow.isExpanded ? root.colBorder : "transparent"
+                                border.width: 1
+                            }
 
                             Behavior on height {
                                 NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
