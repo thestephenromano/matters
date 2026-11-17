@@ -108,7 +108,8 @@ impl View {
         }
     }
 
-    /// Build a new open task as if it was captured while looking at this view.
+    /// Build a new open task as if it was captured while looking at this view
+    /// (SPEC §3, "Capturing into a view").
     ///
     /// The task lands in the view it was typed into wherever the model allows:
     /// Today and Someday schedule it accordingly, Upcoming schedules it for

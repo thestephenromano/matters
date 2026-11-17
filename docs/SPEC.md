@@ -102,6 +102,21 @@ The sidebar provides access to the foundational GTD buckets:
 ### 7. Trash
 * Soft-deleted items, recoverable until explicitly emptied.
 
+### Capturing into a view
+A task typed into the quick-add field is placed where the current view can show it, when the model allows:
+
+| View typed into | New task |
+| :--- | :--- |
+| Inbox | Unscheduled, no project (Inbox) |
+| Today | When = Today |
+| Upcoming | When = tomorrow |
+| Someday | When = Someday |
+| Project | Filed in that project, unscheduled |
+| Anytime | Inbox: Anytime only lists tasks filed under an area or project |
+| Logbook | Inbox: the Logbook only lists finished tasks |
+
+This rule lives in `matters_core::View::new_task` and is shared by every frontend.
+
 ---
 
 ## 4. Interaction Design & Keyboard Ergonomics
