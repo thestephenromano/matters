@@ -117,6 +117,9 @@ A task typed into the quick-add field is placed where the current view can show 
 
 This rule lives in `matters_core::View::new_task` and is shared by every frontend.
 
+### Completing a task
+Ticking a task done (or not done) leaves it where it is in the current list, shown with its new state, until the user navigates away, including re-selecting the same view. This lets the user see what they finished and undo a misclick. Badge counts update immediately. Any other change that takes a task out of the view, such as rescheduling, moving or deleting it, applies at once. This rule lives in `matters_core::Visit`.
+
 ---
 
 ## 4. Interaction Design & Keyboard Ergonomics

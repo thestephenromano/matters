@@ -18,7 +18,9 @@ use libadwaita::{
     ActionRow, AlertDialog, Application, ApplicationWindow, HeaderBar, NavigationPage,
     NavigationSplitView, ResponseAppearance, Toast, ToastOverlay,
 };
-use matters_core::{local_today, Database, DayTracker, Project, QueryEngine, Status, Task, View};
+use matters_core::{
+    local_today, Database, DayTracker, Project, QueryEngine, Status, Task, View, Visit,
+};
 use uuid::Uuid;
 
 const APP_ID: &str = "org.matters.MattersGtk";
@@ -48,6 +50,10 @@ struct State {
     day: DayTracker,
     /// Projects in sidebar order; a project row's index selects from here.
     projects: Vec<Project>,
+    /// Keeps tasks ticked during this visit in place (see `matters_core::Visit`).
+    visit: Visit,
+    /// The tasks the list currently shows.
+    shown: Vec<Task>,
 }
 
 struct Ui {
@@ -180,6 +186,8 @@ impl Ui {
                 view: View::Today,
                 day: DayTracker::new(local_today()),
                 projects: Vec::new(),
+                visit: Visit::new(),
+                shown: Vec::new(),
             }),
             window: window.clone(),
             toasts,
@@ -257,8 +265,13 @@ impl Ui {
         }
     }
 
+    /// Navigate to `view`; this always starts a new visit.
     fn select(self: &Rc<Self>, view: View) {
-        self.state.borrow_mut().view = view;
+        {
+            let mut state = self.state.borrow_mut();
+            state.view = view;
+            state.visit.restart();
+        }
         self.refresh();
     }
 
@@ -358,9 +371,19 @@ impl Ui {
         while let Some(child) = self.task_list.first_child() {
             self.task_list.remove(&child);
         }
-        for task in self.check_value(engine.tasks_in(&view, today)).unwrap_or_default() {
-            self.task_list.append(&self.task_row(&task));
+        let rows = {
+            let mut state = self.state.borrow_mut();
+            let State { visit, shown, .. } = &mut *state;
+            let db = &self.db;
+            engine
+                .tasks_in(&view, today)
+                .and_then(|members| visit.rows(&view, members, shown, |id| db.get_task(id)))
+        };
+        let rows = self.check_value(rows).unwrap_or_default();
+        for task in &rows {
+            self.task_list.append(&self.task_row(task));
         }
+        self.state.borrow_mut().shown = rows;
     }
 
     fn check_value<T>(&self, result: matters_core::Result<T>) -> Option<T> {

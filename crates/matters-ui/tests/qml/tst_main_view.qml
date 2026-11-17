@@ -70,13 +70,24 @@ Item {
             compare(input.text, "");
         }
 
-        function test_checkbox_click_completes_the_task() {
+        function test_checkbox_click_completes_the_task_in_place() {
             const row = addToToday("tick-me");
             const before = controller.logbookCount;
             mouseClick(findChild(row, "checkCircle"));
-            waitForNoRow("tick-me");
-            compare(controller.logbookCount, before + 1);
+            tryCompare(row, "done", true);
+            compare(controller.logbookCount, before + 1, "badge counts update at once");
+            compare(rowFor("tick-me"), row, "the ticked row stays in place");
             compare(list.expandedTaskId, "", "a checkbox click must not toggle expansion");
+
+            mouseClick(findChild(row, "checkCircle"));
+            tryCompare(row, "done", false);
+            compare(controller.logbookCount, before);
+
+            mouseClick(findChild(row, "checkCircle"));
+            tryCompare(row, "done", true);
+            controller.selectView("inbox");
+            controller.selectView("today");
+            waitForNoRow("tick-me");
         }
 
         function test_row_click_toggles_expansion() {

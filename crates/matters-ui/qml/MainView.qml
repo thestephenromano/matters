@@ -52,7 +52,7 @@ Item {
     property string pendingRevealId: ""
 
     function reloadTasks() {
-        taskModel.load(controller.currentView, controller.currentProjectId);
+        taskModel.load(controller.currentView, controller.currentProjectId, controller.visit);
         if (pendingRevealId !== "") {
             const row = taskModel.rowOf(pendingRevealId);
             if (row >= 0)

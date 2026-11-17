@@ -14,7 +14,9 @@ use std::sync::OnceLock;
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
-use matters_core::{local_today, Database, DayTracker, Project, QueryEngine, Schedule, Status, Task, View};
+use matters_core::{
+    local_today, Database, DayTracker, Project, QueryEngine, Schedule, Status, Task, View, Visit,
+};
 use uuid::Uuid;
 
 use crate::list_diff::{reconcile, ListSink};
@@ -56,6 +58,9 @@ pub mod qobject {
         #[qproperty(QString, search_results_json)]
         #[qproperty(QString, error_message)]
         #[qproperty(i32, revision)]
+        /// Incremented on every navigation; a new value starts a new visit
+        /// for the task list (`matters_core::Visit`).
+        #[qproperty(i32, visit)]
         type AppController = super::AppControllerRust;
 
         #[qinvokable]
@@ -97,9 +102,10 @@ pub mod qobject {
         #[qproperty(QString, error_message)]
         type TaskListModel = super::TaskListModelRust;
 
-        /// Show the tasks of `view` (a `View` key; `project_id` for projects).
+        /// Show the tasks of `view` (a `View` key; `project_id` for projects)
+        /// during navigation `visit` (`AppController.visit`).
         #[qinvokable]
-        fn load(self: Pin<&mut TaskListModel>, view: &QString, project_id: &QString);
+        fn load(self: Pin<&mut TaskListModel>, view: &QString, project_id: &QString, visit: i32);
         /// Row of the task with this id, or -1.
         #[qinvokable]
         fn row_of(self: &TaskListModel, task_id: &QString) -> i32;
@@ -194,6 +200,7 @@ pub struct AppControllerRust {
     search_results_json: QString,
     error_message: QString,
     revision: i32,
+    visit: i32,
 
     view: View,
     /// The date the sidebar and header were last built for.
@@ -220,6 +227,7 @@ impl Default for AppControllerRust {
             search_results_json: QString::from("[]"),
             error_message: QString::default(),
             revision: 0,
+            visit: 0,
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -342,6 +350,8 @@ impl qobject::AppController {
         self.as_mut()
             .set_current_project_id(QString::from(view.project_id().unwrap_or_default()));
         self.as_mut().rust_mut().view = view;
+        let visit = self.visit.wrapping_add(1);
+        self.as_mut().set_visit(visit);
         self.changed();
     }
 
@@ -450,11 +460,15 @@ pub struct TaskListModelRust {
     error_message: QString,
     rows: Vec<Task>,
     db: Database,
+    /// Keeps tasks ticked during this visit in place (see `matters_core::Visit`).
+    visit: Visit,
     /// Set while `load` is notifying views. A `load` requested from inside one
     /// of those notifications is queued here and run afterwards, so row
     /// mutations never interleave.
     loading: bool,
-    queued: Option<(String, String)>,
+    queued: Option<(String, String, i32)>,
+    /// The navigation the current rows belong to.
+    visit_id: Option<i32>,
 }
 
 impl Default for TaskListModelRust {
@@ -463,22 +477,24 @@ impl Default for TaskListModelRust {
             error_message: QString::default(),
             rows: Vec::new(),
             db: database(),
+            visit: Visit::new(),
             loading: false,
             queued: None,
+            visit_id: None,
         }
     }
 }
 
 impl qobject::TaskListModel {
-    pub fn load(mut self: Pin<&mut Self>, view: &QString, project_id: &QString) {
-        let mut request = (String::from(view), String::from(project_id));
+    pub fn load(mut self: Pin<&mut Self>, view: &QString, project_id: &QString, visit: i32) {
+        let mut request = (String::from(view), String::from(project_id), visit);
         if self.loading {
             self.as_mut().rust_mut().queued = Some(request);
             return;
         }
         self.as_mut().rust_mut().loading = true;
         loop {
-            self.as_mut().load_now(&request.0, &request.1);
+            self.as_mut().load_now(&request.0, &request.1, request.2);
             match self.as_mut().rust_mut().queued.take() {
                 Some(next) => request = next,
                 None => break,
@@ -487,12 +503,23 @@ impl qobject::TaskListModel {
         self.as_mut().rust_mut().loading = false;
     }
 
-    fn load_now(mut self: Pin<&mut Self>, view_key: &str, project_id: &str) {
+    fn load_now(mut self: Pin<&mut Self>, view_key: &str, project_id: &str, visit: i32) {
         let Some(view) = View::from_key(view_key, Some(project_id)) else {
             let message = format!("unknown view '{view_key}'");
             return self.set_error_message(QString::from(message.as_str()));
         };
-        match QueryEngine::new(&self.db).tasks_in(&view, local_today()) {
+        let target = {
+            let this = self.as_mut().rust_mut().get_mut();
+            if this.visit_id != Some(visit) {
+                this.visit_id = Some(visit);
+                this.visit.restart();
+            }
+            let db = &this.db;
+            QueryEngine::new(db)
+                .tasks_in(&view, local_today())
+                .and_then(|members| this.visit.rows(&view, members, &this.rows, |id| db.get_task(id)))
+        };
+        match target {
             Ok(tasks) => {
                 reconcile(&mut QtRows(self.as_mut()), tasks, |t| t.id.clone());
                 self.set_error_message(QString::default());
