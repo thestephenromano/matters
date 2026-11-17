@@ -1,15 +1,28 @@
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 
 fn main() {
-    CxxQtBuilder::new_qml_module(
+    let mut builder = CxxQtBuilder::new_qml_module(
         QmlModule::new("matters")
-            .qml_files([
-                "qml/Main.qml",
-            ])
+            // TaskListModel derives from QAbstractListModel, which QML tooling
+            // resolves from this module.
+            .depend("QtQml.Models")
+            .qml_files(["qml/Main.qml", "qml/MainView.qml"]),
     )
     .file("src/bridge.rs")
     .qt_module("Gui")
     .qt_module("Quick")
-    .qt_module("QuickControls2")
-    .build();
+    .qt_module("QuickControls2");
+
+    if std::env::var_os("CARGO_FEATURE_UI_TESTS").is_some() {
+        println!("cargo:rerun-if-changed=cpp/quick_test.cpp");
+        builder = builder.qt_module("QuickTest");
+        // SAFETY: only adds a source file; no compiler flags are changed.
+        builder = unsafe {
+            builder.cc_builder(|cc| {
+                cc.file("cpp/quick_test.cpp");
+            })
+        };
+    }
+
+    builder.build();
 }

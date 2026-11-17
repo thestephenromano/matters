@@ -11,6 +11,9 @@ pub enum MattersError {
     #[error("Invalid data: {0}")]
     Validation(String),
 
+    #[error("No per-user data directory could be determined (is HOME set?)")]
+    NoDataDir,
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -1,10 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use chrono::NaiveDate;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
-use crate::error::Result;
+use crate::error::{MattersError, Result};
 use super::schema::SCHEMA_V1;
 
 #[derive(Clone)]
@@ -12,22 +12,26 @@ pub struct Database {
     conn: Arc<Mutex<Connection>>,
 }
 
-impl Default for Database {
-    fn default() -> Self {
-        if let Ok(home) = std::env::var("HOME") {
-            let data_dir = std::env::var("XDG_DATA_HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from(home).join(".local/share"));
-            let db_path = data_dir.join("matters/matters.db");
-            if let Ok(db) = Database::open(&db_path) {
-                return db;
-            }
-        }
-        Database::open_in_memory().expect("failed to open fallback in-memory database")
-    }
-}
-
 impl Database {
+    /// The per-user database location: `<data dir>/matters/matters.db`.
+    ///
+    /// The data dir follows the platform convention (`dirs::data_dir`); on
+    /// Linux that is `$XDG_DATA_HOME` when it is an absolute path, otherwise
+    /// `$HOME/.local/share`, as the XDG Base Directory spec requires.
+    pub fn default_path() -> Result<PathBuf> {
+        dirs::data_dir()
+            .map(|dir| dir.join("matters").join("matters.db"))
+            .ok_or(MattersError::NoDataDir)
+    }
+
+    /// Open (creating if needed) the per-user database at [`Self::default_path`].
+    ///
+    /// Any failure is returned to the caller; there is deliberately no silent
+    /// fallback to an in-memory store, which would discard the user's work.
+    pub fn open_default() -> Result<Self> {
+        Self::open(Self::default_path()?)
+    }
+
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let db = Self {
@@ -355,22 +359,6 @@ impl Database {
             params![now, id],
         )?;
         Ok(())
-    }
-
-    pub fn list_tasks_for_project(&self, project_id: &str) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                    time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                    created_at, updated_at
-             FROM tasks WHERE project_id = ?1 ORDER BY sort_order ASC",
-        )?;
-        let rows = stmt.query_map(params![project_id], Self::map_task_row)?;
-        let mut tasks = Vec::new();
-        for r in rows {
-            tasks.push(r?);
-        }
-        Ok(tasks)
     }
 
     pub fn delete_task(&self, id: &str) -> Result<()> {

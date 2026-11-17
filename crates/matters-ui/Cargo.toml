@@ -5,6 +5,25 @@ edition = "2021"
 authors = ["Matters Contributors"]
 description = "Native Qt 6 / QML GUI for Matters"
 
+[lib]
+name = "matters_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "matters-ui"
+path = "src/main.rs"
+
+[features]
+# QML interaction tests (Qt Quick Test). Run with:
+#   cargo test -p matters-ui --features ui-tests
+ui-tests = []
+
+[[test]]
+name = "ui"
+path = "tests/ui.rs"
+harness = false
+required-features = ["ui-tests"]
+
 [dependencies]
 cxx = "1.0"
 cxx-qt = "0.10.0"
@@ -17,3 +36,6 @@ serde_json = "1.0"
 
 [build-dependencies]
 cxx-qt-build = { version = "0.10.0" }
+
+[dev-dependencies]
+tempfile = "3.13"

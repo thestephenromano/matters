@@ -37,6 +37,19 @@ pub enum Schedule {
 }
 
 impl Schedule {
+    /// Parse the textual "When" a frontend sends: `today`, `evening`,
+    /// `someday`, `none`, or an ISO `YYYY-MM-DD` date. Anything else is `None`
+    /// (not a schedule), so callers cannot misread an unknown word as a date.
+    pub fn parse(s: &str) -> Option<Schedule> {
+        match s.trim() {
+            "today" => Some(Schedule::Today { evening: false }),
+            "evening" => Some(Schedule::Today { evening: true }),
+            "someday" => Some(Schedule::Someday),
+            "none" => Some(Schedule::None),
+            other => NaiveDate::parse_from_str(other, "%Y-%m-%d").ok().map(Schedule::Date),
+        }
+    }
+
     pub fn is_someday(&self) -> bool {
         matches!(self, Schedule::Someday)
     }

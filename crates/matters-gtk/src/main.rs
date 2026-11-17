@@ -1,321 +1,420 @@
+//! GTK4 / Libadwaita frontend.
+//!
+//! View membership, task placement and scheduling rules come from
+//! `matters_core` (`View`, `Schedule`, `QueryEngine`); this file only builds
+//! widgets and turns user actions into core calls. Every failed command is
+//! shown as a toast.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, CheckButton, Entry, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
-    SelectionMode, Separator,
+    glib, Align, Box as GtkBox, CheckButton, Entry, Label, ListBox, ListBoxRow, Orientation,
+    ScrolledWindow, SelectionMode, Separator,
 };
 use libadwaita::prelude::*;
 use libadwaita::{
-    ActionRow, Application, ApplicationWindow, HeaderBar, NavigationPage, NavigationSplitView,
+    ActionRow, AlertDialog, Application, ApplicationWindow, HeaderBar, NavigationPage,
+    NavigationSplitView, ResponseAppearance, Toast, ToastOverlay,
 };
-use matters_core::{Database, QueryEngine, Task};
-use std::cell::RefCell;
-use std::rc::Rc;
+use matters_core::{Database, Project, QueryEngine, Status, Task, View};
 use uuid::Uuid;
 
 const APP_ID: &str = "org.matters.MattersGtk";
 
-struct AppState {
-    db: Database,
-    current_view: String,
-    current_project_id: Option<String>,
-}
-
-fn main() {
-    let app = Application::builder().application_id(APP_ID).build();
-
-    app.connect_activate(build_ui);
-    app.run();
-}
-
-fn build_ui(app: &Application) {
-    let state = Rc::new(RefCell::new(AppState {
-        db: Database::default(),
-        current_view: "today".to_string(),
-        current_project_id: None,
-    }));
-
-    let window = ApplicationWindow::builder()
-        .application(app)
-        .title("Matters (GTK)")
-        .default_width(960)
-        .default_height(680)
-        .build();
-
-    let split_view = NavigationSplitView::new();
-
-    // =========================================================================
-    // SIDEBAR
-    // =========================================================================
-    let sidebar_box = GtkBox::new(Orientation::Vertical, 6);
-    sidebar_box.set_margin_top(12);
-    sidebar_box.set_margin_bottom(12);
-    sidebar_box.set_margin_start(12);
-    sidebar_box.set_margin_end(12);
-
-    // Nav list
-    let nav_list = ListBox::new();
-    nav_list.set_selection_mode(SelectionMode::Single);
-    nav_list.add_css_class("navigation-sidebar");
-
-    let views = [
-        ("inbox", "📥 Inbox"),
-        ("today", "⭐ Today"),
-        ("upcoming", "📅 Upcoming"),
-        ("anytime", "📦 Anytime"),
-        ("someday", "🗃️ Someday"),
-        ("logbook", "📓 Logbook"),
-    ];
-
-    for (id, label) in views {
-        let row = ActionRow::builder().title(label).build();
-        unsafe {
-            row.set_data("view_id", id.to_string());
+fn main() -> glib::ExitCode {
+    // Open the user's database before any UI exists. If it cannot be opened,
+    // refuse to start rather than run against a store that would not persist.
+    let db = match Database::open_default() {
+        Ok(db) => db,
+        Err(err) => {
+            let location = Database::default_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string());
+            eprintln!("matters-gtk: cannot open database at {location}: {err}");
+            return glib::ExitCode::FAILURE;
         }
-        nav_list.append(&row);
-    }
-
-    sidebar_box.append(&nav_list);
-
-    let sep = Separator::new(Orientation::Horizontal);
-    sep.set_margin_top(8);
-    sep.set_margin_bottom(8);
-    sidebar_box.append(&sep);
-
-    // Projects Header
-    let proj_header_box = GtkBox::new(Orientation::Horizontal, 8);
-    let proj_title_lbl = Label::builder()
-        .label("PROJECTS")
-        .halign(Align::Start)
-        .hexpand(true)
-        .css_classes(["dim-label", "caption", "bold"])
-        .build();
-    let add_proj_btn = gtk4::Button::builder().label("+").build();
-    proj_header_box.append(&proj_title_lbl);
-    proj_header_box.append(&add_proj_btn);
-    sidebar_box.append(&proj_header_box);
-
-    let proj_list = ListBox::new();
-    proj_list.set_selection_mode(SelectionMode::Single);
-    proj_list.add_css_class("navigation-sidebar");
-    sidebar_box.append(&proj_list);
-
-    let sidebar_scroll = ScrolledWindow::builder().child(&sidebar_box).build();
-    let sidebar_page = NavigationPage::builder()
-        .title("Matters")
-        .child(&sidebar_scroll)
-        .build();
-    split_view.set_sidebar(Some(&sidebar_page));
-
-    // =========================================================================
-    // CONTENT AREA
-    // =========================================================================
-    let content_box = GtkBox::new(Orientation::Vertical, 16);
-    content_box.set_margin_top(16);
-    content_box.set_margin_bottom(24);
-    content_box.set_margin_start(28);
-    content_box.set_margin_end(28);
-
-    let header_bar = HeaderBar::new();
-
-    // Quick Task Input
-    let new_task_entry = Entry::builder()
-        .placeholder_text("New to-do... (Press Enter to add)")
-        .hexpand(true)
-        .build();
-    content_box.append(&new_task_entry);
-
-    // Task List Box
-    let task_list_box = ListBox::new();
-    task_list_box.set_selection_mode(SelectionMode::None);
-    task_list_box.add_css_class("boxed-list");
-
-    let task_scroll = ScrolledWindow::builder()
-        .child(&task_list_box)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
-    content_box.append(&task_scroll);
-
-    let content_page_box = GtkBox::new(Orientation::Vertical, 0);
-    content_page_box.append(&header_bar);
-    content_page_box.append(&content_box);
-
-    let content_page = NavigationPage::builder()
-        .title("Today")
-        .child(&content_page_box)
-        .build();
-    split_view.set_content(Some(&content_page));
-
-    window.set_content(Some(&split_view));
-
-    // =========================================================================
-    // REFRESH & EVENT LOGIC
-    // =========================================================================
-    let refresh_tasks = {
-        let state = state.clone();
-        let task_list_box = task_list_box.clone();
-        let content_page = content_page.clone();
-
-        Rc::new(move || {
-            // Clear current list
-            while let Some(child) = task_list_box.first_child() {
-                task_list_box.remove(&child);
-            }
-
-            let s = state.borrow();
-            let engine = QueryEngine::new(&s.db);
-            let today = chrono::Local::now().date_naive();
-
-            let (title, tasks) = match s.current_view.as_str() {
-                "inbox" => ("Inbox", engine.inbox().unwrap_or_default()),
-                "today" => {
-                    let td = engine.today(today).unwrap_or_default();
-                    let mut all = td.daytime;
-                    all.extend(td.evening);
-                    ("Today", all)
-                }
-                "upcoming" => {
-                    let up = engine.upcoming(today).unwrap_or_default();
-                    let mut all = Vec::new();
-                    for g in up {
-                        all.extend(g.tasks);
-                    }
-                    ("Upcoming", all)
-                }
-                "anytime" => ("Anytime", engine.anytime(today).unwrap_or_default()),
-                "someday" => ("Someday", engine.someday_tasks().unwrap_or_default()),
-                "logbook" => ("Logbook", engine.logbook(50).unwrap_or_default()),
-                "project" => {
-                    if let Some(pid) = &s.current_project_id {
-                        let p_title = s.db.get_project(pid).ok().flatten().map(|p| p.title).unwrap_or_else(|| "Project".to_string());
-                        let p_tasks = s.db.list_tasks_for_project(pid).unwrap_or_default();
-                        content_page.set_title(&p_title);
-                        ("", p_tasks)
-                    } else {
-                        ("Project", Vec::new())
-                    }
-                }
-                _ => ("Tasks", Vec::new()),
-            };
-
-            if s.current_view != "project" {
-                content_page.set_title(title);
-            }
-
-            for task in tasks {
-                let row = ListBoxRow::new();
-                let row_box = GtkBox::new(Orientation::Horizontal, 12);
-                row_box.set_margin_top(8);
-                row_box.set_margin_bottom(8);
-                row_box.set_margin_start(10);
-                row_box.set_margin_end(10);
-
-                let is_completed = task.status == matters_core::Status::Completed;
-
-                // Round checkbox
-                let check = CheckButton::new();
-                check.add_css_class("selection-mode");
-                check.set_active(is_completed);
-
-                let tid = task.id.clone();
-                let db_clone = s.db.clone();
-                let refresh_self = state.clone();
-                let list_box_clone = task_list_box.clone();
-                let page_clone = content_page.clone();
-
-                check.connect_toggled(move |btn| {
-                    if btn.is_active() {
-                        let _ = db_clone.complete_task(&tid);
-                    } else {
-                        let _ = db_clone.uncomplete_task(&tid);
-                    }
-                });
-
-                // Title label
-                let title_lbl = Label::builder()
-                    .label(&task.title)
-                    .halign(Align::Start)
-                    .hexpand(true)
-                    .build();
-
-                if is_completed {
-                    title_lbl.add_css_class("dim-label");
-                }
-
-                row_box.append(&check);
-                row_box.append(&title_lbl);
-
-                // Evening badge
-                if task.time_of_day.as_deref() == Some("evening") {
-                    let eve_badge = Label::builder()
-                        .label("🌙 Evening")
-                        .css_classes(["badge", "warning"])
-                        .build();
-                    row_box.append(&eve_badge);
-                }
-
-                // Date badge
-                if let Some(d) = task.start_date {
-                    let d_lbl = Label::builder()
-                        .label(&d.format("%b %d").to_string())
-                        .css_classes(["caption", "dim-label"])
-                        .build();
-                    row_box.append(&d_lbl);
-                }
-
-                row.set_child(Some(&row_box));
-                task_list_box.append(&row);
-            }
-        })
     };
 
-    // Nav List selection
-    {
-        let state = state.clone();
-        let refresh = refresh_tasks.clone();
-        nav_list.connect_row_selected(move |_, row_opt| {
-            if let Some(row) = row_opt {
-                unsafe {
-                    if let Some(view_id) = row.data::<String>("view_id") {
-                        let mut s = state.borrow_mut();
-                        s.current_view = view_id.as_ref().clone();
-                        s.current_project_id = None;
-                    }
-                }
-                refresh();
-            }
+    let app = Application::builder().application_id(APP_ID).build();
+    app.connect_activate(move |app| Ui::build(app, db.clone()));
+    app.run()
+}
+
+fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+struct State {
+    view: View,
+    /// Projects in sidebar order; a project row's index selects from here.
+    projects: Vec<Project>,
+}
+
+struct Ui {
+    db: Database,
+    state: RefCell<State>,
+    window: ApplicationWindow,
+    toasts: ToastOverlay,
+    nav_list: ListBox,
+    nav_counts: Vec<Label>,
+    proj_list: ListBox,
+    task_list: ListBox,
+    content_page: NavigationPage,
+}
+
+impl Ui {
+    fn build(app: &Application, db: Database) {
+        let window = ApplicationWindow::builder()
+            .application(app)
+            .title("Matters (GTK)")
+            .default_width(960)
+            .default_height(680)
+            .build();
+
+        // ---- Sidebar --------------------------------------------------------
+        let sidebar_box = GtkBox::new(Orientation::Vertical, 6);
+        sidebar_box.set_margin_top(12);
+        sidebar_box.set_margin_bottom(12);
+        sidebar_box.set_margin_start(12);
+        sidebar_box.set_margin_end(12);
+
+        let nav_list = ListBox::new();
+        nav_list.set_selection_mode(SelectionMode::Single);
+        nav_list.add_css_class("navigation-sidebar");
+        let mut nav_counts = Vec::new();
+        for view in View::sidebar() {
+            let icon = match view {
+                View::Inbox => "📥",
+                View::Today => "⭐",
+                View::Upcoming => "📅",
+                View::Anytime => "📦",
+                View::Someday => "🗃️",
+                View::Logbook => "📓",
+                View::Project(_) => "",
+            };
+            let row = ActionRow::builder()
+                .title(format!("{icon} {}", view.title()))
+                .activatable(true)
+                .build();
+            let count = Label::builder().css_classes(["dim-label", "caption"]).build();
+            row.add_suffix(&count);
+            nav_counts.push(count);
+            nav_list.append(&row);
+        }
+        sidebar_box.append(&nav_list);
+
+        let sep = Separator::new(Orientation::Horizontal);
+        sep.set_margin_top(8);
+        sep.set_margin_bottom(8);
+        sidebar_box.append(&sep);
+
+        let proj_header = GtkBox::new(Orientation::Horizontal, 8);
+        proj_header.append(
+            &Label::builder()
+                .label("PROJECTS")
+                .halign(Align::Start)
+                .hexpand(true)
+                .css_classes(["dim-label", "caption", "bold"])
+                .build(),
+        );
+        let add_proj_btn = gtk4::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("New Project")
+            .css_classes(["flat"])
+            .build();
+        proj_header.append(&add_proj_btn);
+        sidebar_box.append(&proj_header);
+
+        let proj_list = ListBox::new();
+        proj_list.set_selection_mode(SelectionMode::Single);
+        proj_list.add_css_class("navigation-sidebar");
+        sidebar_box.append(&proj_list);
+
+        let sidebar_page = NavigationPage::builder()
+            .title("Matters")
+            .child(&ScrolledWindow::builder().child(&sidebar_box).build())
+            .build();
+
+        // ---- Content --------------------------------------------------------
+        let content_box = GtkBox::new(Orientation::Vertical, 16);
+        content_box.set_margin_top(16);
+        content_box.set_margin_bottom(24);
+        content_box.set_margin_start(28);
+        content_box.set_margin_end(28);
+
+        let new_task_entry = Entry::builder()
+            .placeholder_text("New to-do... (Press Enter to add)")
+            .hexpand(true)
+            .build();
+        content_box.append(&new_task_entry);
+
+        let task_list = ListBox::new();
+        task_list.set_selection_mode(SelectionMode::None);
+        task_list.add_css_class("boxed-list");
+        content_box.append(
+            &ScrolledWindow::builder()
+                .child(&task_list)
+                .vexpand(true)
+                .hexpand(true)
+                .build(),
+        );
+
+        let content_page_box = GtkBox::new(Orientation::Vertical, 0);
+        content_page_box.append(&HeaderBar::new());
+        content_page_box.append(&content_box);
+        let content_page = NavigationPage::builder()
+            .title(View::Today.title())
+            .child(&content_page_box)
+            .build();
+
+        let split_view = NavigationSplitView::new();
+        split_view.set_sidebar(Some(&sidebar_page));
+        split_view.set_content(Some(&content_page));
+        let toasts = ToastOverlay::new();
+        toasts.set_child(Some(&split_view));
+        window.set_content(Some(&toasts));
+
+        let ui = Rc::new(Ui {
+            db,
+            state: RefCell::new(State { view: View::Today, projects: Vec::new() }),
+            window: window.clone(),
+            toasts,
+            nav_list: nav_list.clone(),
+            nav_counts,
+            proj_list: proj_list.clone(),
+            task_list,
+            content_page,
         });
+
+        // ---- Events ---------------------------------------------------------
+        {
+            let ui = ui.clone();
+            nav_list.connect_row_activated(move |_, row| {
+                let index = usize::try_from(row.index()).ok();
+                if let Some(view) = index.and_then(|i| View::sidebar().get(i).cloned()) {
+                    ui.select(view);
+                }
+            });
+        }
+        {
+            let ui = ui.clone();
+            proj_list.connect_row_activated(move |_, row| {
+                let index = usize::try_from(row.index()).ok();
+                let project = index.and_then(|i| ui.state.borrow().projects.get(i).map(|p| p.id.clone()));
+                if let Some(id) = project {
+                    ui.select(View::Project(id));
+                }
+            });
+        }
+        {
+            let ui = ui.clone();
+            new_task_entry.connect_activate(move |entry| {
+                let title = entry.text().trim().to_string();
+                if title.is_empty() {
+                    return;
+                }
+                let task = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, today());
+                if ui.check(ui.db.create_task(&task)) {
+                    entry.set_text("");
+                }
+                ui.refresh();
+            });
+        }
+        {
+            let ui = ui.clone();
+            add_proj_btn.connect_clicked(move |_| ui.prompt_new_project());
+        }
+
+        ui.select(View::Today);
+        window.present();
     }
 
-    // New Task Entry handler
-    {
-        let state = state.clone();
-        let refresh = refresh_tasks.clone();
-        new_task_entry.connect_activate(move |entry| {
-            let text = entry.text().trim().to_string();
-            if !text.is_empty() {
-                let s = state.borrow();
-                let today = chrono::Local::now().date_naive();
-                let mut task = Task::new(Uuid::new_v4().to_string(), text, 0.0);
-
-                if s.current_view == "today" {
-                    task.start_date = Some(today);
-                } else if s.current_view == "someday" {
-                    task.is_someday = true;
-                } else if s.current_view == "project" {
-                    task.project_id = s.current_project_id.clone();
-                }
-
-                let _ = s.db.create_task(&task);
-                entry.set_text("");
-                drop(s);
-                refresh();
+    /// Show `result`'s error, if any, as a toast. Returns whether it succeeded.
+    fn check<T>(&self, result: matters_core::Result<T>) -> bool {
+        match result {
+            Ok(_) => true,
+            Err(err) => {
+                eprintln!("matters-gtk: {err}");
+                self.toasts.add_toast(Toast::new(&err.to_string()));
+                false
             }
-        });
+        }
     }
 
-    // Initial load
-    refresh_tasks();
+    fn select(self: &Rc<Self>, view: View) {
+        self.state.borrow_mut().view = view;
+        self.refresh();
+    }
 
-    window.present();
+    fn prompt_new_project(self: &Rc<Self>) {
+        let dialog = AlertDialog::new(Some("New Project"), None);
+        let entry = Entry::builder().placeholder_text("Project title").activates_default(true).build();
+        dialog.set_extra_child(Some(&entry));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("create", "Create");
+        dialog.set_response_appearance("create", ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("create"));
+        dialog.set_close_response("cancel");
+
+        let ui = self.clone();
+        dialog.connect_response(Some("create"), move |_, _| {
+            let title = entry.text().trim().to_string();
+            if title.is_empty() {
+                return;
+            }
+            let project = Project::new(Uuid::new_v4().to_string(), title, 0.0);
+            if ui.check(ui.db.create_project(&project)) {
+                ui.select(View::Project(project.id));
+            }
+        });
+        dialog.present(Some(&self.window));
+    }
+
+    /// Re-read everything the window shows from the database.
+    fn refresh(self: &Rc<Self>) {
+        let engine = QueryEngine::new(&self.db);
+        let view = self.state.borrow().view.clone();
+
+        // Sidebar counts.
+        if let Some(counts) = self.check_value(engine.counts(today())) {
+            let values = [
+                counts.inbox,
+                counts.today,
+                counts.upcoming,
+                counts.anytime,
+                counts.someday,
+                counts.logbook,
+            ];
+            for (label, n) in self.nav_counts.iter().zip(values) {
+                label.set_label(&if n > 0 { n.to_string() } else { String::new() });
+            }
+        }
+
+        // Projects list.
+        let projects = self.check_value(self.db.list_projects()).unwrap_or_default();
+        while let Some(child) = self.proj_list.first_child() {
+            self.proj_list.remove(&child);
+        }
+        for project in &projects {
+            // Titles are user text, not Pango markup.
+            let row = ActionRow::builder()
+                .title(project.title.as_str())
+                .use_markup(false)
+                .activatable(true)
+                .build();
+            self.proj_list.append(&row);
+        }
+
+        // Sidebar selection mirrors the current view.
+        match &view {
+            View::Project(id) => {
+                self.nav_list.unselect_all();
+                let row = projects.iter().position(|p| &p.id == id);
+                match row.and_then(|i| self.proj_list.row_at_index(i as i32)) {
+                    Some(row) => self.proj_list.select_row(Some(&row)),
+                    None => self.proj_list.unselect_all(),
+                }
+            }
+            other => {
+                self.proj_list.unselect_all();
+                let row = View::sidebar().iter().position(|v| v == other);
+                if let Some(row) = row.and_then(|i| self.nav_list.row_at_index(i as i32)) {
+                    self.nav_list.select_row(Some(&row));
+                }
+            }
+        }
+
+        // Header.
+        let title = match &view {
+            View::Project(id) => projects
+                .iter()
+                .find(|p| &p.id == id)
+                .map(|p| p.title.clone())
+                .unwrap_or_else(|| view.title().to_string()),
+            other => other.title().to_string(),
+        };
+        self.content_page.set_title(&title);
+        self.state.borrow_mut().projects = projects;
+
+        // Tasks.
+        while let Some(child) = self.task_list.first_child() {
+            self.task_list.remove(&child);
+        }
+        for task in self.check_value(engine.tasks_in(&view, today())).unwrap_or_default() {
+            self.task_list.append(&self.task_row(&task));
+        }
+    }
+
+    fn check_value<T>(&self, result: matters_core::Result<T>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(err) => {
+                self.check::<()>(Err(err));
+                None
+            }
+        }
+    }
+
+    fn task_row(self: &Rc<Self>, task: &Task) -> ListBoxRow {
+        let row_box = GtkBox::new(Orientation::Horizontal, 12);
+        row_box.set_margin_top(8);
+        row_box.set_margin_bottom(8);
+        row_box.set_margin_start(10);
+        row_box.set_margin_end(10);
+
+        let is_completed = task.status == Status::Completed;
+        let check = CheckButton::new();
+        check.add_css_class("selection-mode");
+        check.set_active(is_completed);
+        {
+            let ui = self.clone();
+            let id = task.id.clone();
+            check.connect_toggled(move |btn| {
+                let result = if btn.is_active() {
+                    ui.db.complete_task(&id)
+                } else {
+                    ui.db.uncomplete_task(&id)
+                };
+                ui.check(result);
+                // Rebuild after this handler returns: the list is about to drop
+                // the row this checkbox lives in.
+                let ui = ui.clone();
+                glib::idle_add_local_once(move || ui.refresh());
+            });
+        }
+        row_box.append(&check);
+
+        let title = Label::builder()
+            .label(task.title.as_str())
+            .halign(Align::Start)
+            .hexpand(true)
+            .build();
+        if is_completed {
+            title.add_css_class("dim-label");
+        }
+        row_box.append(&title);
+
+        if task.is_evening() {
+            row_box.append(
+                &Label::builder()
+                    .label("🌙 Evening")
+                    .css_classes(["caption", "warning"])
+                    .build(),
+            );
+        }
+        if let Some(date) = task.start_date {
+            row_box.append(
+                &Label::builder()
+                    .label(date.format("%b %d").to_string().as_str())
+                    .css_classes(["caption", "dim-label"])
+                    .build(),
+            );
+        }
+
+        let row = ListBoxRow::new();
+        row.set_child(Some(&row_box));
+        row
+    }
 }

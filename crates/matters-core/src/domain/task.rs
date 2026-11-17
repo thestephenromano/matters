@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use super::status::Status;
+use super::when::Schedule;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
@@ -46,6 +47,16 @@ impl Task {
 
     pub fn is_open(&self) -> bool {
         self.status == Status::Open
+    }
+
+    /// Set the task's "When". All three stored fields (start date, time of day,
+    /// someday flag) are written together so a task can never be, for example,
+    /// both Someday and scheduled for Today.
+    pub fn apply_schedule(&mut self, schedule: &Schedule, today: NaiveDate) {
+        let (start_date, time_of_day, is_someday) = schedule.to_db_fields(today);
+        self.start_date = start_date;
+        self.time_of_day = time_of_day.map(str::to_string);
+        self.is_someday = is_someday;
     }
 
     pub fn is_evening(&self) -> bool {
