@@ -174,7 +174,8 @@ fn containing_view_lists_the_task() {
     let engine = QueryEngine::new(&db);
 
     let d = |m, day| NaiveDate::from_ymd_opt(2026, m, day).unwrap();
-    let setups: Vec<(&str, Box<dyn Fn(&mut Task)>)> = vec![
+    type Setup<'a> = Box<dyn Fn(&mut Task) + 'a>;
+    let setups: Vec<(&str, Setup<'_>)> = vec![
         ("inbox", Box::new(|_| {})),
         ("today", Box::new(|t| t.start_date = Some(today()))),
         ("overdue", Box::new(|t| t.start_date = Some(d(11, 1)))),

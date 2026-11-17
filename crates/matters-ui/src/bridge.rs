@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
-use matters_core::{Database, Project, QueryEngine, Schedule, Status, Task, View};
+use matters_core::{local_today, Database, DayTracker, Project, QueryEngine, Schedule, Status, Task, View};
 use uuid::Uuid;
 
 use crate::list_diff::{reconcile, ListSink};
@@ -81,6 +81,10 @@ pub mod qobject {
         fn search(self: Pin<&mut AppController>, query: &QString);
         #[qinvokable]
         fn clear_error(self: Pin<&mut AppController>);
+        /// Refresh if the local date changed since the views were built.
+        /// Called periodically by the UI.
+        #[qinvokable]
+        fn check_date(self: Pin<&mut AppController>);
     }
 
     impl cxx_qt::Initialize for AppController {}
@@ -167,10 +171,6 @@ fn database() -> Database {
         .expect("matters-ui: QML object created before install_database()")
 }
 
-fn today() -> chrono::NaiveDate {
-    chrono::Local::now().date_naive()
-}
-
 fn to_json<T: serde::Serialize>(value: &T) -> QString {
     QString::from(serde_json::to_string(value).expect("domain types serialize").as_str())
 }
@@ -196,6 +196,8 @@ pub struct AppControllerRust {
     revision: i32,
 
     view: View,
+    /// The date the sidebar and header were last built for.
+    day: DayTracker,
     search_query: String,
     db: Database,
 }
@@ -219,6 +221,7 @@ impl Default for AppControllerRust {
             error_message: QString::default(),
             revision: 0,
             view,
+            day: DayTracker::new(local_today()),
             search_query: String::new(),
             db: database(),
         }
@@ -252,7 +255,7 @@ impl qobject::AppController {
         if title.is_empty() {
             return;
         }
-        let task = self.view.new_task(Uuid::new_v4().to_string(), title, today());
+        let task = self.view.new_task(Uuid::new_v4().to_string(), title, local_today());
         let result = self.db.create_task(&task);
         self.finish(result);
     }
@@ -280,7 +283,7 @@ impl qobject::AppController {
             return self.report(format!("'{when}' is not a schedule"));
         };
         let result = self.edit_task(&String::from(task_id), |task| {
-            task.apply_schedule(&schedule, today())
+            task.apply_schedule(&schedule, local_today())
         });
         self.finish(result);
     }
@@ -303,7 +306,7 @@ impl qobject::AppController {
 
     pub fn reveal_task(self: Pin<&mut Self>, task_id: &QString) {
         match self.db.get_task(&String::from(task_id)) {
-            Ok(Some(task)) => self.set_view(View::containing(&task, today())),
+            Ok(Some(task)) => self.set_view(View::containing(&task, local_today())),
             Ok(None) => self.report(format!("task '{task_id}' no longer exists")),
             Err(err) => self.report(err.to_string()),
         }
@@ -316,6 +319,12 @@ impl qobject::AppController {
 
     pub fn clear_error(self: Pin<&mut Self>) {
         self.set_error_message(QString::default());
+    }
+
+    pub fn check_date(self: Pin<&mut Self>) {
+        if self.day.day() != local_today() {
+            self.changed();
+        }
     }
 
     // ---- internals ----------------------------------------------------------
@@ -353,6 +362,7 @@ impl qobject::AppController {
     /// task list reloads. Only aggregate counts are queried for the sidebar;
     /// the rows of the current view are loaded by `TaskListModel`.
     fn changed(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().day.advance(local_today());
         if let Err(err) = self.as_mut().refresh_sidebar_and_header() {
             self.as_mut().report(err.to_string());
         }
@@ -366,7 +376,7 @@ impl qobject::AppController {
     fn refresh_sidebar_and_header(mut self: Pin<&mut Self>) -> matters_core::Result<()> {
         let (counts, projects, title, progress) = {
             let engine = QueryEngine::new(&self.db);
-            let counts = engine.counts(today())?;
+            let counts = engine.counts(self.day.day())?;
             let projects = self.db.list_projects()?;
             let (title, progress) = match &self.view {
                 View::Project(id) => (
@@ -482,7 +492,7 @@ impl qobject::TaskListModel {
             let message = format!("unknown view '{view_key}'");
             return self.set_error_message(QString::from(message.as_str()));
         };
-        match QueryEngine::new(&self.db).tasks_in(&view, today()) {
+        match QueryEngine::new(&self.db).tasks_in(&view, local_today()) {
             Ok(tasks) => {
                 reconcile(&mut QtRows(self.as_mut()), tasks, |t| t.id.clone());
                 self.set_error_message(QString::default());

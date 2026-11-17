@@ -18,7 +18,7 @@ use libadwaita::{
     ActionRow, AlertDialog, Application, ApplicationWindow, HeaderBar, NavigationPage,
     NavigationSplitView, ResponseAppearance, Toast, ToastOverlay,
 };
-use matters_core::{Database, Project, QueryEngine, Status, Task, View};
+use matters_core::{local_today, Database, DayTracker, Project, QueryEngine, Status, Task, View};
 use uuid::Uuid;
 
 const APP_ID: &str = "org.matters.MattersGtk";
@@ -42,12 +42,10 @@ fn main() -> glib::ExitCode {
     app.run()
 }
 
-fn today() -> chrono::NaiveDate {
-    chrono::Local::now().date_naive()
-}
-
 struct State {
     view: View,
+    /// The date the window was last built for.
+    day: DayTracker,
     /// Projects in sidebar order; a project row's index selects from here.
     projects: Vec<Project>,
 }
@@ -178,7 +176,11 @@ impl Ui {
 
         let ui = Rc::new(Ui {
             db,
-            state: RefCell::new(State { view: View::Today, projects: Vec::new() }),
+            state: RefCell::new(State {
+                view: View::Today,
+                day: DayTracker::new(local_today()),
+                projects: Vec::new(),
+            }),
             window: window.clone(),
             toasts,
             nav_list: nav_list.clone(),
@@ -215,7 +217,7 @@ impl Ui {
                 if title.is_empty() {
                     return;
                 }
-                let task = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, today());
+                let task = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, local_today());
                 if ui.check(ui.db.create_task(&task)) {
                     entry.set_text("");
                 }
@@ -225,6 +227,18 @@ impl Ui {
         {
             let ui = ui.clone();
             add_proj_btn.connect_clicked(move |_| ui.prompt_new_project());
+        }
+
+        // Today, Upcoming and the counts depend on the date. Check it every
+        // minute; a repeating check also catches resume and clock changes.
+        {
+            let ui = ui.clone();
+            glib::timeout_add_seconds_local(60, move || {
+                if ui.state.borrow().day.day() != local_today() {
+                    ui.refresh();
+                }
+                glib::ControlFlow::Continue
+            });
         }
 
         ui.select(View::Today);
@@ -275,10 +289,12 @@ impl Ui {
     /// Re-read everything the window shows from the database.
     fn refresh(self: &Rc<Self>) {
         let engine = QueryEngine::new(&self.db);
+        let today = local_today();
+        self.state.borrow_mut().day.advance(today);
         let view = self.state.borrow().view.clone();
 
         // Sidebar counts.
-        if let Some(counts) = self.check_value(engine.counts(today())) {
+        if let Some(counts) = self.check_value(engine.counts(today)) {
             let values = [
                 counts.inbox,
                 counts.today,
@@ -342,7 +358,7 @@ impl Ui {
         while let Some(child) = self.task_list.first_child() {
             self.task_list.remove(&child);
         }
-        for task in self.check_value(engine.tasks_in(&view, today())).unwrap_or_default() {
+        for task in self.check_value(engine.tasks_in(&view, today)).unwrap_or_default() {
             self.task_list.append(&self.task_row(&task));
         }
     }

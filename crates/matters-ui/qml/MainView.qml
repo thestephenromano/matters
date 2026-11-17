@@ -39,6 +39,15 @@ Item {
         id: taskModel
     }
 
+    // Today, Upcoming and the counts depend on the date. Check it every minute;
+    // a repeating check also catches resume-from-sleep and clock changes.
+    Timer {
+        interval: 60 * 1000
+        repeat: true
+        running: true
+        onTriggered: controller.checkDate()
+    }
+
     // Task to scroll to once the list has loaded (set by Quick Find).
     property string pendingRevealId: ""
 

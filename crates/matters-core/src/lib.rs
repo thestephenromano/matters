@@ -1,8 +1,10 @@
+pub mod clock;
 pub mod domain;
 pub mod error;
 pub mod query;
 pub mod storage;
 
+pub use clock::{local_today, DayTracker};
 pub use domain::{
     Area, ChecklistItem, Heading, Project, ProjectProgress, Schedule, Status, Task, TimeOfDay, View,
 };
