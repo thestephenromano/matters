@@ -12,6 +12,21 @@ pub struct Database {
     conn: Arc<Mutex<Connection>>,
 }
 
+impl Default for Database {
+    fn default() -> Self {
+        if let Ok(home) = std::env::var("HOME") {
+            let data_dir = std::env::var("XDG_DATA_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from(home).join(".local/share"));
+            let db_path = data_dir.join("matters/matters.db");
+            if let Ok(db) = Database::open(&db_path) {
+                return db;
+            }
+        }
+        Database::open_in_memory().expect("failed to open fallback in-memory database")
+    }
+}
+
 impl Database {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
@@ -340,6 +355,22 @@ impl Database {
             params![now, id],
         )?;
         Ok(())
+    }
+
+    pub fn list_tasks_for_project(&self, project_id: &str) -> Result<Vec<Task>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
+                    time_of_day, is_someday, deadline, status, completed_at, sort_order,
+                    created_at, updated_at
+             FROM tasks WHERE project_id = ?1 ORDER BY sort_order ASC",
+        )?;
+        let rows = stmt.query_map(params![project_id], Self::map_task_row)?;
+        let mut tasks = Vec::new();
+        for r in rows {
+            tasks.push(r?);
+        }
+        Ok(tasks)
     }
 
     pub fn delete_task(&self, id: &str) -> Result<()> {
