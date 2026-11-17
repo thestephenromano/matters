@@ -1,0 +1,270 @@
+# Matters — Product & Technical Specification
+
+**Version:** 0.1.0-draft  
+**Target Platform:** Linux (KDE Plasma 6, GNOME 4x+, Wayland/X11)  
+**Core Technologies:** Rust, Qt 6 / QML (`cxx-qt`), SQLite  
+
+---
+
+## 1. Product Vision & Principles
+
+Matters is an uncompromising, first-class Linux recreation of the Things 3 experience. Linux task management has historically been divided between utilitarian TUIs/plain text (Org-mode, Taskwarrior) and heavy Electron web wrappers (Todoist, Super Productivity). Matters fills the void for an impeccably crafted, native desktop application prioritizing aesthetic calm, tactile feedback, and strict GTD discipline.
+
+### Core Principles
+1. **Restraint over Configuration:** Prevent task bloat by enforcing a proven, finite hierarchy.
+2. **Temporal Clarity (When vs. Deadline):** A task's start date ("When") dictates when it demands attention. Its "Deadline" dictates urgency. Most tasks only need a "When".
+3. **In-Place Interaction:** Expanding a task should never yank the user into an inspector pane or pop-up modal. Notes, tags, and checklists unfold inline.
+4. **Native Linux & KDE Citizen:** Respect system color schemes (Breeze Light/Dark), native font rendering, Wayland window management, and native system shortcuts.
+5. **Local-First Speed:** Instant launches, sub-millisecond local SQLite queries via WAL mode, zero network requirement for core functionality.
+
+---
+
+## 2. Information Architecture & Hierarchy
+
+Matters enforces a strict 4-tier organizational model:
+
+```
+Area (e.g. Work, Personal, Finances)
+ └── Project (e.g. "Q4 Roadmap", "Kitchen Renovation")
+      └── Heading (e.g. "Planning", "Execution")
+           └── Task (e.g. "Draft budget spreadsheet")
+                └── Checklist Item (e.g. "Export CSV", "Calculate totals")
+```
+
+### Entities
+
+1. **Area:**
+   * High-level sphere of responsibility.
+   * Cannot be completed or archived; has no start date or deadline.
+   * Can contain Projects and standalone Tasks.
+
+2. **Project:**
+   * An objective with a definite outcome that can be completed.
+   * Has an iconic **circular progress ring** displaying `completed / total` ratio.
+   * Can have a start date (`When`), `Deadline`, tags, and notes.
+   * Can reside inside an Area or at the top level.
+
+3. **Heading:**
+   * A visual section divider inside a Project to group related tasks.
+   * Cannot be completed independently; exists purely for spatial organization.
+
+4. **Task (To-Do):**
+   * The atomic unit of work.
+   * Contains: Title, Notes (markdown-formatted), Checklist, Tags, `When`, `Deadline`, `Status`.
+   * Can reside in:
+     * Inbox (unassigned)
+     * Direct child of an Area
+     * Child of a Project (optionally under a Heading)
+
+5. **Checklist Item:**
+   * Lightweight sub-step inside a Task.
+   * Plain text title with a simple boolean checkbox.
+   * Does not have dates, tags, or notes.
+
+---
+
+## 3. The Core Views (GTD Navigation)
+
+The sidebar provides access to the foundational GTD buckets:
+
+### 1. Inbox
+* Capture zone for incoming thoughts and to-dos.
+* Every task created without an explicit project or date defaults here.
+* Goal: Regularly processed to zero.
+
+### 2. Today
+* The daily execution dashboard.
+* Contains:
+  * Tasks scheduled with `When == Today` (or earlier if overdue).
+  * Tasks manually flagged for Today.
+* **This Evening Section:**
+  * Separated by the iconic moon header (`🌙 This Evening`).
+  * Dedicated to tasks deferred to personal/evening hours to prevent daytime cognitive clutter.
+
+### 3. Upcoming
+* Chronological future horizon.
+* Groups scheduled tasks by date (e.g., *Tomorrow*, *Thursday, Nov 19*, *Next Week*).
+* Focuses exclusively on future `When` dates.
+
+### 4. Anytime
+* All active, actionable tasks ready to be worked on immediately:
+  * Tasks with `When <= Today` or no scheduled date (excluding Someday and Inbox).
+  * Grouped by Area and Project.
+
+### 5. Someday
+* Incubator for long-term ideas, backlog items, or deferred projects.
+* Tasks and projects marked `When = Someday` are hidden from Today, Upcoming, and Anytime.
+
+### 6. Logbook
+* Archive of completed and canceled tasks and projects, grouped by completion date.
+* Provides a sense of accomplishment and an auditable history.
+
+### 7. Trash
+* Soft-deleted items, recoverable until explicitly emptied.
+
+---
+
+## 4. Interaction Design & Keyboard Ergonomics
+
+Matters is designed to be operated with minimal mouse reliance.
+
+| Shortcut | Context | Action |
+| :--- | :--- | :--- |
+| `Enter` | Selected task | Creates a new task directly below the selected item |
+| `Space` | Selected task | Toggles inline expansion (notes + checklist) |
+| `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, date picker) |
+| `Ctrl + D` | Selected task(s) | Opens **Deadline** picker |
+| `Ctrl + Shift + M` | Selected task(s) | Opens **Move** popover (select destination Area / Project / Heading) |
+| `Ctrl + K` or `/` | Anywhere | Opens **Quick Find** (instant fuzzy search across all items) |
+| `Ctrl + N` | Anywhere | Creates a new task in the current view |
+| `Ctrl + Shift + N` | Anywhere | Creates a new Project |
+| `Delete` / `Backspace` | Selected task(s) | Moves task to Trash |
+| `Up` / `Down` | Task list | Moves list selection |
+| `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list |
+
+---
+
+## 5. Technical Architecture
+
+### 5.1 Technology Stack
+* **Language (Backend & Core):** Rust (edition 2024 / stable 1.80+)
+* **UI Framework:** Qt 6.8+ / QML (Qt Quick) via `cxx-qt` (KDAB)
+* **Storage:** SQLite 3 via `rusqlite` (WAL mode enabled)
+* **Build System:** Cargo + CMake (`cxx-qt-build`)
+* **Desktop Integration:** FreeDesktop standards, Wayland Layer Shell, KDE KGlobalAccel
+
+### 5.2 Workspace Layout
+```
+matters/
+├── Cargo.toml
+├── docs/
+│   └── SPEC.md
+├── crates/
+│   ├── matters-core/
+│   │   ├── Cargo.toml
+│   │   ├── src/
+│   │   │   ├── domain/         # Area, Project, Heading, Task, Checklist, Value Types
+│   │   │   ├── storage/        # SQLite connection pool, schema, migrations
+│   │   │   ├── query/          # GTD view query engines (Inbox, Today, Upcoming, etc.)
+│   │   │   ├── error.rs        # Typed domain errors
+│   │   │   └── lib.rs
+│   │   └── tests/              # GTD logic & persistence integration tests
+│   │
+│   └── matters-ui/
+│       ├── Cargo.toml
+│       ├── build.rs            # cxx-qt code generator
+│       ├── src/
+│       │   ├── bridge/         # QObject wrappers (TaskListModel, ProjectListModel)
+│       │   └── main.rs
+│       └── qml/
+│           ├── Main.qml
+│           ├── style/          # Colors, typography, spacing tokens
+│           ├── components/     # TaskRow, ChecklistRow, ProgressRing, DatePicker
+│           └── views/          # TodayView, UpcomingView, ProjectView, Sidebar
+```
+
+### 5.3 Database Schema (SQLite)
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS areas (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    sort_order REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY NOT NULL,
+    area_id TEXT REFERENCES areas(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    start_date TEXT,               -- ISO 8601 'YYYY-MM-DD', NULL = no date
+    time_of_day TEXT,              -- NULL or 'evening'
+    deadline TEXT,                 -- ISO 8601 'YYYY-MM-DD'
+    status TEXT NOT NULL DEFAULT 'open', -- 'open', 'completed', 'canceled', 'trashed'
+    completed_at INTEGER,
+    sort_order REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS headings (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    sort_order REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY NOT NULL,
+    area_id TEXT REFERENCES areas(id) ON DELETE SET NULL,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    heading_id TEXT REFERENCES headings(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    start_date TEXT,               -- ISO 8601 'YYYY-MM-DD'
+    time_of_day TEXT,              -- NULL or 'evening'
+    is_someday INTEGER NOT NULL DEFAULT 0,
+    deadline TEXT,                 -- ISO 8601 'YYYY-MM-DD'
+    status TEXT NOT NULL DEFAULT 'open', -- 'open', 'completed', 'canceled', 'trashed'
+    completed_at INTEGER,
+    sort_order REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS checklist_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    is_completed INTEGER NOT NULL DEFAULT 0,
+    sort_order REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS task_tags (
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_start_date ON tasks(start_date);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area_id);
+```
+
+---
+
+## 6. MVP Scope (v0.1) vs. Future Roadmap
+
+### In Scope for MVP (v0.1)
+- [x] Full local SQLite persistence with WAL mode.
+- [x] Complete domain hierarchy: Area → Project → Heading → Task → Checklist.
+- [x] Core views: Inbox, Today (with "This Evening"), Upcoming, Anytime, Someday, Logbook, Trash.
+- [x] When vs. Deadline scheduling engine.
+- [x] Inline task expansion (title, notes, checklists).
+- [x] Keyboard navigation and shortcuts (`Enter`, `Space`, `Ctrl+S`, `Ctrl+D`, `Ctrl+K`, arrows).
+- [x] Circular project progress ring component in QML.
+- [x] Quick Find popover.
+- [x] Automatic dark/light theme tracking (respecting KDE Plasma Breeze / system color scheme).
+
+### Post-MVP (v0.2+)
+- [ ] System-wide floating Quick Capture daemon via Wayland Layer Shell / KGlobalAccel.
+- [ ] Recurrence engine (Daily, Weekly, Monthly, after completion).
+- [ ] Calendar overlay in Upcoming via Evolution Data Server (EDS) / CalDAV.
+- [ ] KRunner plugin (`Alt+Space` quick task entry).
+- [ ] End-to-end encrypted peer-to-peer or self-hosted sync.
+- [ ] Import from Things 3 JSON export.
