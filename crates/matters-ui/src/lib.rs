@@ -4,7 +4,6 @@
 //! this library holds everything else so tests can link against it.
 
 pub mod bridge;
-mod list_diff;
 #[cfg(test)]
 mod qml_lint;
 

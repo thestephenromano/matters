@@ -4,7 +4,7 @@
 //!   After any change it bumps `revision`, which tells views to reload.
 //! * `TaskListModel` is the task list for one view. It reconciles rows by
 //!   task id so delegates (and their expansion, focus and edit state) survive
-//!   reloads; see [`crate::list_diff`].
+//!   reloads; see [`matters_core::list_diff`].
 //!
 //! View membership, "When" parsing and task placement all live in
 //! `matters_core`; this layer only translates between QML and those types.
@@ -19,7 +19,7 @@ use matters_core::{
 };
 use uuid::Uuid;
 
-use crate::list_diff::{reconcile, ListSink};
+use matters_core::list_diff::{reconcile, ListSink};
 
 #[cxx_qt::bridge]
 pub mod qobject {

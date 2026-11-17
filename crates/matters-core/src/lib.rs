@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod domain;
 pub mod error;
+pub mod list_diff;
 pub mod query;
 pub mod storage;
 pub mod visit;
