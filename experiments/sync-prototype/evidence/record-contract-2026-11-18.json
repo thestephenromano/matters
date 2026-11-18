@@ -3,19 +3,11 @@
   "source_commit": "a486b520db03c3c9b3b00c09277e068453a93617",
   "base_commit": "b31d88edebcb3e723cc4758f079ef05d6304dfe9",
   "source_sha256": {
-    ".github/workflows/ci.yml": "7835b32344548270fed27c3a63951d7bff6fbe2c766534917a72d374205462e4",
-    ".github/workflows/sync-prototype.yml": "f1d4cd2224ce14426924e44e4fc227b241bcfc2b26f621fdf69e5ee61637d6e9",
-    "Cargo.lock": "d9107137e79eaa2790825e35b2dc0e1a404efe3fdf07904594eb874925654673",
-    "Cargo.toml": "762a80055fcaf32c5347c430f65ccaaa22ec286cd491510d2e86588836f819b8",
-    "ci/check.sh": "917380f5539bef6c90e2f1cfa5368810e00419b11faff9d0bb3a30dceb8c8598",
+    ".github/workflows/sync-prototype.yml": "4feb6a99e78c95f4578b05fd8339a5da6b9339ad1a3263abe2f8bafc55dea976",
     "ci/sqlite_runtime.rs": "c668549e37ad8feb6c4898e9d08eef2ddf1553f443e1cd8f5a023d0cff4f416c",
     "ci/sqlite_wal_tests.rs": "740ef3c4ede5883161274782ba7e6e46b0b98c938d9f7deb02a1ba352e0f8f10",
-    "crates/matters-core/Cargo.toml": "98085de9a7a0008564b8a28ed9cf15e20e12a9467a9335c5e804a960ae18434b",
-    "crates/matters-core/src/storage/db.rs": "6f9f56fd8f6c1ce39b78f584ddab5f3edf298cf60992a24c7238cbcce493c884",
-    "crates/matters-core/src/storage/schema.rs": "18edce81ac283d34157a212d7e6a8afe1740b7749e953a29086691fec97e1837",
-    "crates/matters-core/tests/sqlite_tests.rs": "a7ad0bf30443a96a8db047a181422855d43dae1cae11ccf044f63ad76a8101c4",
-    "docs/SQLITE_REVIEW.md": "4fbf9a4820467992c9c86481e1b67798e2a904b3c7dbc4c4eeed62da216e5d97",
-    "docs/SQLITE_UPGRADE.md": "2778a279b85d9bf5cf55e6c6cb636044601da1e6b100039d4f732c59efcdc054",
+    "docs/SQLITE_REVIEW.md": "73c0e8bf90dbff71bd43cdaf5905722bdfa3725f53a91fa1e87a14277d4a47ce",
+    "docs/SQLITE_UPGRADE.md": "5f4108060e9e42b1715b520f5979b918aeab25cac7716f23be0bfee1f19bac10",
     "docs/SYNC_DESIGN.md": "fe19f5f98f474dc9d49716651c584e46a112891237cdc05efcc130298297fe16",
     "docs/SYNC_DURABLE_RECEIVE.md": "99ebbf09d35d57ea5584037c4f640ae08d6bf6393d1ee46e77d4bf5952331704",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "17fb477b84869264049e5b46f5525e8c48a412a86517ab075b5befa8280cd201",
@@ -50,13 +42,13 @@
     "experiments/sync-prototype/tests/support/key_distribution.rs": "a0645ea4ddd596d37aaa03659a9f83f075d1f66047498a5fc57aa4a62b4cca05",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
     "experiments/sync-prototype/tests/support/record_crypto.rs": "85f652231a86fb6cc3367a7677d88f6ed61c61ffacc56ca6ff7d0009b41ab8f2",
-    "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "ec287e87d072d48329b200d5ad2e4dadd9a6e49a2f213fb02ffe738ff4aef67c",
+    "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "d67084363d935693df5b43d30b00e84846ed79e4b3a160a42832fb6b41bcdfa1",
     "experiments/sync-prototype/tests/vectors/check_oracles.py": "041c17e18d1c1be220b1935c13992cf96e939b0660a8f820be01f3fc5d3bba7e",
     "experiments/sync-prototype/tests/vectors/key-distribution/README.md": "eb2de80970524e9338628ee79fbda77171220bc9a6d2be6a4fdf20b3c41c5e96",
     "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "b4468ee8117874a14e6c74d1914f9ce8c83961401715a98f333f418ce376dc5b",
     "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "4bb36d74e83579238a9a00c79a57bf94855a8b5bda17daacdba02419a3b1ac87",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
-    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "fbb60e668760091463bac2e7cef233e86b80c85157b6f8e6626c25ea3049a48f",
+    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "dd201e9fc02e929f18b5caa31588b47a9225c37b76bb99e7096b0f968f6bfada",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6"
@@ -1789,5 +1781,32 @@
       "Relay, authentication-provider, quotas and restore contract",
       "Cross-target, exact-suite independent interoperability and security review"
     ]
+  },
+  "historical_app_source_sha256": {
+    "source_commit": "a486b520db03c3c9b3b00c09277e068453a93617",
+    "scope": "App-owned and project-wide CI inputs as executed at source_commit. Provenance only: not gated against later checkouts. App CI enforces the live SQLite runtime identity and app open-path journal mode through ci/sqlite_runtime.rs and crates/matters-core/tests/sqlite_tests.rs.",
+    "unbound_on": "2026-11-18",
+    "files": {
+      ".github/workflows/ci.yml": "7835b32344548270fed27c3a63951d7bff6fbe2c766534917a72d374205462e4",
+      "ci/check.sh": "917380f5539bef6c90e2f1cfa5368810e00419b11faff9d0bb3a30dceb8c8598",
+      "Cargo.toml": "762a80055fcaf32c5347c430f65ccaaa22ec286cd491510d2e86588836f819b8",
+      "Cargo.lock": "d9107137e79eaa2790825e35b2dc0e1a404efe3fdf07904594eb874925654673",
+      "crates/matters-core/Cargo.toml": "98085de9a7a0008564b8a28ed9cf15e20e12a9467a9335c5e804a960ae18434b",
+      "crates/matters-core/src/storage/db.rs": "6f9f56fd8f6c1ce39b78f584ddab5f3edf298cf60992a24c7238cbcce493c884",
+      "crates/matters-core/src/storage/schema.rs": "18edce81ac283d34157a212d7e6a8afe1740b7749e953a29086691fec97e1837",
+      "crates/matters-core/tests/sqlite_tests.rs": "a7ad0bf30443a96a8db047a181422855d43dae1cae11ccf044f63ad76a8101c4"
+    },
+    "reason": "Prototype CI runs on every PR, so gating app-owned and project-wide CI inputs blocked unrelated app changes. Active bindings are limited to prototype-owned paths, enforced by check_evidence_guards.py.",
+    "baseline_runtime_gate_moved_to": ".github/workflows/sync-prototype.yml",
+    "verification": {
+      "base_commit": "ba8f955",
+      "commands": [
+        "python experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py",
+        "python experiments/sync-prototype/tests/vectors/check_evidence_guards.py",
+        "(cd experiments/sync-prototype && CARGO_TARGET_DIR=target/sync-prototype-baseline cargo test --locked --manifest-path baseline/Cargo.toml -- --nocapture)"
+      ],
+      "baseline_runtime_output": "SQLite runtime: 3.54.1; source_id: 2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76; linked_sqlite_matches_approved_release ok",
+      "rust_sources_changed": false
+    }
   }
 }

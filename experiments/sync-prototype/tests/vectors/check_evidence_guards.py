@@ -1,4 +1,4 @@
-"""Witness evidence drift detection, including app/baseline files and removals."""
+"""Witness evidence drift detection, removals, and the prototype ownership boundary."""
 import contextlib
 import importlib.util
 import io
@@ -16,7 +16,7 @@ spec.loader.exec_module(checker)
 class EvidenceGuards(unittest.TestCase):
     def test_each_required_binding_rejects_drift_removal_and_omission(self):
         import hashlib
-        self.assertIn("ci/check.sh", checker.REQUIRED)
+        self.assertIn("ci/sqlite_runtime.rs", checker.REQUIRED)
         self.assertIn("experiments/sync-prototype/baseline/Cargo.lock", checker.REQUIRED)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -49,6 +49,27 @@ class EvidenceGuards(unittest.TestCase):
                 self.assertEqual(run(), 0)
             finally:
                 checker.ROOT, checker.MANIFEST = original_root, original_manifest
+
+    def test_required_bindings_stay_inside_prototype_owned_paths(self):
+        # The prototype workflow runs on every PR, so binding an app-owned or
+        # project-wide CI file would block unrelated app changes. App-side
+        # SQLite claims are enforced by tests that app CI runs.
+        owned_prefixes = (
+            "experiments/sync-prototype/",
+            "docs/SYNC_",
+            "docs/SQLITE_",
+            "docs/protocol/sync-",
+            "docs/decisions/0002-post-quantum-sync.md",
+            "ci/sqlite_",
+            ".github/workflows/sync-prototype.yml",
+        )
+        outside = sorted(name for name in checker.REQUIRED if not name.startswith(owned_prefixes))
+        self.assertEqual(outside, [])
+        for name in (".github/workflows/ci.yml", "ci/check.sh", "Cargo.lock", "Cargo.toml"):
+            self.assertNotIn(name, checker.REQUIRED)
+        evidence = json.loads(checker.MANIFEST.read_text())
+        unbound = sorted(name for name in evidence["source_sha256"] if not name.startswith(owned_prefixes))
+        self.assertEqual(unbound, [])
 
 
 if __name__ == "__main__":
