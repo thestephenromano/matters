@@ -920,18 +920,14 @@ impl Authority {
         key: &'a EpochKey,
         document: &[u8; 16],
     ) -> Result<AuthenticatedData<'a>> {
+        self.check_epoch_key(key)?;
         let state = self.active()?;
         let p = wire::parse(bytes, self.route.content(document)).map_err(|_| Error::Format)?;
         let h = p.header;
         if h.kind != wire::Kind::Data {
             return Err(Error::Unsupported);
         }
-        if *h.manifest != self.current
-            || h.epoch != state.epoch
-            || key.route != self.route
-            || key.manifest != self.current
-            || key.epoch != state.epoch
-        {
+        if *h.manifest != self.current || h.epoch != state.epoch {
             return Err(Error::Stale);
         }
         let author = self.member(h.author)?;
@@ -965,16 +961,19 @@ impl Authority {
         })
     }
     /// First-record regression helper; durable receive uses authenticate_data.
+    /// A chained record is outside this helper's scope: reject it structurally
+    /// before context, writer or signature work, as the helper always has.
     pub fn open_first_data(
         &self,
         bytes: &[u8],
         key: &EpochKey,
         document: &[u8; 16],
     ) -> Result<Vec<u8>> {
-        let authenticated = self.authenticate_data(bytes, key, document)?;
-        if authenticated.parsed.header.previous.is_some() {
+        let parsed = wire::parse(bytes, self.route.content(document)).map_err(|_| Error::Format)?;
+        if parsed.header.previous.is_some() {
             return Err(Error::Unsupported);
         }
+        let authenticated = self.authenticate_data(bytes, key, document)?;
         let actor = authenticated.actor;
         let plain = authenticated.open()?;
         let meta =

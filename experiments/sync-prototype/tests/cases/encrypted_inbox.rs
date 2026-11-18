@@ -1,5 +1,5 @@
 use super::{
-    encrypted_inbox::{Config, Inbox, Point, MAX_RECORDS},
+    encrypted_inbox::{take_work, Config, Inbox, Point, Work, MAX_RECORDS, MERGE_CONFLICT},
     *,
 };
 use matters_sync_prototype::{Command, Kind, Replica, Request, Result as TestResult};
@@ -81,8 +81,11 @@ fn source(actor: u64) -> Replica {
     r
 }
 fn create(r: &mut Replica) -> Vec<u8> {
+    create_id(r, TASK)
+}
+fn create_id(r: &mut Replica, id: &str) -> Vec<u8> {
     r.execute(&Request::new(Command::Create {
-        id: TASK.into(),
+        id: id.into(),
         kind: Kind::Task,
         parent: None,
         title: "private task".into(),
@@ -170,8 +173,11 @@ fn cross_writer_causal_dependency_drains_after_missing_update_arrives() -> TestR
     let first = h.seal(71, None, &first_plain);
     let mut inbox = h.inbox(&dir.path().join("inbox.db"));
     inbox.receive(GENERATION, 1, &second, okay)?;
+    take_work();
     inbox.process(&h.key, okay)?;
     assert_eq!(inbox.entries()?[0].reason, "causal-dependency");
+    // Missing dependencies are visible in metadata: no engine copy is made.
+    assert_eq!(take_work().stagings, 0);
     inbox.receive(GENERATION, 2, &first, okay)?;
     inbox.process(&h.key, okay)?;
     assert_eq!(inbox.projection()?, b.projection()?);
@@ -432,34 +438,6 @@ fn abrupt_exit_preserves_receipt_and_application_boundaries() -> TestResult<()> 
 }
 
 #[test]
-fn signed_record_id_conflict_freezes_both_writers_and_preserves_bytes() -> TestResult<()> {
-    let h = Harness::new();
-    let dir = tempfile::tempdir()?;
-    let first = h.seal(71, None, &create(&mut source(71)));
-    let parsed = wire::parse(&first, route().content(&DOC))?;
-    let author = h.s.b.id()?;
-    let manifest = h.s.authority.manifest();
-    let header = header(
-        &h.s.authority,
-        &author,
-        &[72; 32],
-        parsed.header.record_id,
-        &manifest,
-    );
-    let second = seal_fixture(header, &h.cek, &create(&mut source(72)), &h.s.b)?;
-    let mut inbox = h.inbox(&dir.path().join("inbox.db"));
-    inbox.receive(GENERATION, 1, &first, okay)?;
-    inbox.receive(GENERATION, 2, &second, okay)?;
-    inbox.process(&h.key, okay)?;
-    let rows = inbox.entries()?;
-    assert!(rows.iter().all(|r| r.status == "fork"));
-    assert_eq!(rows[0].bytes, first);
-    assert_eq!(rows[1].bytes, second);
-    assert!(inbox.projection()?.entities.is_empty());
-    Ok(())
-}
-
-#[test]
 fn signed_undecryptable_competitor_is_still_fork_evidence() -> TestResult<()> {
     let h = Harness::new();
     let dir = tempfile::tempdir()?;
@@ -538,5 +516,259 @@ fn overlapping_actor_history_cannot_reapply_a_logical_edit() -> TestResult<()> {
     assert_eq!(inbox.entries()?[1].reason, "actor-overlap");
     assert_eq!(inbox.entries()?[1].applied, None);
     assert_eq!(inbox.projection()?, a.projection()?);
+    Ok(())
+}
+
+// Review of #107: regression witnesses.
+
+fn sealed_with_id(
+    h: &Harness,
+    actor: u8,
+    record: &Id,
+    previous: Option<Hash>,
+    plain: &[u8],
+) -> Vec<u8> {
+    let author = if actor == 71 { &h.s.a } else { &h.s.b };
+    let author_id = author.id().unwrap();
+    let manifest = h.s.authority.manifest();
+    let incarnation = [actor; 32];
+    let mut header = header(&h.s.authority, &author_id, &incarnation, record, &manifest);
+    header.previous = previous.as_ref();
+    seal_fixture(header, &h.cek, plain, author).unwrap()
+}
+fn record_id(bytes: &[u8]) -> Id {
+    *wire::parse(bytes, route().content(&DOC))
+        .unwrap()
+        .header
+        .record_id
+}
+fn statuses(inbox: &Inbox) -> TestResult<std::collections::BTreeMap<Vec<u8>, (String, String)>> {
+    Ok(inbox
+        .entries()?
+        .into_iter()
+        .map(|e| (e.bytes, (e.status, e.reason)))
+        .collect())
+}
+
+#[test]
+fn review_cross_writer_record_id_reuse_freezes_neither_writer_in_either_order() -> TestResult<()> {
+    // An admitted writer copies another writer's cleartext record ID. Either
+    // party (or the relay) could be at fault, so neither chain is frozen, and
+    // the verdict cannot depend on which copy was delivered first.
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let mut a = source(71);
+    let first = h.seal(71, None, &create(&mut a));
+    let reused = sealed_with_id(
+        &h,
+        72,
+        &record_id(&first),
+        None,
+        &create_id(&mut source(72), "00000000-0000-4000-8000-000000000002"),
+    );
+    let child = h.seal(71, Some(hash(&first)), &notes(&mut a, "still live"));
+    let mut views = Vec::new();
+    for (name, order) in [
+        ("ab.db", [&first, &reused, &child]),
+        ("ba.db", [&reused, &first, &child]),
+    ] {
+        let mut inbox = h.inbox(&dir.path().join(name));
+        for (i, bytes) in order.iter().enumerate() {
+            inbox.receive(GENERATION, i as i64 + 1, bytes, okay)?;
+        }
+        inbox.process(&h.key, okay)?;
+        let rows = inbox.entries()?;
+        assert!(
+            rows.iter().all(|r| r.status == "applied"),
+            "{name}: {rows:?}"
+        );
+        let flagged: Vec<_> = rows.iter().map(|r| r.record_id_conflict).collect();
+        assert_eq!(flagged.iter().filter(|f| **f).count(), 2, "{name}");
+        assert!(rows.iter().any(|r| r.bytes == first) && rows.iter().any(|r| r.bytes == reused));
+        let view = inbox.projection()?;
+        assert_eq!(view.entities[TASK].notes, "still live");
+        views.push((statuses(&inbox)?, view));
+    }
+    assert_eq!(views[0], views[1]);
+    Ok(())
+}
+
+#[test]
+fn review_same_writer_record_id_equivocation_freezes_only_that_writer() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let first = h.seal(71, None, &create(&mut source(71)));
+    let mut other = source(71);
+    create(&mut other);
+    let equivocation = sealed_with_id(&h, 71, &record_id(&first), None, &notes(&mut other, "x"));
+    let b = h.seal(72, None, &create(&mut source(72)));
+    let mut inbox = h.inbox(&dir.path().join("inbox.db"));
+    for (i, bytes) in [&first, &equivocation, &b].iter().enumerate() {
+        inbox.receive(GENERATION, i as i64 + 1, bytes, okay)?;
+    }
+    inbox.process(&h.key, okay)?;
+    let rows = inbox.entries()?;
+    assert_eq!(rows[0].status, "fork");
+    assert_eq!(rows[1].status, "fork");
+    assert_eq!(rows[2].status, "applied");
+    Ok(())
+}
+
+#[test]
+fn review_concurrent_records_reach_the_same_verdicts_in_either_delivery_order() -> TestResult<()> {
+    // Each record is valid in its own causal past; their merge violates the
+    // one-entity-per-UUID invariant.
+    let h = Harness::new();
+    let a = h.seal(71, None, &create(&mut source(71)));
+    let b = h.seal(72, None, &create(&mut source(72)));
+    let dir = tempfile::tempdir()?;
+    let mut results = Vec::new();
+    for (name, order) in [("ab.db", [&a, &b]), ("ba.db", [&b, &a])] {
+        let mut inbox = h.inbox(&dir.path().join(name));
+        for (i, bytes) in order.iter().enumerate() {
+            inbox.receive(GENERATION, i as i64 + 1, bytes, okay)?;
+        }
+        inbox.process(&h.key, okay)?;
+        assert!(inbox.entries()?.iter().all(|r| r.status == "applied"));
+        // The merge has no valid projection; every receiver reports that.
+        assert_eq!(inbox.merge_conflict()?.as_deref(), Some(MERGE_CONFLICT));
+        assert!(inbox.projection().is_err());
+        results.push(statuses(&inbox)?);
+    }
+    assert_eq!(results[0], results[1]);
+    Ok(())
+}
+
+#[test]
+fn review_wrong_same_epoch_key_is_not_recorded_as_a_verdict_on_input() -> TestResult<()> {
+    let h = Harness::new();
+    let wrong = h.s.authority.unwrap_key(
+        &h.s.authority.wrap_key(&h.s.a, h.s.b.id()?, &random32()?)?,
+        &h.s.b,
+    )?;
+    let dir = tempfile::tempdir()?;
+    let mut a = source(71);
+    let first = h.seal(71, None, &create(&mut a));
+    let child = h.seal(71, Some(hash(&first)), &notes(&mut a, "later"));
+    let mut inbox = h.inbox(&dir.path().join("inbox.db"));
+    inbox.receive(GENERATION, 1, &first, okay)?;
+    inbox.receive(GENERATION, 2, &child, okay)?;
+    inbox.process(&wrong, okay)?;
+    let rows = inbox.entries()?;
+    assert!(rows.iter().all(|r| r.status != "quarantined"), "{rows:?}");
+    assert_eq!(rows[0].status, "undecryptable");
+    assert_eq!(rows[1].reason, "blocked-by-undecryptable-predecessor");
+    inbox.process(&h.key, okay)?;
+    assert!(inbox.entries()?.iter().all(|r| r.status == "applied"));
+    // Once history is accepted, a key that cannot open it is an operational
+    // error and changes nothing.
+    let later = h.seal(71, Some(hash(&child)), &notes(&mut a, " more"));
+    inbox.receive(GENERATION, 3, &later, okay)?;
+    let before = inbox.entries()?;
+    assert!(inbox.process(&wrong, okay).is_err());
+    assert_eq!(inbox.entries()?, before);
+    Ok(())
+}
+
+#[test]
+fn review_processing_does_not_repeat_authentication_or_staging_for_settled_history(
+) -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let mut a = source(71);
+    let mut previous = None;
+    let mut inbox = h.inbox(&dir.path().join("inbox.db"));
+    for i in 1..=4 {
+        let plain = if i == 1 {
+            create(&mut a)
+        } else {
+            notes(&mut a, "x")
+        };
+        let record = h.seal(71, previous, &plain);
+        previous = Some(hash(&record));
+        inbox.receive(GENERATION, i, &record, okay)?;
+    }
+    let bad = h.seal(72, None, b"not a Loro update");
+    inbox.receive(GENERATION, 5, &bad, okay)?;
+    take_work();
+    inbox.process(&h.key, okay)?;
+    // One signature check to derive facts and one to decrypt each candidate;
+    // each record is staged once and the rejected one is not retried.
+    assert_eq!(
+        take_work(),
+        Work {
+            authentications: 10,
+            stagings: 4
+        }
+    );
+    inbox.process(&h.key, okay)?;
+    assert_eq!(take_work(), Work::default());
+    assert_eq!(inbox.projection()?, a.projection()?);
+    drop(inbox);
+    let mut inbox = h.inbox(&dir.path().join("inbox.db"));
+    let next = h.seal(71, previous, &notes(&mut a, "y"));
+    inbox.receive(GENERATION, 6, &next, okay)?;
+    take_work();
+    inbox.process(&h.key, okay)?;
+    // New row: facts + decrypt, plus one key check against accepted history.
+    assert_eq!(
+        take_work(),
+        Work {
+            authentications: 3,
+            stagings: 1
+        }
+    );
+    assert_eq!(inbox.projection()?, a.projection()?);
+    Ok(())
+}
+
+#[test]
+fn review_duplicate_detection_uses_full_bytes_not_the_latest_record_id_claim() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let first = h.seal(71, None, &create(&mut source(71)));
+    let mut other = source(71);
+    create(&mut other);
+    let equivocation = sealed_with_id(&h, 71, &record_id(&first), None, &notes(&mut other, "x"));
+    let mut inbox = h.inbox(&dir.path().join("inbox.db"));
+    for (i, bytes) in [&first, &equivocation, &first].iter().enumerate() {
+        inbox.receive(GENERATION, i as i64 + 1, bytes, okay)?;
+    }
+    inbox.process(&h.key, okay)?;
+    let rows = inbox.entries()?;
+    assert_eq!(rows[2].status, "duplicate", "{:?}", rows[2]);
+    Ok(())
+}
+
+#[test]
+fn review_foreign_database_with_only_non_table_objects_is_refused() -> TestResult<()> {
+    let h = Harness::new();
+    for object in [
+        "CREATE VIEW v AS SELECT 1",
+        "CREATE VIEW SQLiteView AS SELECT 1",
+    ] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("foreign.db");
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(object)?;
+        assert!(Inbox::open(&path, h.config.clone()).is_err(), "{object}");
+        let objects: i64 =
+            conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
+        assert_eq!(objects, 1, "{object}");
+    }
+    Ok(())
+}
+
+#[test]
+fn review_replacement_writer_starts_are_refused_at_open() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let mut config = h.config.clone();
+    config.writers.push(sign(
+        &writer(&h.s.authority, &h.s.a, [73; 32], 73, Some([71; 32])),
+        &h.s.a,
+    )?);
+    assert!(Inbox::open(dir.path().join("inbox.db"), config).is_err());
+    assert!(!dir.path().join("inbox.db").exists());
     Ok(())
 }

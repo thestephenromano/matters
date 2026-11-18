@@ -12,9 +12,7 @@ const FORMAT: &str = "matters-encrypted-outbox/0";
 // lifetime cap: transient contention/restarts must not exhaust recovery access.
 const MAX_INTENTS: i64 = 16;
 
-fn error(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
-    std::io::Error::other(message).into()
-}
+use matters_sync_prototype::invalid as error;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Binding {
     pub application: [u8; 16],
@@ -71,12 +69,7 @@ pub struct Outbox {
     writer: Writer,
 }
 fn validate_database(conn: &Connection) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'",
-        [],
-        |r| r.get(0),
-    )?;
-    if count == 0 {
+    if !matters_sync_prototype::has_user_schema(conn)? {
         return Ok(false);
     }
     let marker = conn.query_row(
