@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
 use matters_core::{
-    local_today, Database, DateOrder, DayTracker, Project, QueryEngine, Schedule, Status, Task, View, Visit,
+    local_today, Database, DateOrder, DayTracker, DeadlineStatus, Project, QueryEngine, Schedule, Status, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -132,6 +132,18 @@ pub mod qobject {
         /// text is refused.
         #[qinvokable]
         fn schedule_task_typed(self: Pin<&mut AppController>, task_id: &QString, text: &QString, month_first: bool) -> bool;
+        /// What a typed deadline means (`Schedule::parse_typed_deadline`): an
+        /// ISO date, or an empty string when it is refused.
+        #[qinvokable]
+        fn preview_deadline(self: &AppController, text: &QString, month_first: bool) -> QString;
+        /// Set a task's deadline from typed text; false, changing nothing,
+        /// when the text is refused.
+        #[qinvokable]
+        fn set_task_deadline_typed(self: Pin<&mut AppController>, task_id: &QString, text: &QString, month_first: bool) -> bool;
+        /// Set a task's deadline to an ISO date, or clear it with an empty
+        /// string; false when the date isn't valid.
+        #[qinvokable]
+        fn set_task_deadline(self: Pin<&mut AppController>, task_id: &QString, date: &QString) -> bool;
         /// Rename a task. Returns false, changing nothing, when the title is
         /// blank (`Database::rename_task`); the field then shows the old title.
         #[qinvokable]
@@ -494,6 +506,43 @@ impl qobject::AppController {
         ok
     }
 
+    fn date_order(month_first: bool) -> DateOrder {
+        if month_first { DateOrder::MonthFirst } else { DateOrder::DayFirst }
+    }
+
+    pub fn preview_deadline(&self, text: &QString, month_first: bool) -> QString {
+        let date = Schedule::parse_typed_deadline(&String::from(text), self.day.day(), Self::date_order(month_first));
+        QString::from(date.map(|d| d.to_string()).unwrap_or_default().as_str())
+    }
+
+    pub fn set_task_deadline_typed(self: Pin<&mut Self>, task_id: &QString, text: &QString, month_first: bool) -> bool {
+        let order = Self::date_order(month_first);
+        let Some(date) = Schedule::parse_typed_deadline(&String::from(text), self.day.day(), order) else {
+            return false;
+        };
+        let result = self.edit_task(&String::from(task_id), |task| task.deadline = Some(date));
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn set_task_deadline(self: Pin<&mut Self>, task_id: &QString, date: &QString) -> bool {
+        let date = String::from(date);
+        let deadline = if date.is_empty() {
+            None
+        } else {
+            // An ISO date, read the same way as a When date.
+            match Schedule::parse(&date) {
+                Some(Schedule::Date(d)) => Some(d),
+                _ => return false,
+            }
+        };
+        let result = self.edit_task(&String::from(task_id), |task| task.deadline = deadline);
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
     pub fn rename_task(self: Pin<&mut Self>, task_id: &QString, title: &QString) -> bool {
         let title = String::from(title);
         if matters_core::Task::clean_title(&title).is_none() {
@@ -652,16 +701,22 @@ enum Role {
     Done,
     StartDate,
     Evening,
+    /// ISO date, or empty.
+    Deadline,
+    /// `DeadlineStatus` on today: none, set, today or overdue.
+    DeadlineStatus,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 6] = [
+    const ALL: [(Role, &'static str); 8] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
         (Role::Done, "done"),
         (Role::StartDate, "startDate"),
         (Role::Evening, "evening"),
+        (Role::Deadline, "deadline"),
+        (Role::DeadlineStatus, "deadlineStatus"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -782,6 +837,15 @@ impl qobject::TaskListModel {
                 task.start_date.map(|d| d.to_string()).unwrap_or_default().as_str(),
             )),
             Role::Evening => QVariant::from(&task.is_evening()),
+            Role::Deadline => QVariant::from(&QString::from(
+                task.deadline.map(|d| d.to_string()).unwrap_or_default().as_str(),
+            )),
+            Role::DeadlineStatus => QVariant::from(&QString::from(match task.deadline_status(local_today()) {
+                DeadlineStatus::None => "none",
+                DeadlineStatus::Set => "set",
+                DeadlineStatus::DueToday => "today",
+                DeadlineStatus::Overdue => "overdue",
+            })),
         }
     }
 

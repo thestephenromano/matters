@@ -12,6 +12,6 @@ pub use checklist::ChecklistItem;
 pub use heading::Heading;
 pub use project::{Project, ProjectProgress};
 pub use status::Status;
-pub use task::Task;
+pub use task::{DeadlineStatus, Task};
 pub use view::View;
 pub use when::{DateOrder, Schedule, TimeOfDay};

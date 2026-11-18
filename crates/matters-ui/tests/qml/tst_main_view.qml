@@ -25,6 +25,10 @@ Item {
         readonly property var list: view.taskList
 
         function init() {
+            // Styles that animate popups (Material) may still be closing the
+            // previous test's popover; opening it then does nothing.
+            const popup = findChild(view, "whenPopup");
+            tryVerify(() => !popup.visible, 2000, "the When popover has closed");
             view.hideUndo();
             controller.selectView("today");
             list.expandedTaskId = "";
@@ -728,6 +732,7 @@ Item {
             const popup = findChild(view, "whenPopup");
             keyClick(Qt.Key_S, Qt.ControlModifier);
             tryVerify(() => popup.opened, 1000, "Ctrl+S opens the When popover");
+            waitForRendering(popup.contentItem); // laid out before clicking in it
             return popup;
         }
 
@@ -791,6 +796,7 @@ Item {
             mouseClick(findChild(row, "schedule-date"));
             const popup = findChild(view, "whenPopup");
             tryVerify(() => popup.opened, 1000, "Date… opens the When popover");
+            waitForRendering(popup.contentItem);
             mouseClick(findChild(popup.contentItem, "whenNextMonth"));
             const first = new Date();
             first.setDate(1);
@@ -814,6 +820,67 @@ Item {
             tryVerify(() => !popup.visible, 1000);
             controller.selectView("upcoming");
             compare(waitForRow("cal-mouse").startDate, iso);
+        }
+
+        // ---- Deadlines (#20) -------------------------------------------------
+
+        // A task in the Inbox, selected, with the Deadline popover open.
+        function deadlineFor(title) {
+            controller.selectView("inbox");
+            view.captureTask(title);
+            const row = waitForRow(title);
+            settle();
+            list.selectedTaskId = row.taskId;
+            list.forceActiveFocus();
+            const popup = findChild(view, "whenPopup");
+            keyClick(Qt.Key_D, Qt.ControlModifier);
+            tryVerify(() => popup.opened, 1000, "Ctrl+D opens the Deadline popover");
+            waitForRendering(popup.contentItem);
+            return { row: row, popup: popup };
+        }
+
+        function test_ctrl_d_sets_a_deadline_by_typing() {
+            const t = deadlineFor("due-typed");
+            compare(findChild(t.popup.contentItem, "whenTitle").text, "Deadline");
+            verify(!findChild(t.popup.contentItem, "deadline-evening").visible, "no This Evening for a deadline");
+            verify(!findChild(t.popup.contentItem, "deadline-someday").visible, "no Someday for a deadline");
+            typeText("in 3 days");
+            verify(findChild(t.popup.contentItem, "whenPreview").text !== "Not a date");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !t.popup.visible, 1000);
+            tryCompare(t.row, "deadline", isoInDays(3), 2000);
+            compare(t.row.deadlineStatus, "set");
+            verify(findChild(t.row, "deadlineBadge").visible, "a deadline badge");
+            compare(t.row.startDate, "", "the When is unchanged");
+            verify(rowFor("due-typed") !== null, "still in the Inbox");
+        }
+
+        function test_a_deadline_due_today_is_urgent_and_shows_in_today() {
+            const t = deadlineFor("due-today");
+            mouseClick(findChild(t.popup.contentItem, "deadline-today"));
+            tryCompare(t.row, "deadlineStatus", "today", 2000);
+            compare(findChild(t.row, "deadlineLabel").text, "⚑ Due today");
+            verify(findChild(t.row, "deadlineBadge").urgent, "shown as urgent");
+            controller.selectView("today");
+            waitForRow("due-today");
+        }
+
+        function test_a_deadline_from_the_calendar_and_cleared_again() {
+            const t = deadlineFor("due-cal");
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Right);
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !t.popup.visible, 1000);
+            tryCompare(t.row, "deadline", isoInDays(1), 2000);
+
+            // Clear it from the open task's Deadline… button.
+            expandRow(t.row);
+            mouseClick(findChild(t.row, "schedule-deadline"));
+            tryVerify(() => t.popup.opened, 1000);
+            waitForRendering(t.popup.contentItem);
+            mouseClick(findChild(t.popup.contentItem, "deadline-none"));
+            tryCompare(t.row, "deadline", "", 2000);
+            verify(!findChild(t.row, "deadlineBadge").visible);
         }
 
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {

@@ -141,7 +141,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Space` | Selected task | Toggles inline expansion (notes + checklist) |
 | `F2` | Selected task | Opens the task with its title selected for editing; `Enter` saves and moves to the notes, `Escape` abandons the edit |
 | `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, and a calendar operable by keyboard). Past days and times of day are refused (`Schedule::parse_typed`) |
-| `Ctrl + D` | Selected task(s) | Opens **Deadline** picker |
+| `Ctrl + D` | Selected task(s) | Opens the **Deadline** popover: a typed day (`fri`, `in 3 days`, `dec 24`), a calendar, *Today* or *Clear*. Rows show the deadline, in red when due today or overdue |
 | `Ctrl + Shift + M` | Selected task(s) | Opens **Move** popover (select destination Area / Project / Heading) |
 | `Ctrl + K` or `/` | Anywhere | Opens **Quick Find** (instant fuzzy search across all items) |
 | `Ctrl + N` | Anywhere | Creates a new task in the current view |
@@ -296,9 +296,9 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [x] **Done:** local SQLite persistence with WAL mode.
 - [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app shows projects and tasks; areas (#15), headings (#22) and checklists (#21) have no interface yet.
 - [ ] **Partly:** core views Inbox, Today, Upcoming, Anytime, Someday, Logbook and Trash all exist. Each is one flat list; the This Evening section, date groups in Upcoming, area and project groups in Anytime, and date groups in the Logbook are missing (#25).
-- [ ] **Partly:** When vs. Deadline. The core schedules both. The app sets any When (typed, from a calendar, or Today, This Evening, Someday), but can't set a deadline (#20).
+- [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
 - [ ] **Partly:** inline task expansion. Title, notes and When are edited in place; checklists aren't shown (#21).
-- [ ] **Partly:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find and `Ctrl+S` (When popover) work. Missing: `Ctrl+Shift+M` (#19, with #54) and `Ctrl+D` (#20).
+- [ ] **Partly:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find and `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) work. Missing: `Ctrl+Shift+M` (#19, with #54).
 - [ ] **Partly:** project progress. Shown as a filling circle, not yet a ring (#28).
 - [ ] **Partly:** Quick Find popover. Finds tasks; projects and areas are found by the core but not shown (#26).
 - [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.

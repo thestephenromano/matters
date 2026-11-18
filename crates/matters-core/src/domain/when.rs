@@ -107,6 +107,18 @@ impl Schedule {
         }
     }
 
+    /// Parse a typed deadline (#20): the same phrases as
+    /// [`Schedule::parse_typed`], but only actual days. `today` and date
+    /// phrases are accepted; This Evening and Someday aren't deadlines, and
+    /// past days, times and anything unclear are refused.
+    pub fn parse_typed_deadline(input: &str, today: NaiveDate, order: DateOrder) -> Option<NaiveDate> {
+        match Schedule::parse_typed(input, today, order)? {
+            Schedule::Today { evening: false } => Some(today),
+            Schedule::Date(date) => Some(date),
+            Schedule::Today { evening: true } | Schedule::Someday | Schedule::None => None,
+        }
+    }
+
     pub fn is_someday(&self) -> bool {
         matches!(self, Schedule::Someday)
     }

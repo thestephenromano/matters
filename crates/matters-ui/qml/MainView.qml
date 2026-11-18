@@ -366,14 +366,25 @@ Item {
         return format.indexOf("M") < format.indexOf("d");
     }
 
-    function openWhenFor(id) {
+    // The popover sets a task's When or, in "deadline" mode, its deadline
+    // (Ctrl+D, Deadline…; #20).
+    function openDatePopup(id, mode) {
         const row = taskModel.rowOf(id);
         if (row < 0)
             return;
         taskListView.selectedTaskId = id;
         scrollToTask(id);
         whenPopup.taskId = id;
+        whenPopup.mode = mode;
         whenPopup.open();
+    }
+
+    function openWhenFor(id) {
+        openDatePopup(id, "when");
+    }
+
+    function openDeadlineFor(id) {
+        openDatePopup(id, "deadline");
     }
 
     function openWhenMenu() {
@@ -386,8 +397,23 @@ Item {
         today.setHours(0, 0, 0, 0);
         if (date < today)
             return;
-        controller.scheduleTask(whenPopup.taskId, Qt.formatDate(date, "yyyy-MM-dd"));
+        const iso = Qt.formatDate(date, "yyyy-MM-dd");
+        if (whenPopup.mode === "deadline")
+            controller.setTaskDeadline(whenPopup.taskId, iso);
+        else
+            controller.scheduleTask(whenPopup.taskId, iso);
         whenPopup.close();
+    }
+
+    // A deadline as shown on a row: "Due today", "Overdue: Nov 10" or the date.
+    function describeDeadline(iso, status) {
+        if (iso === "")
+            return "";
+        if (status === "today")
+            return "Due today";
+        const parts = iso.split("-");
+        const date = Qt.formatDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])), "MMM d");
+        return status === "overdue" ? "Overdue: " + date : date;
     }
 
     // How a typed When reads back, for the preview under the field.
@@ -1056,6 +1082,8 @@ Item {
                             required property bool done
                             required property string startDate
                             required property bool evening
+                            required property string deadline
+                            required property string deadlineStatus
                             required property int index
 
                             readonly property bool isExpanded: taskListView.expandedTaskId === taskId
@@ -1292,6 +1320,28 @@ Item {
                                         }
                                     }
 
+                                    // Deadline badge: red when due today or overdue.
+                                    Rectangle {
+                                        objectName: "deadlineBadge"
+                                        readonly property bool urgent: taskRow.deadlineStatus === "today"
+                                            || taskRow.deadlineStatus === "overdue"
+                                        visible: taskRow.deadline !== ""
+                                        Layout.preferredHeight: 20
+                                        Layout.preferredWidth: deadlineLabel.contentWidth + 12
+                                        radius: 4
+                                        color: urgent ? (root.isDark ? "#3B1F1F" : "#FFE3E3") : (root.isDark ? "#2C2E33" : "#E9ECEF")
+
+                                        Text {
+                                            id: deadlineLabel
+                                            objectName: "deadlineLabel"
+                                            anchors.centerIn: parent
+                                            text: "⚑ " + root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
+                                            font.pixelSize: 11
+                                            font.weight: parent.urgent ? Font.DemiBold : Font.Normal
+                                            color: parent.urgent ? (root.isDark ? "#FFA8A8" : "#C92A2A") : root.colTextSecondary
+                                        }
+                                    }
+
                                     // Move to Trash (shows on hover). Nothing is
                                     // destroyed until the Trash is emptied.
                                     ToolButton {
@@ -1456,6 +1506,15 @@ Item {
                                             text: "Date…"
                                             font.pixelSize: 11
                                             onClicked: root.openWhenFor(taskRow.taskId)
+                                        }
+
+                                        // The deadline: the same popover in deadline mode.
+                                        Button {
+                                            objectName: "schedule-deadline"
+                                            focusPolicy: Qt.NoFocus
+                                            text: "Deadline…"
+                                            font.pixelSize: 11
+                                            onClicked: root.openDeadlineFor(taskRow.taskId)
                                         }
                                     }
                                 }
@@ -1692,6 +1751,11 @@ Item {
         enabled: taskListView.selectedTaskId !== ""
         onActivated: root.openWhenMenu()
     }
+    Shortcut {
+        sequence: "Ctrl+D"
+        enabled: taskListView.selectedTaskId !== ""
+        onActivated: root.openDeadlineFor(taskListView.selectedTaskId)
+    }
     // Text editors keep Ctrl+Z for their own undo.
     Shortcut {
         sequence: StandardKey.Undo
@@ -1705,6 +1769,8 @@ Item {
         id: whenPopup
         objectName: "whenPopup"
         property string taskId: ""
+        // "when" sets the task's When; "deadline" its deadline.
+        property string mode: "when"
         // The day the calendar's keyboard cursor is on.
         property date cursor: new Date()
 
@@ -1754,15 +1820,28 @@ Item {
         contentItem: ColumnLayout {
             spacing: 8
 
+            Label {
+                objectName: "whenTitle"
+                text: whenPopup.mode === "deadline" ? "Deadline" : "When"
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+                color: root.colTextPrimary
+            }
+
             TextField {
                 id: whenInput
                 objectName: "whenInput"
                 Layout.fillWidth: true
-                placeholderText: "Type a date: tomorrow, fri, dec 24"
+                placeholderText: whenPopup.mode === "deadline"
+                    ? "Due: tomorrow, fri, dec 24"
+                    : "Type a date: tomorrow, fri, dec 24"
                 // Enter applies what was typed; a refused text keeps the
                 // popover open.
                 onAccepted: {
-                    if (controller.scheduleTaskTyped(whenPopup.taskId, text, root.monthFirst))
+                    const applied = whenPopup.mode === "deadline"
+                        ? controller.setTaskDeadlineTyped(whenPopup.taskId, text, root.monthFirst)
+                        : controller.scheduleTaskTyped(whenPopup.taskId, text, root.monthFirst);
+                    if (applied)
                         whenPopup.close();
                 }
                 // Down moves into the calendar.
@@ -1772,7 +1851,9 @@ Item {
             Label {
                 id: whenPreview
                 objectName: "whenPreview"
-                readonly property string meaning: controller.previewWhen(whenInput.text, root.monthFirst)
+                readonly property string meaning: whenPopup.mode === "deadline"
+                    ? controller.previewDeadline(whenInput.text, root.monthFirst)
+                    : controller.previewWhen(whenInput.text, root.monthFirst)
                 Layout.fillWidth: true
                 visible: whenInput.text.trim() !== ""
                 text: meaning === "" ? "Not a date" : root.describeWhen(meaning)
@@ -1782,6 +1863,9 @@ Item {
 
             RowLayout {
                 spacing: 4
+                // One set of buttons for both modes (rebuilding them on each
+                // mode switch left new, not yet laid out buttons); a deadline
+                // has no This Evening or Someday.
                 Repeater {
                     model: [
                         { label: "Today", when: "today" },
@@ -1791,11 +1875,17 @@ Item {
                     ]
                     delegate: Button {
                         required property var modelData
-                        objectName: "when-" + modelData.when
+                        visible: whenPopup.mode === "when" || modelData.when === "today" || modelData.when === "none"
+                        objectName: (whenPopup.mode === "deadline" ? "deadline-" : "when-") + modelData.when
                         text: modelData.label
                         font.pixelSize: 11
                         onClicked: {
-                            controller.scheduleTask(whenPopup.taskId, modelData.when);
+                            if (whenPopup.mode === "deadline") {
+                                const today = Qt.formatDate(new Date(), "yyyy-MM-dd");
+                                controller.setTaskDeadline(whenPopup.taskId, modelData.when === "today" ? today : "");
+                            } else {
+                                controller.scheduleTask(whenPopup.taskId, modelData.when);
+                            }
                             whenPopup.close();
                         }
                     }
