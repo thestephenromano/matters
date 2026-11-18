@@ -24,7 +24,7 @@ impl TimeOfDay {
     }
 }
 
-/// The "When" representation in Things 3 semantics:
+/// The "When" representation:
 /// A task can be scheduled for Today (daytime or evening), on a specific calendar date,
 /// marked for Someday, or unscheduled (Inbox / Anytime).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,8 +1,8 @@
 # Matters
 
-> A first-class, keyboard-driven personal task manager for Linux, crafted in the spirit of Things 3.
+> A keyboard-driven personal task manager for Linux, built around Getting Things Done.
 
-Matters combines the tactile elegance, spatial calm, and disciplined GTD hierarchy of Cultured Code's Things with the power and freedom of native Linux. Built from the ground up in **Rust** and **Qt 6 / QML**, it is designed to feel 100% at home on modern Linux desktops like **KDE Plasma** while running cleanly across all desktop environments.
+Matters pairs a calm, uncluttered interface and a disciplined GTD hierarchy with the power and freedom of native Linux. Built from the ground up in **Rust** and **Qt 6 / QML**, it is designed to feel 100% at home on modern Linux desktops like **KDE Plasma** while running cleanly across all desktop environments.
 
 ---
 
