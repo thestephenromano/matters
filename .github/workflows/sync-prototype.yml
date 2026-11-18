@@ -1,19 +1,9 @@
 name: Sync prototype
 
 on:
-  pull_request:
-    paths:
-      - experiments/sync-prototype/**
-      - docs/SYNC_RECORD_CONTRACT.md
-      - docs/protocol/**
-      - .github/workflows/sync-prototype.yml
+  pull_request: # Run for every PR: the evidence manifest can bind files anywhere.
   push:
     branches: [main]
-    paths:
-      - experiments/sync-prototype/**
-      - docs/SYNC_RECORD_CONTRACT.md
-      - docs/protocol/**
-      - .github/workflows/sync-prototype.yml
 
 permissions:
   contents: read
@@ -46,6 +36,10 @@ jobs:
           python -m pip install --only-binary=:all: -r tests/vectors/record-contract/requirements.txt
       - name: Check independent fixture regeneration
         run: python tests/vectors/record-contract/generate.py --check
+      - name: Check independent key-distribution fixtures
+        run: python tests/vectors/key-distribution/generate.py --check
+      - name: Check oracle guards with optimized Python
+        run: python tests/vectors/check_oracles.py
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
