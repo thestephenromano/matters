@@ -97,6 +97,14 @@ Item {
         }
     }
 
+    // Scroll the task's row fully into view, if the list shows it. Call it
+    // directly or deferred, never from a row's handler during a list layout.
+    function scrollToTask(id) {
+        const row = taskModel.rowOf(id);
+        if (row >= 0)
+            taskListView.positionViewAtIndex(row, ListView.Contain);
+    }
+
     Component.onCompleted: reloadTasks()
 
     // Root Container
@@ -591,10 +599,13 @@ Item {
                             clip: true
 
                             // Once expanded, scroll the whole row into view, so its
-                            // notes and When buttons don't open below the fold.
+                            // notes and When buttons don't open below the fold. This
+                            // can fire while the ListView is laying out (a row created
+                            // already expanded), and repositioning the view from inside
+                            // its own layout crashes Qt, so the scroll is deferred.
                             onHeightChanged: {
                                 if (isExpanded && height === targetHeight)
-                                    taskListView.positionViewAtIndex(index, ListView.Contain);
+                                    Qt.callLater(root.scrollToTask, taskId);
                             }
 
                             Rectangle {
