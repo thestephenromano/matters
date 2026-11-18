@@ -21,7 +21,6 @@ REQUIRED = {
     "experiments/sync-prototype/tests/cases/encrypted_inbox.rs",
     "docs/SQLITE_REVIEW.md",
     "experiments/sync-prototype/.gitignore",
-    "experiments/sync-prototype/baseline/Cargo.lock",
     "experiments/sync-prototype/baseline/Cargo.toml",
     "experiments/sync-prototype/baseline/src/main.rs",
     "experiments/sync-prototype/tests/vectors/check_evidence_guards.py",
