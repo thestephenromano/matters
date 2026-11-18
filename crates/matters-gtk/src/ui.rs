@@ -221,8 +221,8 @@ impl Ui {
                 if title.is_empty() {
                     return;
                 }
-                let task = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, local_today());
-                if ui.check(ui.db.create_task(&task)) {
+                let mut task = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, local_today());
+                if ui.check(ui.db.add_task(&mut task)) {
                     entry.set_text("");
                 }
                 ui.refresh();
@@ -293,8 +293,8 @@ impl Ui {
         if title.is_empty() {
             return;
         }
-        let project = Project::new(Uuid::new_v4().to_string(), title, 0.0);
-        if self.check(self.db.create_project(&project)) {
+        let mut project = Project::new(Uuid::new_v4().to_string(), title, 0.0);
+        if self.check(self.db.add_project(&mut project)) {
             self.select(View::Project(project.id));
         }
     }

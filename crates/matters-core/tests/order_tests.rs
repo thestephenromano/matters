@@ -1,0 +1,194 @@
+//! Manual ordering (#53): lists keep the order the user arranged, Today keeps
+//! its own order, and only the ordering operations change it.
+
+use chrono::NaiveDate;
+use matters_core::ordering::{move_task, place_area, place_project, place_task};
+use matters_core::{Area, Database, Project, QueryEngine, Schedule, Task, View};
+
+fn today() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 11, 17).unwrap()
+}
+
+fn ids(db: &Database, view: &View) -> Vec<String> {
+    QueryEngine::new(db).tasks_in(view, today()).unwrap().into_iter().map(|t| t.id).collect()
+}
+
+fn project(id: &str) -> View {
+    View::Project(id.into())
+}
+
+/// Tasks in project `p1`, created the way the app used to (all keys 0), so
+/// the first move has to renumber.
+fn project_fixture(db: &Database, names: &[&str]) {
+    db.create_project(&Project::new("p1", "Garden", 0.0)).unwrap();
+    for (i, name) in names.iter().enumerate() {
+        let mut t = Task::new(*name, *name, 0.0);
+        t.project_id = Some("p1".into());
+        t.created_at = i as i64;
+        db.create_task(&t).unwrap();
+    }
+}
+
+/// A small deterministic generator, so failures reproduce.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self, n: usize) -> usize {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.0 >> 33) as usize) % n
+    }
+}
+
+#[test]
+fn any_sequence_of_moves_keeps_the_order_the_user_made_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("matters.db");
+    let names = ["a", "b", "c", "d", "e", "f", "g"];
+    let mut model: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+    {
+        let db = Database::open(&path).unwrap();
+        project_fixture(&db, &names);
+        assert_eq!(ids(&db, &project("p1")), model);
+
+        let mut rng = Lcg(7);
+        for round in 0..300 {
+            let id = model[rng.next(model.len())].clone();
+            if round % 2 == 0 {
+                // Place after a random other task, or first.
+                let others: Vec<String> = model.iter().filter(|x| **x != id).cloned().collect();
+                let pick = rng.next(others.len() + 1);
+                let after = (pick < others.len()).then(|| others[pick].clone());
+                place_task(&db, &project("p1"), today(), &id, after.as_deref()).unwrap();
+                model.retain(|x| *x != id);
+                let at = after.map_or(0, |a| model.iter().position(|x| *x == a).unwrap() + 1);
+                model.insert(at, id.clone());
+            } else {
+                let step = rng.next(5) as isize - 2;
+                move_task(&db, &project("p1"), today(), &id, step).unwrap();
+                let from = model.iter().position(|x| *x == id).unwrap();
+                let to = (from as isize + step).clamp(0, model.len() as isize - 1) as usize;
+                let item = model.remove(from);
+                model.insert(to, item);
+            }
+            assert_eq!(ids(&db, &project("p1")), model, "after move {round} of {id}");
+        }
+    }
+    let reopened = Database::open(&path).unwrap();
+    assert_eq!(ids(&reopened, &project("p1")), model, "order survives a restart");
+}
+
+#[test]
+fn many_moves_between_the_same_neighbours_stay_correct() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a", "x", "y", "b"]);
+    // Squeeze x and y alternately between a and b: the midpoints run out and
+    // the list is renumbered along the way.
+    for i in 0..200 {
+        let id = if i % 2 == 0 { "x" } else { "y" };
+        place_task(&db, &project("p1"), today(), id, Some("a")).unwrap();
+        let expected = if i % 2 == 0 { ["a", "x", "y", "b"] } else { ["a", "y", "x", "b"] };
+        assert_eq!(ids(&db, &project("p1")), expected, "move {i}");
+    }
+}
+
+#[test]
+fn today_keeps_its_own_order() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a", "b", "c"]);
+    for id in ["a", "b", "c"] {
+        let mut t = db.get_task(id).unwrap().unwrap();
+        t.apply_schedule(&Schedule::Today { evening: false }, today());
+        db.update_task(&t).unwrap();
+    }
+
+    place_task(&db, &View::Today, today(), "c", None).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["c", "a", "b"]);
+    assert_eq!(ids(&db, &project("p1")), ["a", "b", "c"], "planning the day leaves the project alone");
+
+    place_task(&db, &project("p1"), today(), "a", Some("c")).unwrap();
+    assert_eq!(ids(&db, &project("p1")), ["b", "c", "a"]);
+    assert_eq!(ids(&db, &View::Today), ["c", "a", "b"], "and arranging the project leaves Today alone");
+}
+
+#[test]
+fn this_evening_is_ordered_within_itself() {
+    let db = Database::open_in_memory().unwrap();
+    for (i, (id, evening)) in [("d1", false), ("d2", false), ("e1", true), ("e2", true)].iter().enumerate() {
+        let mut t = Task::new(*id, *id, 0.0);
+        t.created_at = i as i64;
+        t.apply_schedule(&Schedule::Today { evening: *evening }, today());
+        db.create_task(&t).unwrap();
+    }
+    assert_eq!(ids(&db, &View::Today), ["d1", "d2", "e1", "e2"]);
+
+    move_task(&db, &View::Today, today(), "e2", -10).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["d1", "d2", "e2", "e1"], "stops at the top of This Evening");
+    move_task(&db, &View::Today, today(), "d1", 10).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["d2", "d1", "e2", "e1"], "stops at the end of the daytime tasks");
+
+    assert!(place_task(&db, &View::Today, today(), "e1", Some("d1")).is_err(), "no move across sections");
+}
+
+#[test]
+fn new_tasks_and_projects_are_added_at_the_end() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a", "b", "c"]);
+    for id in ["a", "b", "c"] {
+        let mut t = db.get_task(id).unwrap().unwrap();
+        t.apply_schedule(&Schedule::Today { evening: false }, today());
+        db.update_task(&t).unwrap();
+    }
+    // Renumber both lists by moving.
+    place_task(&db, &project("p1"), today(), "c", None).unwrap();
+    place_task(&db, &View::Today, today(), "b", None).unwrap();
+
+    let mut new = View::Project("p1".into()).new_task("new", "new", today());
+    new.apply_schedule(&Schedule::Today { evening: false }, today());
+    db.add_task(&mut new).unwrap();
+    assert_eq!(ids(&db, &project("p1")).last().map(String::as_str), Some("new"));
+    assert_eq!(ids(&db, &View::Today).last().map(String::as_str), Some("new"));
+
+    let mut p2 = Project::new("p2", "Kitchen", 0.0);
+    db.add_project(&mut p2).unwrap();
+    place_project(&db, "p2", None).unwrap();
+    let mut p3 = Project::new("p3", "Shed", 0.0);
+    db.add_project(&mut p3).unwrap();
+    let order: Vec<_> = db.list_projects().unwrap().into_iter().map(|p| p.id).collect();
+    assert_eq!(order, ["p2", "p1", "p3"]);
+}
+
+#[test]
+fn saving_a_task_never_changes_its_order() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a", "b", "c"]);
+    let mut stale = db.get_task("c").unwrap().unwrap();
+    place_task(&db, &project("p1"), today(), "c", None).unwrap();
+    stale.notes = "late autosave".into();
+    db.update_task(&stale).unwrap();
+    assert_eq!(ids(&db, &project("p1")), ["c", "a", "b"]);
+}
+
+#[test]
+fn lists_with_their_own_order_cannot_be_rearranged() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a", "b"]);
+    for view in [View::Upcoming, View::Anytime, View::Someday, View::Logbook, View::Trash] {
+        assert!(!view.is_reorderable());
+        assert!(place_task(&db, &view, today(), "a", None).is_err(), "{view:?}");
+    }
+    assert!(place_task(&db, &View::Inbox, today(), "a", None).is_err(), "a is not in the Inbox");
+    assert!(place_task(&db, &project("p1"), today(), "a", Some("nope")).is_err());
+}
+
+#[test]
+fn areas_are_reordered_in_the_sidebar() {
+    let db = Database::open_in_memory().unwrap();
+    for id in ["home", "work", "health"] {
+        let mut a = Area::new(id, id, 0.0);
+        db.add_area(&mut a).unwrap();
+    }
+    place_area(&db, "health", None).unwrap();
+    place_area(&db, "home", Some("work")).unwrap();
+    let order: Vec<_> = db.list_areas().unwrap().into_iter().map(|a| a.id).collect();
+    assert_eq!(order, ["health", "work", "home"]);
+    assert!(place_area(&db, "home", Some("gone")).is_err());
+}

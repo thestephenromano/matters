@@ -24,7 +24,11 @@ pub struct Task {
     /// `Database::trash_task` and `Database::restore_task` change it.
     #[serde(default)]
     pub trashed_at: Option<i64>,
+    /// Position in the task's home list (Inbox, area or project).
     pub sort_order: f64,
+    /// Position in Today, which keeps its own order (`crate::ordering`).
+    #[serde(default)]
+    pub today_order: f64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -47,6 +51,7 @@ impl Task {
             completed_at: None,
             trashed_at: None,
             sort_order,
+            today_order: 0.0,
             created_at: now,
             updated_at: now,
         }

@@ -5,13 +5,13 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
 use crate::error::{MattersError, Result};
-use super::schema::{MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, SCHEMA_V1};
+use super::schema::{MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, SCHEMA_V1};
 use super::trash;
 
 /// Columns read by [`Database::map_task_row`], in its expected order.
 pub(crate) const TASK_COLUMNS: &str = "id, area_id, project_id, heading_id, title, notes, start_date,
      time_of_day, is_someday, deadline, status, completed_at, sort_order,
-     created_at, updated_at, trashed_at";
+     created_at, updated_at, trashed_at, today_order";
 
 /// Columns read by [`Database::map_area_row`], in its expected order.
 pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
@@ -77,7 +77,7 @@ impl Database {
 
         let version: i64 =
             conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))?;
-        for (target, migration) in [(2, MIGRATION_V2), (3, MIGRATION_V3), (4, MIGRATION_V4)] {
+        for (target, migration) in [(2, MIGRATION_V2), (3, MIGRATION_V3), (4, MIGRATION_V4), (5, MIGRATION_V5)] {
             if version < target {
                 let tx = conn.transaction()?;
                 tx.execute_batch(migration)?;
@@ -91,6 +91,14 @@ impl Database {
         Ok(())
     }
 
+    pub(crate) fn with_conn_mut<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Connection) -> Result<T>,
+    {
+        let mut conn = self.conn.lock().unwrap();
+        f(&mut conn)
+    }
+
     pub fn with_conn<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T>,
@@ -102,6 +110,19 @@ impl Database {
     // =========================================================================
     // Area Operations
     // =========================================================================
+
+    /// Create an area at the end of the sidebar list.
+    pub fn add_area(&self, area: &mut Area) -> Result<()> {
+        area.sort_order = self.next_order("areas")?;
+        self.create_area(area)
+    }
+
+    /// One past the largest `sort_order` in `table` (a fixed table name).
+    fn next_order(&self, table: &str) -> Result<f64> {
+        self.with_conn(|conn| {
+            Ok(conn.query_row(&format!("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM {table}"), [], |r| r.get(0))?)
+        })
+    }
 
     pub fn create_area(&self, area: &Area) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -137,13 +158,14 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Rename or reorder an area; never changes its trash state.
+    /// Rename an area. Its order and trash state change only through the
+    /// ordering and trash operations, so a stale copy can't undo them.
     pub fn update_area(&self, area: &Area) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();
         conn.execute(
-            "UPDATE areas SET title = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
-            params![area.title, area.sort_order, now, area.id],
+            "UPDATE areas SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![area.title, now, area.id],
         )?;
         Ok(())
     }
@@ -176,6 +198,12 @@ impl Database {
     // =========================================================================
     // Project Operations
     // =========================================================================
+
+    /// Create a project at the end of the sidebar list.
+    pub fn add_project(&self, project: &mut Project) -> Result<()> {
+        project.sort_order = self.next_order("projects")?;
+        self.create_project(project)
+    }
 
     pub fn create_project(&self, project: &Project) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -242,7 +270,7 @@ impl Database {
     }
 
     /// Write the project's editable fields; like [`Self::update_task`], never
-    /// its trash state.
+    /// its order or trash state.
     pub fn update_project(&self, project: &Project) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();
@@ -254,8 +282,8 @@ impl Database {
             "UPDATE projects SET
                 area_id = ?1, title = ?2, notes = ?3, start_date = ?4, time_of_day = ?5,
                 is_someday = ?6, deadline = ?7, status = ?8, completed_at = ?9,
-                sort_order = ?10, updated_at = ?11
-             WHERE id = ?12",
+                updated_at = ?10
+             WHERE id = ?11",
             params![
                 project.area_id,
                 project.title,
@@ -266,7 +294,6 @@ impl Database {
                 deadline,
                 project.status.as_str(),
                 project.completed_at,
-                project.sort_order,
                 now,
                 project.id,
             ],
@@ -344,6 +371,22 @@ impl Database {
     // Task Operations
     // =========================================================================
 
+    /// Create a task at the end of its lists: its home list (Inbox, area or
+    /// project) and Today. Frontends capture tasks with this; `create_task`
+    /// keeps the order it is given.
+    pub fn add_task(&self, task: &mut Task) -> Result<()> {
+        let (home, today) = self.with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1, COALESCE(MAX(today_order), 0) + 1 FROM tasks",
+                [],
+                |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)),
+            )?)
+        })?;
+        task.sort_order = home;
+        task.today_order = today;
+        self.create_task(task)
+    }
+
     pub fn create_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let start_date = task.start_date.map(|d| d.format("%Y-%m-%d").to_string());
@@ -354,8 +397,8 @@ impl Database {
             "INSERT INTO tasks (
                 id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                created_at, updated_at, trashed_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                created_at, updated_at, trashed_at, today_order
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 task.id,
                 task.area_id,
@@ -373,6 +416,7 @@ impl Database {
                 task.created_at,
                 task.updated_at,
                 task.trashed_at,
+                task.today_order,
             ],
         )?;
         Ok(())
@@ -385,9 +429,10 @@ impl Database {
         Ok(task)
     }
 
-    /// Write the task's editable fields. Trash state is not one of them: it
-    /// changes only through [`Self::trash_task`] and [`Self::restore_task`],
-    /// so saving a stale copy can neither trash nor resurrect a task.
+    /// Write the task's editable fields. Order and trash state are not among
+    /// them: they change only through the ordering operations
+    /// (`crate::ordering`) and [`Self::trash_task`] / [`Self::restore_task`],
+    /// so saving a stale copy can't reorder, trash or resurrect a task.
     pub fn update_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();
@@ -399,8 +444,8 @@ impl Database {
             "UPDATE tasks SET
                 area_id = ?1, project_id = ?2, heading_id = ?3, title = ?4, notes = ?5,
                 start_date = ?6, time_of_day = ?7, is_someday = ?8, deadline = ?9,
-                status = ?10, completed_at = ?11, sort_order = ?12, updated_at = ?13
-             WHERE id = ?14",
+                status = ?10, completed_at = ?11, updated_at = ?12
+             WHERE id = ?13",
             params![
                 task.area_id,
                 task.project_id,
@@ -413,7 +458,6 @@ impl Database {
                 deadline,
                 task.status.as_str(),
                 task.completed_at,
-                task.sort_order,
                 now,
                 task.id,
             ],
@@ -622,6 +666,7 @@ impl Database {
             created_at: row.get(13)?,
             updated_at: row.get(14)?,
             trashed_at: row.get(15)?,
+            today_order: row.get(16)?,
         })
     }
 
