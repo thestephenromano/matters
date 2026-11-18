@@ -10,8 +10,8 @@ from pathlib import Path
 import sys
 import cbor2
 
-if importlib.metadata.version("cbor2") != "5.6.5":
-    raise SystemExit("oracle requires cbor2 5.6.5")
+if importlib.metadata.version("cbor2") != "5.9.0":
+    raise SystemExit("oracle requires cbor2 5.9.0")
 encode = lambda x: cbor2.dumps(x, canonical=True)
 digest = lambda x: hashlib.sha384(x).digest()
 SUITE = "matters-sync-pq-v0"
@@ -66,7 +66,7 @@ reject("short_signature",encode([writer[0],writer[1][:-1]]),"Format")
 for field,value,name in [(0,1,"future_version"),(1,"unknown","unknown_suite"),(2,"recovery_transition","unsupported_type")]:
     changed=list(writer[0]);changed[field]=value
     reject(name,encode([changed,writer[1]]),"Unsupported")
-result=dict(provenance="cbor2 5.6.5 + Python hashlib SHA-384; patterned public keys and invalid zero signatures",root_id_hex=root_id.hex(),admin_id_hex=a[0].hex(),recipient_id_hex=b[0].hex(),recipient_key_fingerprint_hex=fp(KEM,b[2]).hex(),info_hex=encode(info).hex(),aad_hex=encode(aad).hex(),key_plaintext_hex=encode([0,bytes([14])*32,"whole-collection"]).hex(),vectors=vectors,rejection_splices=negative,max_genesis_bytes=len(max_bytes),max_genesis_sha384=digest(max_bytes).hex())
+result=dict(provenance="cbor2 5.9.0 + Python hashlib SHA-384; patterned public keys and invalid zero signatures",root_id_hex=root_id.hex(),admin_id_hex=a[0].hex(),recipient_id_hex=b[0].hex(),recipient_key_fingerprint_hex=fp(KEM,b[2]).hex(),info_hex=encode(info).hex(),aad_hex=encode(aad).hex(),key_plaintext_hex=encode([0,bytes([14])*32,"whole-collection"]).hex(),vectors=vectors,rejection_splices=negative,max_genesis_bytes=len(max_bytes),max_genesis_sha384=digest(max_bytes).hex())
 output=json.dumps(result,indent=2)+"\n"
 path=Path(__file__).with_name("golden.json")
 if "--check" in sys.argv:

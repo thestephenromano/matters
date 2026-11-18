@@ -1,6 +1,6 @@
 # Key-distribution structural oracle
 
-`generate.py` uses pinned Python cbor2 5.6.5 and standard-library SHA-384. It does not call the Rust implementation. Install the existing [oracle requirements](../record-contract/requirements.txt), then run from the prototype directory:
+`generate.py` uses pinned Python cbor2 5.9.0 and standard-library SHA-384. It does not call the Rust implementation. Install the existing [oracle requirements](../record-contract/requirements.txt), then run from the prototype directory:
 
 ```sh
 python tests/vectors/key-distribution/generate.py --check

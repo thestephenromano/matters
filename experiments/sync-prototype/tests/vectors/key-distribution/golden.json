@@ -1,5 +1,5 @@
 {
-  "provenance": "cbor2 5.6.5 + Python hashlib SHA-384; patterned public keys and invalid zero signatures",
+  "provenance": "cbor2 5.9.0 + Python hashlib SHA-384; patterned public keys and invalid zero signatures",
   "root_id_hex": "464c51fcaf09ff54b302576300da7f307dbde72a6a859b83239fd6003a0eb1a4cbb6aad96dca3251b1c0b34325ba02d9",
   "admin_id_hex": "144aabb341729357d0217ce4267ffbc1f6d0607faa746865b37258656028d4204278f4019a6d287a18e5691b21186d5e",
   "recipient_id_hex": "019007630bf92fadd4c2f8440bc3fd84c7ccac1d2a00a94450781ca8e0c280c630ba506e530d1ecbb647713da706d2d3",
