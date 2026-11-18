@@ -5,3 +5,6 @@ members = [
     "crates/matters-gtk",
 ]
 resolver = "2"
+
+[workspace.package]
+license = "MIT OR Apache-2.0"

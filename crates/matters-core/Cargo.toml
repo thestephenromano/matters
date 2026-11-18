@@ -2,6 +2,7 @@
 name = "matters-core"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 authors = ["Matters Contributors"]
 description = "Core GTD engine and SQLite persistence for Matters"
 
