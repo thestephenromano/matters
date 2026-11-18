@@ -28,7 +28,10 @@ use crate::task_row::TaskRow;
 /// The sidebar views GTK offers. GTK has no way to delete a task, so it has no
 /// Trash either: Put Back and Empty Trash are Qt-only (SPEC §3.7).
 pub(crate) fn nav_views() -> Vec<View> {
-    View::sidebar().into_iter().filter(|v| *v != View::Trash).collect()
+    View::sidebar()
+        .into_iter()
+        .filter(|v| *v != View::Trash)
+        .collect()
 }
 
 pub(crate) struct State {
@@ -96,7 +99,9 @@ impl Ui {
                 .title(format!("{icon} {}", view.title()))
                 .activatable(true)
                 .build();
-            let count = Label::builder().css_classes(["dim-label", "caption"]).build();
+            let count = Label::builder()
+                .css_classes(["dim-label", "caption"])
+                .build();
             row.add_suffix(&count);
             nav_counts.push(count);
             nav_list.append(&row);
@@ -208,7 +213,8 @@ impl Ui {
             let ui = ui.clone();
             proj_list.connect_row_activated(move |_, row| {
                 let index = usize::try_from(row.index()).ok();
-                let project = index.and_then(|i| ui.state.borrow().projects.get(i).map(|p| p.id.clone()));
+                let project =
+                    index.and_then(|i| ui.state.borrow().projects.get(i).map(|p| p.id.clone()));
                 if let Some(id) = project {
                     ui.select(View::Project(id));
                 }
@@ -218,8 +224,11 @@ impl Ui {
             let ui = ui.clone();
             new_task_entry.connect_activate(move |entry| {
                 let title = entry.text();
-                let Some(mut task) = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), &title, local_today())
-                else {
+                let Some(mut task) = ui.state.borrow().view.new_task(
+                    Uuid::new_v4().to_string(),
+                    &title,
+                    local_today(),
+                ) else {
                     return; // a blank title (the entry is hidden where tasks can't be captured)
                 };
                 if ui.check(ui.db.add_task(&mut task)) {
@@ -274,7 +283,10 @@ impl Ui {
 
     fn prompt_new_project(self: &Rc<Self>) {
         let dialog = AlertDialog::new(Some("New Project"), None);
-        let entry = Entry::builder().placeholder_text("Project title").activates_default(true).build();
+        let entry = Entry::builder()
+            .placeholder_text("Project title")
+            .activates_default(true)
+            .build();
         dialog.set_extra_child(Some(&entry));
         dialog.add_response("cancel", "Cancel");
         dialog.add_response("create", "Create");
@@ -305,7 +317,11 @@ impl Ui {
     // the main loop afterwards rather than re-entrantly.
 
     pub(crate) fn set_done(self: &Rc<Self>, id: &str, done: bool) {
-        let result = if done { self.db.complete_task(id) } else { self.db.uncomplete_task(id) };
+        let result = if done {
+            self.db.complete_task(id)
+        } else {
+            self.db.uncomplete_task(id)
+        };
         self.check(result);
         self.refresh_soon();
     }
@@ -321,7 +337,12 @@ impl Ui {
     pub(crate) fn save_notes(self: &Rc<Self>, id: &str, notes: &str) {
         let (ui, id, notes) = (self.clone(), id.to_string(), notes.to_string());
         glib::idle_add_local_once(move || {
-            let unchanged = ui.state.borrow().shown.iter().any(|t| t.id == id && t.notes == notes);
+            let unchanged = ui
+                .state
+                .borrow()
+                .shown
+                .iter()
+                .any(|t| t.id == id && t.notes == notes);
             if !unchanged {
                 let result = ui.edit_task(&id, |task| task.notes = notes);
                 ui.check(result);
@@ -367,7 +388,9 @@ impl Ui {
         }
 
         // Projects list.
-        let projects = self.check_value(self.db.list_projects()).unwrap_or_default();
+        let projects = self
+            .check_value(self.db.list_projects())
+            .unwrap_or_default();
         while let Some(child) = self.proj_list.first_child() {
             self.proj_list.remove(&child);
         }

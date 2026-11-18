@@ -24,8 +24,11 @@ use crate::ui::Ui;
 const NOTES_SAVE_DELAY: Duration = Duration::from_millis(600);
 
 /// The When buttons: label and `Schedule::parse` value.
-pub(crate) const WHEN_BUTTONS: [(&str, &str); 3] =
-    [("Today", "today"), ("This Evening", "evening"), ("Someday", "someday")];
+pub(crate) const WHEN_BUTTONS: [(&str, &str); 3] = [
+    ("Today", "today"),
+    ("This Evening", "evening"),
+    ("Someday", "someday"),
+];
 
 pub(crate) struct TaskRow {
     pub(crate) row: ExpanderRow,
@@ -143,7 +146,12 @@ impl TaskRow {
         }
 
         let when_box = GtkBox::new(Orientation::Horizontal, 8);
-        when_box.append(&Label::builder().label("When:").css_classes(["dim-label"]).build());
+        when_box.append(
+            &Label::builder()
+                .label("When:")
+                .css_classes(["dim-label"])
+                .build(),
+        );
         let mut when_buttons = Vec::new();
         for (label, when) in WHEN_BUTTONS {
             let button = Button::builder().label(label).css_classes(["pill"]).build();

@@ -94,7 +94,10 @@ impl View {
     /// finished or trashed. Anytime and Someday mix tasks from several areas
     /// and projects, so they wait for grouped sections (#25).
     pub fn is_reorderable(&self) -> bool {
-        matches!(self, View::Inbox | View::Today | View::Project(_) | View::Area(_))
+        matches!(
+            self,
+            View::Inbox | View::Today | View::Project(_) | View::Area(_)
+        )
     }
 
     pub fn project_id(&self) -> Option<&str> {

@@ -18,7 +18,10 @@ fn qt_host_bins() -> Option<PathBuf> {
         .map(PathBuf::from)
         .chain(["qmake6", "qmake"].map(PathBuf::from));
     for qmake in candidates {
-        if let Ok(out) = Command::new(&qmake).args(["-query", "QT_HOST_BINS"]).output() {
+        if let Ok(out) = Command::new(&qmake)
+            .args(["-query", "QT_HOST_BINS"])
+            .output()
+        {
             if out.status.success() {
                 let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if !dir.is_empty() {
@@ -105,13 +108,18 @@ fn qml_uses_matters_icons_not_emoji() {
         }
         let text = std::fs::read_to_string(&path).unwrap();
         for (n, line) in text.lines().enumerate() {
-            let is_emoji = |c: char| matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF);
+            let is_emoji =
+                |c: char| matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF);
             if line.chars().any(is_emoji) {
                 found.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
             }
         }
     }
-    assert!(found.is_empty(), "emoji in QML (use Icon instead):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "emoji in QML (use Icon instead):\n{}",
+        found.join("\n")
+    );
 }
 
 /// A control that draws its own `contentItem` must not also set `text`: some

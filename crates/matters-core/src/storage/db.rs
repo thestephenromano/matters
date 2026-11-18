@@ -1,15 +1,16 @@
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use chrono::NaiveDate;
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
-use crate::error::{MattersError, Result};
 use super::schema::{MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, SCHEMA_V1};
 use super::trash;
+use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
+use crate::error::{MattersError, Result};
 
 /// Columns read by [`Database::map_task_row`], in its expected order.
-pub(crate) const TASK_COLUMNS: &str = "id, area_id, project_id, heading_id, title, notes, start_date,
+pub(crate) const TASK_COLUMNS: &str =
+    "id, area_id, project_id, heading_id, title, notes, start_date,
      time_of_day, is_someday, deadline, status, completed_at, sort_order,
      created_at, updated_at, trashed_at, today_order";
 
@@ -17,7 +18,8 @@ pub(crate) const TASK_COLUMNS: &str = "id, area_id, project_id, heading_id, titl
 pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
 
 /// Columns read by [`Database::map_project_row`], in its expected order.
-pub(crate) const PROJECT_COLUMNS: &str = "id, area_id, title, notes, start_date, time_of_day, is_someday,
+pub(crate) const PROJECT_COLUMNS: &str =
+    "id, area_id, title, notes, start_date, time_of_day, is_someday,
      deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at";
 
 #[derive(Clone)]
@@ -82,8 +84,15 @@ impl Database {
         )?;
 
         let version: i64 =
-            conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))?;
-        for (target, migration) in [(2, MIGRATION_V2), (3, MIGRATION_V3), (4, MIGRATION_V4), (5, MIGRATION_V5)] {
+            conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })?;
+        for (target, migration) in [
+            (2, MIGRATION_V2),
+            (3, MIGRATION_V3),
+            (4, MIGRATION_V4),
+            (5, MIGRATION_V5),
+        ] {
             if version < target {
                 let tx = conn.transaction()?;
                 tx.execute_batch(migration)?;
@@ -126,7 +135,11 @@ impl Database {
     /// One past the largest `sort_order` in `table` (a fixed table name).
     fn next_order(&self, table: &str) -> Result<f64> {
         self.with_conn(|conn| {
-            Ok(conn.query_row(&format!("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM {table}"), [], |r| r.get(0))?)
+            Ok(conn.query_row(
+                &format!("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM {table}"),
+                [],
+                |r| r.get(0),
+            )?)
         })
     }
 
@@ -135,7 +148,14 @@ impl Database {
         conn.execute(
             "INSERT INTO areas (id, title, sort_order, created_at, updated_at, trashed_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![area.id, area.title, area.sort_order, area.created_at, area.updated_at, area.trashed_at],
+            params![
+                area.id,
+                area.title,
+                area.sort_order,
+                area.created_at,
+                area.updated_at,
+                area.trashed_at
+            ],
         )?;
         Ok(())
     }
@@ -149,17 +169,25 @@ impl Database {
 
     /// Areas not in the Trash, in sidebar order.
     pub fn list_areas(&self) -> Result<Vec<Area>> {
-        self.select_areas(&format!("{} ORDER BY sort_order ASC, created_at ASC, id ASC", trash::LIVE_AREA))
+        self.select_areas(&format!(
+            "{} ORDER BY sort_order ASC, created_at ASC, id ASC",
+            trash::LIVE_AREA
+        ))
     }
 
     /// Trashed areas, most recently trashed first.
     pub fn list_trashed_areas(&self) -> Result<Vec<Area>> {
-        self.select_areas(&format!("{} ORDER BY trashed_at DESC, id ASC", trash::TRASHED_AREA))
+        self.select_areas(&format!(
+            "{} ORDER BY trashed_at DESC, id ASC",
+            trash::TRASHED_AREA
+        ))
     }
 
     fn select_areas(&self, filter_and_order: &str) -> Result<Vec<Area>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!("SELECT {AREA_COLUMNS} FROM areas WHERE {filter_and_order}"))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {AREA_COLUMNS} FROM areas WHERE {filter_and_order}"
+        ))?;
         let rows = stmt.query_map([], Self::map_area_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -189,7 +217,10 @@ impl Database {
             params![title, now, id],
         )?;
         if changed == 0 {
-            return Err(MattersError::NotFound { entity: "area", id: id.to_string() });
+            return Err(MattersError::NotFound {
+                entity: "area",
+                id: id.to_string(),
+            });
         }
         Ok(())
     }
@@ -207,7 +238,10 @@ impl Database {
             params![title, now, id],
         )?;
         if changed == 0 {
-            return Err(MattersError::NotFound { entity: "project", id: id.to_string() });
+            return Err(MattersError::NotFound {
+                entity: "project",
+                id: id.to_string(),
+            });
         }
         Ok(())
     }
@@ -218,7 +252,12 @@ impl Database {
         if let Some(area_id) = area_id {
             match self.get_area(area_id)? {
                 Some(area) if !area.is_trashed() => {}
-                _ => return Err(MattersError::NotFound { entity: "area", id: area_id.to_string() }),
+                _ => {
+                    return Err(MattersError::NotFound {
+                        entity: "area",
+                        id: area_id.to_string(),
+                    })
+                }
             }
         }
         let conn = self.conn.lock().unwrap();
@@ -228,7 +267,10 @@ impl Database {
             params![area_id, now, project_id],
         )?;
         if changed == 0 {
-            return Err(MattersError::NotFound { entity: "project", id: project_id.to_string() });
+            return Err(MattersError::NotFound {
+                entity: "project",
+                id: project_id.to_string(),
+            });
         }
         Ok(())
     }
@@ -301,8 +343,12 @@ impl Database {
 
     pub fn get_project(&self, id: &str) -> Result<Option<Project>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE id = ?1"))?;
-        let project = stmt.query_row(params![id], Self::map_project_row).optional()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROJECT_COLUMNS} FROM projects WHERE id = ?1"
+        ))?;
+        let project = stmt
+            .query_row(params![id], Self::map_project_row)
+            .optional()?;
         Ok(project)
     }
 
@@ -326,8 +372,9 @@ impl Database {
 
     fn select_projects(&self, filter_and_order: &str) -> Result<Vec<Project>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE {filter_and_order}"))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROJECT_COLUMNS} FROM projects WHERE {filter_and_order}"
+        ))?;
         let rows = stmt.query_map([], Self::map_project_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -541,7 +588,10 @@ impl Database {
             params![title, now, id],
         )?;
         if changed == 0 {
-            return Err(MattersError::NotFound { entity: "task", id: id.to_string() });
+            return Err(MattersError::NotFound {
+                entity: "task",
+                id: id.to_string(),
+            });
         }
         Ok(())
     }
@@ -600,9 +650,18 @@ impl Database {
         let tx = conn.transaction()?;
         // Innermost first: each pass reads the trash state of the containers
         // that later passes delete.
-        let tasks = tx.execute(&format!("DELETE FROM tasks WHERE {}", trash::ANY_TRASHED_TASK), [])?;
-        tx.execute(&format!("DELETE FROM projects WHERE {}", trash::ANY_TRASHED_PROJECT), [])?;
-        tx.execute(&format!("DELETE FROM areas WHERE {}", trash::TRASHED_AREA), [])?;
+        let tasks = tx.execute(
+            &format!("DELETE FROM tasks WHERE {}", trash::ANY_TRASHED_TASK),
+            [],
+        )?;
+        tx.execute(
+            &format!("DELETE FROM projects WHERE {}", trash::ANY_TRASHED_PROJECT),
+            [],
+        )?;
+        tx.execute(
+            &format!("DELETE FROM areas WHERE {}", trash::TRASHED_AREA),
+            [],
+        )?;
         tx.commit()?;
         Ok(tasks)
     }
@@ -677,7 +736,8 @@ impl Database {
 
     pub(crate) fn map_project_row(row: &Row) -> rusqlite::Result<Project> {
         let start_date_str: Option<String> = row.get(4)?;
-        let start_date = start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+        let start_date =
+            start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
 
         let is_someday_int: i64 = row.get(6)?;
         let is_someday = is_someday_int == 1;
@@ -719,7 +779,8 @@ impl Database {
 
     pub(crate) fn map_task_row(row: &Row) -> rusqlite::Result<Task> {
         let start_date_str: Option<String> = row.get(6)?;
-        let start_date = start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+        let start_date =
+            start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
 
         let is_someday_int: i64 = row.get(8)?;
         let is_someday = is_someday_int == 1;

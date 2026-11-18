@@ -14,9 +14,12 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use cxx_qt::CxxQtType;
-use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
+use cxx_qt_lib::{
+    QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant,
+};
 use matters_core::{
-    local_today, Area, Database, DateOrder, DayTracker, DeadlineStatus, Project, QueryEngine, Schedule, Status, Task, View, Visit,
+    local_today, Area, Database, DateOrder, DayTracker, DeadlineStatus, Project, QueryEngine,
+    Schedule, Status, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -104,7 +107,11 @@ pub mod qobject {
         fn restore_area(self: Pin<&mut AppController>, area_id: &QString);
         /// Rename a project; false, changing nothing, for a blank name.
         #[qinvokable]
-        fn rename_project(self: Pin<&mut AppController>, project_id: &QString, title: &QString) -> bool;
+        fn rename_project(
+            self: Pin<&mut AppController>,
+            project_id: &QString,
+            title: &QString,
+        ) -> bool;
         /// File a project in an area, or take it out of one (empty `area_id`).
         #[qinvokable]
         fn set_project_area(self: Pin<&mut AppController>, project_id: &QString, area_id: &QString);
@@ -116,7 +123,11 @@ pub mod qobject {
         /// a selected task); returns its id, or an empty string when nothing
         /// was created (a blank title, or a list not arranged by hand).
         #[qinvokable]
-        fn add_task_below(self: Pin<&mut AppController>, title: &QString, below_id: &QString) -> QString;
+        fn add_task_below(
+            self: Pin<&mut AppController>,
+            title: &QString,
+            below_id: &QString,
+        ) -> QString;
         #[qinvokable]
         fn toggle_task(self: Pin<&mut AppController>, task_id: &QString);
         /// Move a task to the Trash (recoverable until the Trash is emptied).
@@ -137,7 +148,12 @@ pub mod qobject {
         /// after `after_id` within that section, or first when it is empty.
         /// Changing section switches This Evening (drag and drop in Today).
         #[qinvokable]
-        fn place_today_task(self: Pin<&mut AppController>, task_id: &QString, evening: bool, after_id: &QString);
+        fn place_today_task(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            evening: bool,
+            after_id: &QString,
+        );
         /// Move a project in the sidebar so it follows `after_id`, or comes
         /// first when `after_id` is empty.
         #[qinvokable]
@@ -164,7 +180,12 @@ pub mod qobject {
         /// Schedule a task from a typed When; false, changing nothing, when the
         /// text is refused.
         #[qinvokable]
-        fn schedule_task_typed(self: Pin<&mut AppController>, task_id: &QString, text: &QString, month_first: bool) -> bool;
+        fn schedule_task_typed(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            text: &QString,
+            month_first: bool,
+        ) -> bool;
         /// What a typed deadline means (`Schedule::parse_typed_deadline`): an
         /// ISO date, or an empty string when it is refused.
         #[qinvokable]
@@ -172,11 +193,20 @@ pub mod qobject {
         /// Set a task's deadline from typed text; false, changing nothing,
         /// when the text is refused.
         #[qinvokable]
-        fn set_task_deadline_typed(self: Pin<&mut AppController>, task_id: &QString, text: &QString, month_first: bool) -> bool;
+        fn set_task_deadline_typed(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            text: &QString,
+            month_first: bool,
+        ) -> bool;
         /// Set a task's deadline to an ISO date, or clear it with an empty
         /// string; false when the date isn't valid.
         #[qinvokable]
-        fn set_task_deadline(self: Pin<&mut AppController>, task_id: &QString, date: &QString) -> bool;
+        fn set_task_deadline(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            date: &QString,
+        ) -> bool;
         /// Rename a task. Returns false, changing nothing, when the title is
         /// blank (`Database::rename_task`); the field then shows the old title.
         #[qinvokable]
@@ -227,11 +257,21 @@ pub mod qobject {
     #[auto_cxx_name]
     unsafe extern "RustQt" {
         #[inherit]
-        fn begin_insert_rows(self: Pin<&mut TaskListModel>, parent: &QModelIndex, first: i32, last: i32);
+        fn begin_insert_rows(
+            self: Pin<&mut TaskListModel>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
         #[inherit]
         fn end_insert_rows(self: Pin<&mut TaskListModel>);
         #[inherit]
-        fn begin_remove_rows(self: Pin<&mut TaskListModel>, parent: &QModelIndex, first: i32, last: i32);
+        fn begin_remove_rows(
+            self: Pin<&mut TaskListModel>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
         #[inherit]
         fn end_remove_rows(self: Pin<&mut TaskListModel>);
         #[inherit]
@@ -291,7 +331,11 @@ fn database() -> Database {
 }
 
 fn to_json<T: serde::Serialize>(value: &T) -> QString {
-    QString::from(serde_json::to_string(value).expect("domain types serialize").as_str())
+    QString::from(
+        serde_json::to_string(value)
+            .expect("domain types serialize")
+            .as_str(),
+    )
 }
 
 // =============================================================================
@@ -449,9 +493,10 @@ impl qobject::AppController {
 
     pub fn set_project_area(self: Pin<&mut Self>, project_id: &QString, area_id: &QString) {
         let area = String::from(area_id);
-        let result = self
-            .db
-            .set_project_area(&String::from(project_id), (!area.is_empty()).then_some(area.as_str()));
+        let result = self.db.set_project_area(
+            &String::from(project_id),
+            (!area.is_empty()).then_some(area.as_str()),
+        );
         self.finish(result);
     }
 
@@ -465,7 +510,10 @@ impl qobject::AppController {
     /// Capture a task in the current view (placement rules: `View::new_task`).
     pub fn add_task_below(self: Pin<&mut Self>, title: &QString, below_id: &QString) -> QString {
         let title = String::from(title);
-        let Some(mut task) = self.view.new_task(Uuid::new_v4().to_string(), &title, local_today()) else {
+        let Some(mut task) = self
+            .view
+            .new_task(Uuid::new_v4().to_string(), &title, local_today())
+        else {
             return QString::default();
         };
         let result = matters_core::ordering::add_task_below(
@@ -475,19 +523,30 @@ impl qobject::AppController {
             &mut task,
             &String::from(below_id),
         );
-        let id = if result.is_ok() { QString::from(task.id.as_str()) } else { QString::default() };
+        let id = if result.is_ok() {
+            QString::from(task.id.as_str())
+        } else {
+            QString::default()
+        };
         self.finish(result);
         id
     }
 
     pub fn add_task(self: Pin<&mut Self>, title: &QString) -> QString {
         let title = String::from(title);
-        let Some(mut task) = self.view.new_task(Uuid::new_v4().to_string(), &title, local_today()) else {
+        let Some(mut task) = self
+            .view
+            .new_task(Uuid::new_v4().to_string(), &title, local_today())
+        else {
             // A blank title, or the Logbook or the Trash.
             return QString::default();
         };
         let result = self.db.add_task(&mut task);
-        let id = if result.is_ok() { QString::from(task.id.as_str()) } else { QString::default() };
+        let id = if result.is_ok() {
+            QString::from(task.id.as_str())
+        } else {
+            QString::default()
+        };
         self.finish(result);
         id
     }
@@ -521,7 +580,12 @@ impl qobject::AppController {
         self.finish(result);
     }
 
-    pub fn place_today_task(self: Pin<&mut Self>, task_id: &QString, evening: bool, after_id: &QString) {
+    pub fn place_today_task(
+        self: Pin<&mut Self>,
+        task_id: &QString,
+        evening: bool,
+        after_id: &QString,
+    ) {
         if self.view != View::Today {
             return;
         }
@@ -599,7 +663,11 @@ impl qobject::AppController {
     }
 
     fn typed_when(&self, text: &QString, month_first: bool) -> Option<Schedule> {
-        let order = if month_first { DateOrder::MonthFirst } else { DateOrder::DayFirst };
+        let order = if month_first {
+            DateOrder::MonthFirst
+        } else {
+            DateOrder::DayFirst
+        };
         Schedule::parse_typed(&String::from(text), self.day.day(), order)
     }
 
@@ -614,29 +682,50 @@ impl qobject::AppController {
         })
     }
 
-    pub fn schedule_task_typed(self: Pin<&mut Self>, task_id: &QString, text: &QString, month_first: bool) -> bool {
+    pub fn schedule_task_typed(
+        self: Pin<&mut Self>,
+        task_id: &QString,
+        text: &QString,
+        month_first: bool,
+    ) -> bool {
         let Some(schedule) = self.typed_when(text, month_first) else {
             return false;
         };
         let today = self.day.day();
-        let result = self.edit_task(&String::from(task_id), |task| task.apply_schedule(&schedule, today));
+        let result = self.edit_task(&String::from(task_id), |task| {
+            task.apply_schedule(&schedule, today)
+        });
         let ok = result.is_ok();
         self.finish(result);
         ok
     }
 
     fn date_order(month_first: bool) -> DateOrder {
-        if month_first { DateOrder::MonthFirst } else { DateOrder::DayFirst }
+        if month_first {
+            DateOrder::MonthFirst
+        } else {
+            DateOrder::DayFirst
+        }
     }
 
     pub fn preview_deadline(&self, text: &QString, month_first: bool) -> QString {
-        let date = Schedule::parse_typed_deadline(&String::from(text), self.day.day(), Self::date_order(month_first));
+        let date = Schedule::parse_typed_deadline(
+            &String::from(text),
+            self.day.day(),
+            Self::date_order(month_first),
+        );
         QString::from(date.map(|d| d.to_string()).unwrap_or_default().as_str())
     }
 
-    pub fn set_task_deadline_typed(self: Pin<&mut Self>, task_id: &QString, text: &QString, month_first: bool) -> bool {
+    pub fn set_task_deadline_typed(
+        self: Pin<&mut Self>,
+        task_id: &QString,
+        text: &QString,
+        month_first: bool,
+    ) -> bool {
         let order = Self::date_order(month_first);
-        let Some(date) = Schedule::parse_typed_deadline(&String::from(text), self.day.day(), order) else {
+        let Some(date) = Schedule::parse_typed_deadline(&String::from(text), self.day.day(), order)
+        else {
             return false;
         };
         let result = self.edit_task(&String::from(task_id), |task| task.deadline = Some(date));
@@ -726,9 +815,11 @@ impl qobject::AppController {
         self.as_mut().set_current_view(QString::from(view.key()));
         self.as_mut()
             .set_current_project_id(QString::from(view.project_id().unwrap_or_default()));
-        self.as_mut().set_current_area_id(QString::from(view.area_id().unwrap_or_default()));
+        self.as_mut()
+            .set_current_area_id(QString::from(view.area_id().unwrap_or_default()));
         self.as_mut().set_reorderable(view.is_reorderable());
-        self.as_mut().set_accepts_new_tasks(view.accepts_new_tasks());
+        self.as_mut()
+            .set_accepts_new_tasks(view.accepts_new_tasks());
         self.as_mut().rust_mut().view = view;
         let visit = self.visit.wrapping_add(1);
         self.as_mut().set_visit(visit);
@@ -773,13 +864,30 @@ impl qobject::AppController {
             let trashed_areas = self.db.list_trashed_areas()?;
             let (title, progress) = match &self.view {
                 View::Project(id) => (
-                    self.db.get_project(id)?.map(|p| p.title).unwrap_or_else(|| "Project".into()),
+                    self.db
+                        .get_project(id)?
+                        .map(|p| p.title)
+                        .unwrap_or_else(|| "Project".into()),
                     engine.project_progress(id)?.ratio(),
                 ),
-                View::Area(id) => (self.db.get_area(id)?.map(|a| a.title).unwrap_or_else(|| "Area".into()), 0.0),
+                View::Area(id) => (
+                    self.db
+                        .get_area(id)?
+                        .map(|a| a.title)
+                        .unwrap_or_else(|| "Area".into()),
+                    0.0,
+                ),
                 other => (other.title().to_string(), 0.0),
             };
-            (counts, projects, trashed_projects, areas, trashed_areas, title, progress)
+            (
+                counts,
+                projects,
+                trashed_projects,
+                areas,
+                trashed_areas,
+                title,
+                progress,
+            )
         };
 
         let count = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
@@ -790,10 +898,13 @@ impl qobject::AppController {
         self.as_mut().set_someday_count(count(counts.someday));
         self.as_mut().set_logbook_count(count(counts.logbook));
         self.as_mut().set_projects_json(to_json(&projects));
-        self.as_mut().set_trashed_projects_json(to_json(&trashed_projects));
+        self.as_mut()
+            .set_trashed_projects_json(to_json(&trashed_projects));
         self.as_mut().set_areas_json(to_json(&areas));
-        self.as_mut().set_trashed_areas_json(to_json(&trashed_areas));
-        self.as_mut().set_current_title(QString::from(title.as_str()));
+        self.as_mut()
+            .set_trashed_areas_json(to_json(&trashed_areas));
+        self.as_mut()
+            .set_current_title(QString::from(title.as_str()));
         self.as_mut().set_current_project_progress(progress);
         Ok(())
     }
@@ -851,7 +962,10 @@ impl Role {
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
-        Role::ALL.iter().map(|(r, _)| *r).find(|r| *r as i32 == role)
+        Role::ALL
+            .iter()
+            .map(|(r, _)| *r)
+            .find(|r| *r as i32 == role)
     }
 }
 
@@ -920,7 +1034,10 @@ impl qobject::TaskListModel {
             let engine = QueryEngine::new(db);
             engine
                 .tasks_in(&view, local_today())
-                .and_then(|members| this.visit.rows(&view, members, &this.rows, |id| db.get_task(id)))
+                .and_then(|members| {
+                    this.visit
+                        .rows(&view, members, &this.rows, |id| db.get_task(id))
+                })
                 .and_then(|tasks| {
                     let keys = engine.section_keys(&view, &tasks)?;
                     let sections: HashMap<String, String> =
@@ -930,7 +1047,8 @@ impl qobject::TaskListModel {
         };
         match target {
             Ok((tasks, sections)) => {
-                let old = std::mem::replace(&mut self.as_mut().rust_mut().get_mut().sections, sections);
+                let old =
+                    std::mem::replace(&mut self.as_mut().rust_mut().get_mut().sections, sections);
                 reconcile(&mut QtRows(self.as_mut()), tasks, |t| t.id.clone());
                 // A row whose task is unchanged can still move to another
                 // section (the Logbook after midnight, say): refresh those.
@@ -955,18 +1073,17 @@ impl qobject::TaskListModel {
 
     pub fn row_of(&self, task_id: &QString) -> i32 {
         let id = String::from(task_id);
-        self.rows
-            .iter()
-            .position(|t| t.id == id)
-            .map_or(-1, qt_row)
+        self.rows.iter().position(|t| t.id == id).map_or(-1, qt_row)
     }
 
     pub fn id_at(&self, row: i32) -> QString {
-        self.task_at(row).map_or_else(QString::default, |task| QString::from(task.id.as_str()))
+        self.task_at(row)
+            .map_or_else(QString::default, |task| QString::from(task.id.as_str()))
     }
 
     pub fn title_at(&self, row: i32) -> QString {
-        self.task_at(row).map_or_else(QString::default, |task| QString::from(task.title.as_str()))
+        self.task_at(row)
+            .map_or_else(QString::default, |task| QString::from(task.title.as_str()))
     }
 
     pub fn evening_at(&self, row: i32) -> bool {
@@ -979,7 +1096,8 @@ impl qobject::TaskListModel {
 
     pub fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
         let row = usize::try_from(index.row()).ok();
-        let (Some(task), Some(role)) = (row.and_then(|r| self.rows.get(r)), Role::from_i32(role)) else {
+        let (Some(task), Some(role)) = (row.and_then(|r| self.rows.get(r)), Role::from_i32(role))
+        else {
             return QVariant::default();
         };
         match role {
@@ -988,22 +1106,33 @@ impl qobject::TaskListModel {
             Role::Notes => QVariant::from(&QString::from(task.notes.as_str())),
             Role::Done => QVariant::from(&(task.status == Status::Completed)),
             Role::StartDate => QVariant::from(&QString::from(
-                task.start_date.map(|d| d.to_string()).unwrap_or_default().as_str(),
+                task.start_date
+                    .map(|d| d.to_string())
+                    .unwrap_or_default()
+                    .as_str(),
             )),
             Role::Evening => QVariant::from(&task.is_evening()),
             Role::Deadline => QVariant::from(&QString::from(
-                task.deadline.map(|d| d.to_string()).unwrap_or_default().as_str(),
+                task.deadline
+                    .map(|d| d.to_string())
+                    .unwrap_or_default()
+                    .as_str(),
             )),
             Role::Someday => QVariant::from(&task.is_someday),
             Role::Section => QVariant::from(&QString::from(
-                self.sections.get(&task.id).map(String::as_str).unwrap_or_default(),
+                self.sections
+                    .get(&task.id)
+                    .map(String::as_str)
+                    .unwrap_or_default(),
             )),
-            Role::DeadlineStatus => QVariant::from(&QString::from(match task.deadline_status(local_today()) {
-                DeadlineStatus::None => "none",
-                DeadlineStatus::Set => "set",
-                DeadlineStatus::DueToday => "today",
-                DeadlineStatus::Overdue => "overdue",
-            })),
+            Role::DeadlineStatus => {
+                QVariant::from(&QString::from(match task.deadline_status(local_today()) {
+                    DeadlineStatus::None => "none",
+                    DeadlineStatus::Set => "set",
+                    DeadlineStatus::DueToday => "today",
+                    DeadlineStatus::Overdue => "overdue",
+                }))
+            }
         }
     }
 
@@ -1038,14 +1167,18 @@ impl ListSink<Task> for QtRows<'_> {
     }
     fn begin_remove(&mut self, row: usize) {
         let row = qt_row(row);
-        self.0.as_mut().begin_remove_rows(&QModelIndex::default(), row, row);
+        self.0
+            .as_mut()
+            .begin_remove_rows(&QModelIndex::default(), row, row);
     }
     fn end_remove(&mut self) {
         self.0.as_mut().end_remove_rows();
     }
     fn begin_insert(&mut self, row: usize) {
         let row = qt_row(row);
-        self.0.as_mut().begin_insert_rows(&QModelIndex::default(), row, row);
+        self.0
+            .as_mut()
+            .begin_insert_rows(&QModelIndex::default(), row, row);
     }
     fn end_insert(&mut self) {
         self.0.as_mut().end_insert_rows();
@@ -1053,7 +1186,10 @@ impl ListSink<Task> for QtRows<'_> {
     fn begin_move(&mut self, from: usize, to: usize) {
         let root = QModelIndex::default();
         let from = qt_row(from);
-        let moved = self.0.as_mut().begin_move_rows(&root, from, from, &root, qt_row(to));
+        let moved = self
+            .0
+            .as_mut()
+            .begin_move_rows(&root, from, from, &root, qt_row(to));
         assert!(moved, "beginMoveRows rejected a move from {from} to {to}");
     }
     fn end_move(&mut self) {
@@ -1061,6 +1197,8 @@ impl ListSink<Task> for QtRows<'_> {
     }
     fn changed(&mut self, row: usize) {
         let index = self.0.index(qt_row(row), 0, &QModelIndex::default());
-        self.0.as_mut().data_changed(&index, &index, &QList::<i32>::default());
+        self.0
+            .as_mut()
+            .data_changed(&index, &index, &QList::<i32>::default());
     }
 }

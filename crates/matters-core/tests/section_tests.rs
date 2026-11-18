@@ -17,7 +17,10 @@ fn listed(db: &Database, view: &View) -> Vec<(String, String)> {
 }
 
 fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
-    items.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    items
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
 }
 
 #[test]
@@ -28,7 +31,10 @@ fn today_marks_this_evening() {
         t.apply_schedule(&Schedule::Today { evening: *evening }, today());
         db.create_task(&t).unwrap();
     }
-    assert_eq!(listed(&db, &View::Today), pairs(&[("d", ""), ("e", "evening")]));
+    assert_eq!(
+        listed(&db, &View::Today),
+        pairs(&[("d", ""), ("e", "evening")])
+    );
 }
 
 #[test]
@@ -42,7 +48,11 @@ fn upcoming_is_grouped_by_date() {
     }
     assert_eq!(
         listed(&db, &View::Upcoming),
-        pairs(&[("a", "date:2026-11-19"), ("b", "date:2026-11-19"), ("c", "date:2026-11-21")])
+        pairs(&[
+            ("a", "date:2026-11-19"),
+            ("b", "date:2026-11-19"),
+            ("c", "date:2026-11-21")
+        ])
     );
 }
 
@@ -98,7 +108,11 @@ fn the_logbook_is_grouped_by_the_day_tasks_were_finished() {
             .unwrap()
             .timestamp_millis()
     };
-    for (id, finished) in [("old", at(16, 9)), ("late", at(17, 23)), ("early", at(17, 8))] {
+    for (id, finished) in [
+        ("old", at(16, 9)),
+        ("late", at(17, 23)),
+        ("early", at(17, 8)),
+    ] {
         let mut t = Task::new(id, id, 0.0);
         t.status = matters_core::Status::Completed;
         t.completed_at = Some(finished);
@@ -106,6 +120,10 @@ fn the_logbook_is_grouped_by_the_day_tasks_were_finished() {
     }
     assert_eq!(
         listed(&db, &View::Logbook),
-        pairs(&[("late", "done:2026-11-17"), ("early", "done:2026-11-17"), ("old", "done:2026-11-16")])
+        pairs(&[
+            ("late", "done:2026-11-17"),
+            ("early", "done:2026-11-17"),
+            ("old", "done:2026-11-16")
+        ])
     );
 }

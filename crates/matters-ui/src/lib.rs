@@ -47,7 +47,9 @@ mod quick_style {
         // most that many, NUL included.
         unsafe { matters_quick_style_name(buf.as_mut_ptr(), buf.len() as c_int) };
         // SAFETY: the callee always NUL-terminates within the buffer.
-        unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(buf.as_ptr()) }
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -75,7 +77,10 @@ mod style_tests {
         assert_eq!(style_to_set(None), "Fusion");
         assert_eq!(style_to_set(Some(OsStr::new(""))), "Fusion");
         assert_eq!(style_to_set(Some(OsStr::new("Basic"))), "Basic");
-        assert_eq!(style_to_set(Some(OsStr::new("org.kde.desktop"))), "org.kde.desktop");
+        assert_eq!(
+            style_to_set(Some(OsStr::new("org.kde.desktop"))),
+            "org.kde.desktop"
+        );
     }
 }
 
@@ -93,7 +98,11 @@ pub mod quick_test {
 
     extern "C" {
         // cpp/quick_test.cpp
-        fn matters_quick_test_main(argc: c_int, argv: *mut *mut c_char, source_dir: *const c_char) -> c_int;
+        fn matters_quick_test_main(
+            argc: c_int,
+            argv: *mut *mut c_char,
+            source_dir: *const c_char,
+        ) -> c_int;
     }
 
     /// Run every `tst_*.qml` in `source_dir`, forwarding `args` (program name

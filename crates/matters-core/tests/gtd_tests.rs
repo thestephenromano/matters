@@ -1,7 +1,5 @@
 use chrono::NaiveDate;
-use matters_core::{
-    Area, ChecklistItem, Database, Project, QueryEngine, Status, Task,
-};
+use matters_core::{Area, ChecklistItem, Database, Project, QueryEngine, Status, Task};
 
 #[test]
 fn test_inbox_flow() {

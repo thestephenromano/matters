@@ -22,7 +22,11 @@ fn parse(input: &str) -> Option<Schedule> {
 fn matters_own_words() {
     assert_eq!(parse("today"), Some(Schedule::Today { evening: false }));
     for evening in ["tonight", "evening", "this evening", "  This   Evening "] {
-        assert_eq!(parse(evening), Some(Schedule::Today { evening: true }), "{evening:?}");
+        assert_eq!(
+            parse(evening),
+            Some(Schedule::Today { evening: true }),
+            "{evening:?}"
+        );
     }
     assert_eq!(parse("Someday"), Some(Schedule::Someday));
 }
@@ -62,16 +66,34 @@ fn calendar_dates() {
 
 #[test]
 fn numeric_dates_follow_the_locale_order() {
-    assert_eq!(Schedule::parse_typed("12/24", today(), DateOrder::MonthFirst), date(12, 24));
-    assert_eq!(Schedule::parse_typed("24/12", today(), DateOrder::DayFirst), date(12, 24));
-    assert_eq!(Schedule::parse_typed("12/24/2026", today(), DateOrder::MonthFirst), date(12, 24));
+    assert_eq!(
+        Schedule::parse_typed("12/24", today(), DateOrder::MonthFirst),
+        date(12, 24)
+    );
+    assert_eq!(
+        Schedule::parse_typed("24/12", today(), DateOrder::DayFirst),
+        date(12, 24)
+    );
+    assert_eq!(
+        Schedule::parse_typed("12/24/2026", today(), DateOrder::MonthFirst),
+        date(12, 24)
+    );
 }
 
 #[test]
 fn anything_unclear_is_refused() {
     for input in [
-        "", "  ", "banana", "next tuesday-ish", "yesterday", "last friday", "3 days ago", "2026-11-10",
-        "tomorrow 5pm", "noon", "in banana",
+        "",
+        "  ",
+        "banana",
+        "next tuesday-ish",
+        "yesterday",
+        "last friday",
+        "3 days ago",
+        "2026-11-10",
+        "tomorrow 5pm",
+        "noon",
+        "in banana",
     ] {
         assert_eq!(parse(input), None, "{input:?} should be refused");
     }

@@ -4,9 +4,9 @@
 //! library so tests can build and drive it.
 
 mod task_row;
-mod ui;
 #[cfg(test)]
 mod tests;
+mod ui;
 
 use gtk4::glib;
 use gtk4::prelude::*;

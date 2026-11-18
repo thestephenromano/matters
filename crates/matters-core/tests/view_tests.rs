@@ -29,14 +29,18 @@ fn view_keys_round_trip() {
 #[test]
 fn captured_task_lands_where_the_view_says() {
     let db = Database::open_in_memory().unwrap();
-    db.create_project(&Project::new("p1", "Garden", 0.0)).unwrap();
+    db.create_project(&Project::new("p1", "Garden", 0.0))
+        .unwrap();
     let engine = QueryEngine::new(&db);
 
     for view in all_views("p1") {
         let id = format!("t-{}", view.key());
         let Some(task) = view.new_task(id, "captured", today()) else {
             // The Logbook and the Trash hold no new work.
-            assert!(matches!(view, View::Logbook | View::Trash), "{view:?} should accept new tasks");
+            assert!(
+                matches!(view, View::Logbook | View::Trash),
+                "{view:?} should accept new tasks"
+            );
             assert!(!view.accepts_new_tasks());
             continue;
         };
@@ -61,16 +65,32 @@ fn captured_task_lands_where_the_view_says() {
 
 #[test]
 fn schedule_parse_accepts_only_schedules() {
-    assert_eq!(Schedule::parse("today"), Some(Schedule::Today { evening: false }));
-    assert_eq!(Schedule::parse("evening"), Some(Schedule::Today { evening: true }));
+    assert_eq!(
+        Schedule::parse("today"),
+        Some(Schedule::Today { evening: false })
+    );
+    assert_eq!(
+        Schedule::parse("evening"),
+        Some(Schedule::Today { evening: true })
+    );
     assert_eq!(Schedule::parse("someday"), Some(Schedule::Someday));
     assert_eq!(Schedule::parse("none"), Some(Schedule::None));
     assert_eq!(
         Schedule::parse("2026-12-01"),
-        Some(Schedule::Date(NaiveDate::from_ymd_opt(2026, 12, 1).unwrap()))
+        Some(Schedule::Date(
+            NaiveDate::from_ymd_opt(2026, 12, 1).unwrap()
+        ))
     );
     // View names and junk are not schedules.
-    for not_a_schedule in ["", "inbox", "upcoming", "anytime", "logbook", "project", "2026-13-40"] {
+    for not_a_schedule in [
+        "",
+        "inbox",
+        "upcoming",
+        "anytime",
+        "logbook",
+        "project",
+        "2026-13-40",
+    ] {
         assert_eq!(Schedule::parse(not_a_schedule), None, "{not_a_schedule:?}");
     }
 }
@@ -89,20 +109,38 @@ fn apply_schedule_writes_all_fields_together() {
     assert!(task.is_evening());
 
     task.apply_schedule(&Schedule::Today { evening: false }, today());
-    assert!(!task.is_evening(), "moving to daytime must clear This Evening");
+    assert!(
+        !task.is_evening(),
+        "moving to daytime must clear This Evening"
+    );
 
     let date = NaiveDate::from_ymd_opt(2026, 12, 24).unwrap();
     task.apply_schedule(&Schedule::Date(date), today());
-    assert_eq!((task.start_date, task.time_of_day.as_deref(), task.is_someday), (Some(date), None, false));
+    assert_eq!(
+        (
+            task.start_date,
+            task.time_of_day.as_deref(),
+            task.is_someday
+        ),
+        (Some(date), None, false)
+    );
 
     task.apply_schedule(&Schedule::None, today());
-    assert_eq!((task.start_date, task.time_of_day.as_deref(), task.is_someday), (None, None, false));
+    assert_eq!(
+        (
+            task.start_date,
+            task.time_of_day.as_deref(),
+            task.is_someday
+        ),
+        (None, None, false)
+    );
 }
 
 #[test]
 fn counts_match_listed_tasks() {
     let db = Database::open_in_memory().unwrap();
-    db.create_project(&Project::new("p1", "Garden", 0.0)).unwrap();
+    db.create_project(&Project::new("p1", "Garden", 0.0))
+        .unwrap();
     let engine = QueryEngine::new(&db);
 
     let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
@@ -144,12 +182,21 @@ fn counts_match_listed_tasks() {
     assert_eq!(counts.someday, len(View::Someday));
     assert_eq!(counts.logbook, len(View::Logbook));
     assert_eq!(
-        (counts.inbox, counts.today, counts.upcoming, counts.anytime, counts.someday, counts.logbook),
+        (
+            counts.inbox,
+            counts.today,
+            counts.upcoming,
+            counts.anytime,
+            counts.someday,
+            counts.logbook
+        ),
         (2, 5, 1, 2, 1, 1)
     );
 
     // The project view lists open and completed tasks, never trashed ones.
-    let project = engine.tasks_in(&View::Project("p1".into()), today()).unwrap();
+    let project = engine
+        .tasks_in(&View::Project("p1".into()), today())
+        .unwrap();
     assert_eq!(project.len(), 3);
     assert!(project.iter().all(|t| !t.is_trashed()));
     assert_eq!(len(View::Trash), 2);
@@ -158,7 +205,8 @@ fn counts_match_listed_tasks() {
 #[test]
 fn equal_sort_order_lists_in_a_stable_order() {
     let db = Database::open_in_memory().unwrap();
-    db.create_project(&Project::new("p1", "Garden", 0.0)).unwrap();
+    db.create_project(&Project::new("p1", "Garden", 0.0))
+        .unwrap();
     for id in ["c", "a", "b"] {
         let mut t = Task::new(id, id, 0.0);
         t.project_id = Some("p1".into());
@@ -177,8 +225,10 @@ fn equal_sort_order_lists_in_a_stable_order() {
 #[test]
 fn containing_view_lists_the_task() {
     let db = Database::open_in_memory().unwrap();
-    db.create_project(&Project::new("p1", "Garden", 0.0)).unwrap();
-    db.create_area(&matters_core::Area::new("a1", "Home", 0.0)).unwrap();
+    db.create_project(&Project::new("p1", "Garden", 0.0))
+        .unwrap();
+    db.create_area(&matters_core::Area::new("a1", "Home", 0.0))
+        .unwrap();
     let engine = QueryEngine::new(&db);
 
     let d = |m, day| NaiveDate::from_ymd_opt(2026, m, day).unwrap();
@@ -187,28 +237,40 @@ fn containing_view_lists_the_task() {
         ("inbox", Box::new(|_| {})),
         ("today", Box::new(|t| t.start_date = Some(today()))),
         ("overdue", Box::new(|t| t.start_date = Some(d(11, 1)))),
-        ("evening", Box::new(|t| t.apply_schedule(&Schedule::Today { evening: true }, today()))),
+        (
+            "evening",
+            Box::new(|t| t.apply_schedule(&Schedule::Today { evening: true }, today())),
+        ),
         ("deadline", Box::new(|t| t.deadline = Some(today()))),
         ("future deadline", Box::new(|t| t.deadline = Some(d(12, 1)))),
         ("upcoming", Box::new(|t| t.start_date = Some(d(12, 1)))),
         ("someday", Box::new(|t| t.is_someday = true)),
         ("area", Box::new(|t| t.area_id = Some("a1".into()))),
-        ("area today", Box::new(|t| {
-            t.area_id = Some("a1".into());
-            t.start_date = Some(today());
-        })),
+        (
+            "area today",
+            Box::new(|t| {
+                t.area_id = Some("a1".into());
+                t.start_date = Some(today());
+            }),
+        ),
         ("project", Box::new(|t| t.project_id = Some("p1".into()))),
-        ("project someday", Box::new(|t| {
-            t.project_id = Some("p1".into());
-            t.is_someday = true;
-        })),
+        (
+            "project someday",
+            Box::new(|t| {
+                t.project_id = Some("p1".into());
+                t.is_someday = true;
+            }),
+        ),
         ("done", Box::new(|t| t.status = Status::Completed)),
         ("trashed", Box::new(|t| t.trashed_at = Some(1))),
-        ("trashed project done", Box::new(|t| {
-            t.project_id = Some("p1".into());
-            t.status = Status::Completed;
-            t.trashed_at = Some(1);
-        })),
+        (
+            "trashed project done",
+            Box::new(|t| {
+                t.project_id = Some("p1".into());
+                t.status = Status::Completed;
+                t.trashed_at = Some(1);
+            }),
+        ),
     ];
 
     for (name, setup) in setups {
@@ -234,11 +296,16 @@ fn logbook_lists_every_finished_task_its_badge_counts() {
     let engine = QueryEngine::new(&db);
     for i in 0..60 {
         let id = format!("done-{i:02}");
-        db.create_task(&Task::new(id.as_str(), id.as_str(), 0.0)).unwrap();
+        db.create_task(&Task::new(id.as_str(), id.as_str(), 0.0))
+            .unwrap();
         db.complete_task(&id).unwrap();
     }
     let listed = engine.tasks_in(&View::Logbook, today()).unwrap();
     assert_eq!(listed.len(), 60);
     assert_eq!(engine.counts(today()).unwrap().logbook, listed.len());
-    assert_eq!(engine.logbook(10).unwrap().len(), 10, "the bounded slice still works");
+    assert_eq!(
+        engine.logbook(10).unwrap().len(),
+        10,
+        "the bounded slice still works"
+    );
 }
