@@ -554,6 +554,9 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
+                    // Rows always fit the width. Some styles (Material) draw a
+                    // horizontal bar over the last row's controls otherwise.
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
                     ListView {
                         id: taskListView
