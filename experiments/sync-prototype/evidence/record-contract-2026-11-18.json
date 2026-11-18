@@ -8,8 +8,8 @@
     "ci/sqlite_wal_tests.rs": "740ef3c4ede5883161274782ba7e6e46b0b98c938d9f7deb02a1ba352e0f8f10",
     "docs/SQLITE_REVIEW.md": "73c0e8bf90dbff71bd43cdaf5905722bdfa3725f53a91fa1e87a14277d4a47ce",
     "docs/SQLITE_UPGRADE.md": "5f4108060e9e42b1715b520f5979b918aeab25cac7716f23be0bfee1f19bac10",
-    "docs/SYNC_DESIGN.md": "fe19f5f98f474dc9d49716651c584e46a112891237cdc05efcc130298297fe16",
-    "docs/SYNC_DURABLE_RECEIVE.md": "52772a09dff7562e9b5952d62491ecba00ecf6adb3097577a164e6810c45025a",
+    "docs/SYNC_DESIGN.md": "e2ac4048c8b27a43d782ad43b9ed6833586f84ac12be952295688565a907c341",
+    "docs/SYNC_DURABLE_RECEIVE.md": "fa6ff4eb3e66b850404b0fcf87740f464c83995c12ca9d7ba36ca8ebfa6ad12a",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "8f5a89411579154be9370f320054a906392d1a4e411b02b617cecbd9f92c4de7",
     "docs/SYNC_KEY_DISTRIBUTION.md": "fb9e9276bff845f049a19f2128eb70e5ba9d473d7fc62443469e943b655bb776",
     "docs/SYNC_RECORD_CONTRACT.md": "c1e87734a2a1d817aeab0f8176fc0569fe2a597a19a841af89fa0cceace46eea",
@@ -19,7 +19,7 @@
     "experiments/sync-prototype/.gitignore": "395fc2939d3e8df2f16cd3752e9501b85a47191f283fff07ed4bc4d9875013d9",
     "experiments/sync-prototype/Cargo.lock": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
     "experiments/sync-prototype/Cargo.toml": "2cc80c243f4f221f9daa649f99c4b045695fedfe7da8df788deeb0e6c4eb8396",
-    "experiments/sync-prototype/README.md": "fa7b73b78fb9b843d7e619f09afe6b21f8b0064650f99c1df7ddfbbe90338682",
+    "experiments/sync-prototype/README.md": "94c193541352ca43925681cc74815f085e13f64d9a1f0136f4f694f9e6b1ff16",
     "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md": "89973fc6fe9d9a1bae64c48010060ee0d6b6ce2a48d9e992e5a50dd53cefa842",
     "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md": "19a43b042517a212e1fce6eebb9c6f136c034032a7e983e4077fced2a592c77f",
     "experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md": "55feba116369cffef17b55203f41224ed0ecbdfe14d87d707ae186eb5c8a1f79",
@@ -27,17 +27,17 @@
     "experiments/sync-prototype/baseline/Cargo.toml": "1d81dd6fc4a4b8548ee1c570db0ac8b36d9a2bcb413e786d6e3263e92e9278ab",
     "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
     "experiments/sync-prototype/src/lib.rs": "befccf5d5072e8f7b151fe2409e0e0bd1c41e357f3f073807ab0f9b6882f5f17",
-    "experiments/sync-prototype/src/model.rs": "1744efe66f9a392ed428390a63f530f776e78c0d16e90e81da6156b33e8c87c5",
+    "experiments/sync-prototype/src/model.rs": "21ea2823fb40428eb65be105a099dcca2d1c174b939ac3458380e0dc4ec7ee98",
     "experiments/sync-prototype/src/replica.rs": "2a975b46926201e5ec7243824cffbc19343aedc0feffe84836a45e7c0c083ce8",
     "experiments/sync-prototype/src/wire.rs": "0291319a3e0563d0d91a50043537df5160e407abdf9bd793a37b93f45aabb549",
-    "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "3ffbd94e5f67de3b7166888d93ec012a197bdecee0eeadc64799b22a17184555",
+    "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "17dec1eca7ad6660f011ab0ce82965fc1bc80a2f19ae4b03636c12b2b5cb2f42",
     "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "98b39bffed6cf663b2ec71c2bc8c860ede1df2a0e62959c8744289c3ae86ff32",
     "experiments/sync-prototype/tests/crash.rs": "1dbe0d376a7411f88a843ec2dce1a645584d34aff21f48483f1fed13efae64f3",
     "experiments/sync-prototype/tests/key_distribution.rs": "35d5bcd16f576442c1d8f28c88b571977206369ccd60fc4b13b62c731e42ee54",
     "experiments/sync-prototype/tests/record_contract.rs": "2ff9e6e1fb0bb1d4b5a2b788058750fa7bd94656497ab2a7141dc23fa246e4f7",
     "experiments/sync-prototype/tests/review_regressions.rs": "edde1724bbcf6879a75c1357c5d461241c74c35d339c20b60f0da18464d0af4e",
     "experiments/sync-prototype/tests/sqlite.rs": "7fa0bf70f839356c2326a81dd2ea18992aabbf32d0bb8099a6825fd7d33382b9",
-    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "40e2b89f4ab41ff7eb8b76ae4462ba442ffb065b3503bf5f798e5a449edc903e",
+    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "7459c4e26b332510dd5ed16d31e9bab3c1daf9b7c4f92aceca363979988ba672",
     "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "d55c3c349386a32e40ababcf7e8d586c47419fdad5825b940fed1eafd5bd190f",
     "experiments/sync-prototype/tests/support/key_distribution.rs": "81b91ee08d45049955186665f8c3967ffb49623088b3da9f3d76baa2a7c3880e",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
@@ -48,11 +48,12 @@
     "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "b4468ee8117874a14e6c74d1914f9ce8c83961401715a98f333f418ce376dc5b",
     "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "4bb36d74e83579238a9a00c79a57bf94855a8b5bda17daacdba02419a3b1ac87",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
-    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "fd4c01aa967abc6b30710e523f4d6c4ae4706af599d0d201ae7970a0bb0e8260",
+    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "bf969472c69f2ddaba9980cb8e60a504f25ec29f2474b1fa80cfa46ee571c679",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6",
-    "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md": "24f4ca0fbda4d5e1abeacdb0f30042203e3a834a827459b49f1254cc45b4b5a1"
+    "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md": "24f4ca0fbda4d5e1abeacdb0f30042203e3a834a827459b49f1254cc45b4b5a1",
+    "experiments/sync-prototype/tests/convergence.rs": "22b0d15ddaba2892bc3dd6cd13203aeaaadd7948e750f9264fb989635fdb5998"
   },
   "host": {
     "hostname": "betelgeuse",
@@ -2089,5 +2090,233 @@
       "ignored_helper": 1
     },
     "implementation_commit": "249462a8801fe55d60679d2b3d942607fd63807f"
+  },
+  "merge_policy": {
+    "issue": 113,
+    "implementation_commit": "fedcc737b6d9713236c83bc2a51a002c48c0750b",
+    "contract": [
+      "docs/decisions/0001-crdt-adoption.md (C18, C19)",
+      "docs/SYNC_DURABLE_RECEIVE.md",
+      "docs/SYNC_DESIGN.md"
+    ],
+    "exploration_before": {
+      "base": "f681747",
+      "harness": "3 in-memory replicas, 150 random valid commands each with partial exchanges, all records merged into a fresh document in forward and reverse order; seeds 1-1000; release build",
+      "host": {
+        "hostname": "betelgeuse",
+        "platform": "Linux-7.3.4-200.fc44.x86_64-x86_64-with-glibc2.43"
+      },
+      "random_uuids": {
+        "merges": 2000,
+        "projection_failures": 0
+      },
+      "pooled_uuids": {
+        "pool": 6,
+        "merges": 2000,
+        "projection_failures": {
+          "duplicate entity UUID": 1818
+        }
+      },
+      "scope": "Exercises the current command set; not a proof. The harness was scratch code; its committed successor is convergence::c21."
+    },
+    "classification": {
+      "merge_reachable": [
+        "duplicate entity UUID",
+        "duplicate Today entry",
+        "Today entry is not a task"
+      ],
+      "malformed_record_only": [
+        "tombstone types",
+        "entity metadata fields/types",
+        "hidden engine node",
+        "typed ancestry",
+        "unknown tag",
+        "tag/membership types"
+      ]
+    },
+    "policy": "Smallest Loro tree ID keeps a UUID; other nodes become conflict copies with derived UUIDv8 identities (reserved; Create refuses v8). First Today reference per UUID wins; non-task references are skipped. Repairs are listed in Projection::repairs; the inbox rejects records that introduce a repair in their own causal past (domain-repair).",
+    "property_test": {
+      "test": "convergence::c21_merged_valid_histories_always_project_and_agree",
+      "seeds": 40,
+      "steps": 80,
+      "replicas": 3,
+      "uuid_pool": 6,
+      "assertions": [
+        "projection succeeds",
+        "forward and reverse delivery agree",
+        "identity-copy repairs equal extra nodes per UUID",
+        "at least one collision"
+      ]
+    },
+    "manual_mutations": {
+      "base": "fedcc737b6d9713236c83bc2a51a002c48c0750b",
+      "scope": "Seven named substitutions, each compiled and caught by a named test; source restored after each. One initial survivor (Create reserved-ID check, redundant with projection) led to a model-level test before this record. Not exhaustive.",
+      "results": [
+        {
+          "mutation": "no conflict copies: every node keeps its UUID",
+          "file": "src/model.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "convergence"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test c18_concurrent_creates_under_one_uuid_keep_an_original_and_a_conflict_copy ... FAILED",
+            "test c19_today_keeps_the_first_task_reference_and_skips_non_tasks ... FAILED",
+            "test c21_merged_valid_histories_always_project_and_agree ... FAILED"
+          ]
+        },
+        {
+          "mutation": "largest tree ID keeps the UUID",
+          "file": "src/model.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "convergence",
+            "c18"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test c18_concurrent_creates_under_one_uuid_keep_an_original_and_a_conflict_copy ... FAILED"
+          ]
+        },
+        {
+          "mutation": "derived ID ignores the counter",
+          "file": "src/model.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--lib",
+            "derived_identities_are_distinct"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test model::tests::derived_identities_are_distinct_per_tree_node ... FAILED"
+          ]
+        },
+        {
+          "mutation": "keep duplicate Today entries",
+          "file": "src/model.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "convergence",
+            "c19"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test c19_today_keeps_the_first_task_reference_and_skips_non_tasks ... FAILED"
+          ]
+        },
+        {
+          "mutation": "keep non-task Today references",
+          "file": "src/model.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "convergence",
+            "c19"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test c19_today_keeps_the_first_task_reference_and_skips_non_tasks ... FAILED"
+          ]
+        },
+        {
+          "mutation": "Create accepts reserved derived identities",
+          "file": "src/model.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--lib",
+            "create_refuses_reserved"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test model::tests::create_refuses_reserved_identities_before_writing ... FAILED"
+          ]
+        },
+        {
+          "mutation": "admit records that introduce a merge repair",
+          "file": "tests/support/encrypted_inbox.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "record_may_not_introduce"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test inbox_cases::record_may_not_introduce_a_merge_repair_in_its_own_causal_past ... FAILED"
+          ]
+        }
+      ]
+    },
+    "final_gates": {
+      "commands": [
+        "cargo fmt --check",
+        "cargo clippy --locked --all-targets --features crypto-probe,record-contract -- -D warnings",
+        "cargo test --locked --features crypto-probe,record-contract",
+        "cargo test --locked --features crypto-probe,record-contract -- --include-ignored",
+        "python tests/vectors/record-contract/generate.py --check",
+        "python tests/vectors/key-distribution/generate.py --check",
+        "python -O tests/vectors/check_oracles.py",
+        "python tests/vectors/record-contract/check_evidence.py",
+        "python tests/vectors/check_evidence_guards.py"
+      ],
+      "normal_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.27s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+        "test result: ok. 58 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 3.63s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+        "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "include_ignored_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.73s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
+        "test result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s",
+        "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "remaining": [
+      "Replica admission rule (#114)",
+      "Policies for invariants added by future commands, proven against the property test"
+    ]
   }
 }
