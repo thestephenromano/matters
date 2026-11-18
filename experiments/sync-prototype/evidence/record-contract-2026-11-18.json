@@ -9,7 +9,7 @@
     "docs/SQLITE_REVIEW.md": "73c0e8bf90dbff71bd43cdaf5905722bdfa3725f53a91fa1e87a14277d4a47ce",
     "docs/SQLITE_UPGRADE.md": "5f4108060e9e42b1715b520f5979b918aeab25cac7716f23be0bfee1f19bac10",
     "docs/SYNC_DESIGN.md": "e2ac4048c8b27a43d782ad43b9ed6833586f84ac12be952295688565a907c341",
-    "docs/SYNC_DURABLE_RECEIVE.md": "fa6ff4eb3e66b850404b0fcf87740f464c83995c12ca9d7ba36ca8ebfa6ad12a",
+    "docs/SYNC_DURABLE_RECEIVE.md": "04afa548c4bded68f86b00e3c27ce2e5d04bcb16c562169581ce0f4cb00ec744",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "8f5a89411579154be9370f320054a906392d1a4e411b02b617cecbd9f92c4de7",
     "docs/SYNC_KEY_DISTRIBUTION.md": "fb9e9276bff845f049a19f2128eb70e5ba9d473d7fc62443469e943b655bb776",
     "docs/SYNC_RECORD_CONTRACT.md": "c1e87734a2a1d817aeab0f8176fc0569fe2a597a19a841af89fa0cceace46eea",
@@ -19,25 +19,25 @@
     "experiments/sync-prototype/.gitignore": "395fc2939d3e8df2f16cd3752e9501b85a47191f283fff07ed4bc4d9875013d9",
     "experiments/sync-prototype/Cargo.lock": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
     "experiments/sync-prototype/Cargo.toml": "2cc80c243f4f221f9daa649f99c4b045695fedfe7da8df788deeb0e6c4eb8396",
-    "experiments/sync-prototype/README.md": "94c193541352ca43925681cc74815f085e13f64d9a1f0136f4f694f9e6b1ff16",
+    "experiments/sync-prototype/README.md": "10ae9524e1a3326b392cd3c63a9b6a7de62cea0079dca07c5fc041c33fb216fc",
     "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md": "89973fc6fe9d9a1bae64c48010060ee0d6b6ce2a48d9e992e5a50dd53cefa842",
     "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md": "19a43b042517a212e1fce6eebb9c6f136c034032a7e983e4077fced2a592c77f",
     "experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md": "55feba116369cffef17b55203f41224ed0ecbdfe14d87d707ae186eb5c8a1f79",
     "experiments/sync-prototype/baseline/Cargo.lock": "bb8f9afc1717346517f8dd2cdeded0cf52213b548b8245c7c334c1a866a90acf",
     "experiments/sync-prototype/baseline/Cargo.toml": "1d81dd6fc4a4b8548ee1c570db0ac8b36d9a2bcb413e786d6e3263e92e9278ab",
     "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
-    "experiments/sync-prototype/src/lib.rs": "befccf5d5072e8f7b151fe2409e0e0bd1c41e357f3f073807ab0f9b6882f5f17",
+    "experiments/sync-prototype/src/lib.rs": "3697d2bff61fc2b1621192a717dd5f597899741b65b636bd6666298db077ae28",
     "experiments/sync-prototype/src/model.rs": "21ea2823fb40428eb65be105a099dcca2d1c174b939ac3458380e0dc4ec7ee98",
-    "experiments/sync-prototype/src/replica.rs": "2a975b46926201e5ec7243824cffbc19343aedc0feffe84836a45e7c0c083ce8",
+    "experiments/sync-prototype/src/replica.rs": "6c091c1366b49c267463365f2b528298d78f659070c62239ed35714cdcd38bce",
     "experiments/sync-prototype/src/wire.rs": "0291319a3e0563d0d91a50043537df5160e407abdf9bd793a37b93f45aabb549",
     "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "17dec1eca7ad6660f011ab0ce82965fc1bc80a2f19ae4b03636c12b2b5cb2f42",
     "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "98b39bffed6cf663b2ec71c2bc8c860ede1df2a0e62959c8744289c3ae86ff32",
     "experiments/sync-prototype/tests/crash.rs": "1dbe0d376a7411f88a843ec2dce1a645584d34aff21f48483f1fed13efae64f3",
     "experiments/sync-prototype/tests/key_distribution.rs": "35d5bcd16f576442c1d8f28c88b571977206369ccd60fc4b13b62c731e42ee54",
     "experiments/sync-prototype/tests/record_contract.rs": "2ff9e6e1fb0bb1d4b5a2b788058750fa7bd94656497ab2a7141dc23fa246e4f7",
-    "experiments/sync-prototype/tests/review_regressions.rs": "edde1724bbcf6879a75c1357c5d461241c74c35d339c20b60f0da18464d0af4e",
+    "experiments/sync-prototype/tests/review_regressions.rs": "b0986babe1bc3af415d5fd91b0b4433948e966040745691100125384795324d9",
     "experiments/sync-prototype/tests/sqlite.rs": "7fa0bf70f839356c2326a81dd2ea18992aabbf32d0bb8099a6825fd7d33382b9",
-    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "7459c4e26b332510dd5ed16d31e9bab3c1daf9b7c4f92aceca363979988ba672",
+    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "4897e095211588277af51ad559605d3045fccf24fce5edbbef8ddafdb28a0f70",
     "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "d55c3c349386a32e40ababcf7e8d586c47419fdad5825b940fed1eafd5bd190f",
     "experiments/sync-prototype/tests/support/key_distribution.rs": "81b91ee08d45049955186665f8c3967ffb49623088b3da9f3d76baa2a7c3880e",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
@@ -53,7 +53,7 @@
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6",
     "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md": "24f4ca0fbda4d5e1abeacdb0f30042203e3a834a827459b49f1254cc45b4b5a1",
-    "experiments/sync-prototype/tests/convergence.rs": "22b0d15ddaba2892bc3dd6cd13203aeaaadd7948e750f9264fb989635fdb5998"
+    "experiments/sync-prototype/tests/convergence.rs": "c212f227c16d8647929b5e9c8f754ba7274c410a0f95a4b6e954547185101d39"
   },
   "host": {
     "hostname": "betelgeuse",
@@ -2318,6 +2318,177 @@
       "Replica admission rule (#114)",
       "Policies for invariants added by future commands, proven against the property test"
     ]
+  },
+  "replica_admission": {
+    "issue": 114,
+    "implementation_commit": "b78a40f6989f93a228b7ad0ab9ec786d1c6f379b",
+    "defects": [
+      "A malformed record waiting on a dependency was applied with that dependency, which was blamed",
+      "A malformed edit to an entity concurrently purged by another writer passed only if the purge arrived first",
+      "On transport-ID reuse with different bytes, the first arrival won"
+    ],
+    "rule": "causal_past_verdict (src/lib.rs), shared with the durable inbox: domain-projection, domain-repair, deletion-evidence",
+    "tests": [
+      "review_regressions::a_waiting_malformed_record_is_blamed_for_itself_in_either_order",
+      "review_regressions::a_concurrent_purge_does_not_launder_a_malformed_record",
+      "review_regressions::a_record_may_not_recreate_a_uuid_already_in_its_own_history",
+      "review_regressions::a_record_may_not_remove_deletion_evidence",
+      "review_regressions::transport_id_reuse_is_flagged_and_judged_by_bytes",
+      "review_regressions::format_one_journal_migrates_to_id_and_bytes_uniqueness",
+      "review_regressions::receive_verdicts_and_views_agree_across_delivery_orders (25 seeds, 3 writers, 40 steps, UUID pool 5, one injected malformed record, forward and reverse delivery)",
+      "convergence::record_identity_reuse_is_flagged_and_each_record_is_judged_by_its_bytes"
+    ],
+    "budget": "receive performs two causal-past projections per admitted record plus one merged projection (was one); replica::tests pins 3",
+    "witness_scope": "No before-run: the new tests read the new record_id_conflict field and do not compile against the old receive path. Mutation 1 reinstates merged-state judgement and is caught.",
+    "manual_mutations": {
+      "base": "b78a40f6989f93a228b7ad0ab9ec786d1c6f379b",
+      "scope": "Six named substitutions, each compiled and caught by a named test; source restored after each. Merged-state judgement first survived inside the new staging; the concurrent-purge test was added before this record. Not exhaustive.",
+      "results": [
+        {
+          "mutation": "judge on the merged state (pre-#114 behaviour)",
+          "file": "src/replica.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "review_regressions",
+            "launder"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test a_concurrent_purge_does_not_launder_a_malformed_record ... FAILED"
+          ]
+        },
+        {
+          "mutation": "retry only the arriving record",
+          "file": "src/replica.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "convergence",
+            "c14"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test c14_pending_import_survives_snapshot_restart_and_local_write ... FAILED"
+          ]
+        },
+        {
+          "mutation": "allow tombstone removal",
+          "file": "src/lib.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "review_regressions",
+            "deletion_evidence"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test a_record_may_not_remove_deletion_evidence ... FAILED"
+          ]
+        },
+        {
+          "mutation": "allow records that introduce a merge repair",
+          "file": "src/lib.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "review_regressions",
+            "recreate_a_uuid"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test a_record_may_not_recreate_a_uuid_already_in_its_own_history ... FAILED"
+          ]
+        },
+        {
+          "mutation": "first record wins on transport-ID reuse",
+          "file": "src/replica.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "convergence",
+            "record_identity_reuse"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test record_identity_reuse_is_flagged_and_each_record_is_judged_by_its_bytes ... FAILED"
+          ]
+        },
+        {
+          "mutation": "do not flag transport-ID reuse",
+          "file": "src/replica.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "review_regressions",
+            "transport_id_reuse"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test transport_id_reuse_is_flagged_and_judged_by_bytes ... FAILED"
+          ]
+        }
+      ]
+    },
+    "final_gates": {
+      "commands": [
+        "cargo fmt --check",
+        "cargo clippy --locked --all-targets --features crypto-probe,record-contract -- -D warnings",
+        "cargo test --locked --features crypto-probe,record-contract",
+        "cargo test --locked --features crypto-probe,record-contract -- --include-ignored",
+        "python tests/vectors/record-contract/generate.py --check",
+        "python tests/vectors/key-distribution/generate.py --check",
+        "python -O tests/vectors/check_oracles.py",
+        "python tests/vectors/record-contract/check_evidence.py",
+        "python tests/vectors/check_evidence_guards.py"
+      ],
+      "normal_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.91s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+        "test result: ok. 58 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.56s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.29s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "include_ignored_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.03s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+        "test result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.26s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    }
   },
   "baseline_lock_refreshes": [
     {

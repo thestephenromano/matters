@@ -62,6 +62,10 @@ pub struct InboxEntry {
     pub record: Record,
     pub status: Admission,
     pub reason: String,
+    /// Another retained record used this transport ID with different bytes.
+    /// IDs are unauthenticated transport metadata; each record is judged by
+    /// its own bytes, so reuse is flagged rather than deciding a winner.
+    pub record_id_conflict: bool,
 }
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RestoreStats {
@@ -173,6 +177,13 @@ impl Replica {
     pub fn restore_stats(&self) -> RestoreStats {
         self.restore
     }
+    /// A fork of the applied document only, without engine-pending updates.
+    fn applied_stage(&self) -> Result<LoroDoc> {
+        let stage = self.doc.fork();
+        stage.set_peer_id(self.doc.peer_id())?;
+        configure(&stage, self.jitter);
+        Ok(stage)
+    }
     fn stage(&self) -> Result<LoroDoc> {
         let stage = self.doc.fork();
         stage.set_peer_id(self.doc.peer_id())?;
@@ -193,7 +204,7 @@ impl Replica {
         let previous: Option<(Vec<u8>, Option<String>)> = self
             .conn
             .query_row(
-                "SELECT bytes,request_body FROM journal WHERE id=?1",
+                "SELECT bytes,request_body FROM journal WHERE id=?1 AND outgoing=1",
                 [&request.id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -245,72 +256,139 @@ impl Replica {
     }
     /// Durable admission precedes import. Errors retain bytes and a reason;
     /// Pending outcomes and inbox entries make blocked causal streams observable.
+    ///
+    /// Each record is judged in its own causal past at the moment it becomes
+    /// applicable, never against concurrently applied records, so verdicts do
+    /// not depend on delivery order. A record waiting on dependencies cannot
+    /// cause the dependency that releases it to be blamed for its content.
     pub fn receive(&mut self, record: &Record) -> Result<Admission> {
-        let existing: Option<Vec<u8>> = self
-            .conn
-            .query_row("SELECT bytes FROM journal WHERE id=?1", [&record.id], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        if existing.as_ref() == Some(&record.bytes) {
-            return status_for(&self.doc, &record.bytes);
-        }
-        self.conn.execute("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) VALUES (?1,?2,'received','awaiting admission')",params![record.id,record.bytes])?;
-        if existing.is_some() {
-            return self.quarantine(record, invalid("record ID reused with different bytes"));
-        }
-        let collision: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM inbox WHERE id=?1 AND bytes<>?2)",
+        let journaled: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM journal WHERE id=?1 AND bytes=?2)",
             params![record.id, record.bytes],
             |r| r.get(0),
         )?;
-        if collision {
-            return self.quarantine(
-                record,
-                invalid("received record ID reused with different bytes"),
-            );
+        if journaled {
+            return status_for(&self.doc, &record.bytes);
         }
+        self.conn.execute("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) VALUES (?1,?2,'received','awaiting admission')",params![record.id,record.bytes])?;
+        self.conn.execute(
+            "UPDATE inbox SET id_conflict=1 WHERE id=?1 AND (
+             EXISTS(SELECT 1 FROM inbox other WHERE other.id=inbox.id AND other.bytes<>inbox.bytes)
+             OR EXISTS(SELECT 1 FROM journal own WHERE own.id=inbox.id AND own.bytes<>inbox.bytes))",
+            [&record.id],
+        )?;
         let (status, reason) = self.admission(record)?;
         if status == Admission::Quarantined {
             return Err(invalid(reason));
         }
-        let candidate = (|| -> Result<_> {
-            let stage = self.stage()?;
-            stage.import(&record.bytes)?;
-            let identities = model::Index::build(&stage)?;
-            let state = model::project(&stage)?;
-            if !self.state.tombstones.is_subset(&state.tombstones) {
-                return Err(invalid("attempt to remove deletion evidence"));
+        // This record plus every retained record still waiting on dependencies.
+        let mut candidates = vec![record.clone()];
+        {
+            let mut query = self.conn.prepare(
+                "SELECT inbox.id,inbox.bytes FROM inbox JOIN journal ON journal.id=inbox.id
+                 AND journal.bytes=inbox.bytes WHERE inbox.status='pending' ORDER BY inbox.seq",
+            )?;
+            for row in query.query_map([], |r| {
+                Ok(Record {
+                    id: r.get(0)?,
+                    bytes: r.get(1)?,
+                })
+            })? {
+                let waiting = row?;
+                if waiting != *record {
+                    candidates.push(waiting);
+                }
             }
-            Ok((stage, state, identities))
-        })();
-        let (stage, state, identities) = match candidate {
-            Ok(c) => c,
-            Err(error) => return self.quarantine(record, error),
-        };
+        }
+        let mut stage = self.applied_stage()?;
+        let mut rejected: Vec<(Record, String)> = Vec::new();
+        let mut decided = vec![false; candidates.len()];
+        loop {
+            let mut progress = false;
+            for (i, candidate) in candidates.iter().enumerate() {
+                if decided[i] {
+                    continue;
+                }
+                let verdict = (|| -> Result<std::result::Result<Option<LoroDoc>, String>> {
+                    let Ok(meta) = LoroDoc::decode_import_blob_meta(&candidate.bytes, true) else {
+                        return Ok(Err("engine-format".into()));
+                    };
+                    let trial = stage.fork();
+                    trial.set_peer_id(stage.peer_id())?;
+                    configure(&trial, self.jitter);
+                    if trial.import(&candidate.bytes).is_err() {
+                        return Ok(Err("engine-import".into()));
+                    }
+                    if trial.export_pending_updates()?.is_some() {
+                        return Ok(Ok(None));
+                    }
+                    Ok(
+                        match crate::causal_past_verdict(
+                            &trial,
+                            &meta.partial_start_vv,
+                            &meta.partial_end_vv,
+                        )? {
+                            Some(reason) => Err(reason.into()),
+                            None => Ok(Some(trial)),
+                        },
+                    )
+                })()?;
+                match verdict {
+                    Ok(None) => {}
+                    Ok(Some(trial)) => {
+                        stage = trial;
+                        decided[i] = true;
+                        progress = true;
+                    }
+                    Err(reason) => {
+                        rejected.push((candidate.clone(), reason));
+                        decided[i] = true;
+                    }
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
+        // Records still waiting stay pending inside the engine, as before.
+        for (i, candidate) in candidates.iter().enumerate() {
+            if !decided[i] {
+                stage.import(&candidate.bytes)?;
+            }
+        }
+        let own_rejection = rejected
+            .iter()
+            .find(|(r, _)| r == record)
+            .map(|(_, reason)| reason.clone());
+        let identities = model::Index::build(&stage)?;
+        let state = model::project(&stage)?;
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO journal(id,bytes,outgoing) VALUES (?1,?2,0)",
-            params![record.id, record.bytes],
-        )?;
+        if own_rejection.is_none() {
+            tx.execute(
+                "INSERT INTO journal(id,bytes,outgoing) VALUES (?1,?2,0)",
+                params![record.id, record.bytes],
+            )?;
+        }
+        for (bad, reason) in &rejected {
+            tx.execute(
+                "DELETE FROM journal WHERE id=?1 AND bytes=?2 AND outgoing=0",
+                params![bad.id, bad.bytes],
+            )?;
+            tx.execute(
+                "UPDATE inbox SET status='quarantined',reason=?3 WHERE id=?1 AND bytes=?2",
+                params![bad.id, bad.bytes, reason],
+            )?;
+        }
         write_projection(&tx, &state)?;
         refresh_inbox(&tx, &stage)?;
         tx.commit()?;
         self.doc = stage;
         self.state = state;
         self.identities = identities;
-        Ok(self.admission(record)?.0)
-    }
-    fn quarantine(
-        &self,
-        record: &Record,
-        error: Box<dyn std::error::Error + Send + Sync>,
-    ) -> Result<Admission> {
-        self.conn.execute(
-            "UPDATE inbox SET status='quarantined',reason=?3 WHERE id=?1 AND bytes=?2",
-            params![record.id, record.bytes, error.to_string()],
-        )?;
-        Err(error)
+        match own_rejection {
+            Some(reason) => Err(invalid(reason)),
+            None => Ok(self.admission(record)?.0),
+        }
     }
     fn admission(&self, record: &Record) -> Result<(Admission, String)> {
         let (status, reason): (String, String) = self.conn.query_row(
@@ -323,7 +401,7 @@ impl Replica {
     pub fn inbox(&self) -> Result<Vec<InboxEntry>> {
         let mut query = self
             .conn
-            .prepare("SELECT id,bytes,status,reason FROM inbox ORDER BY seq")?;
+            .prepare("SELECT id,bytes,status,reason,id_conflict FROM inbox ORDER BY seq")?;
         let rows = query.query_map([], |r| {
             Ok((
                 Record {
@@ -332,14 +410,16 @@ impl Replica {
                 },
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
+                r.get::<_, bool>(4)?,
             ))
         })?;
         rows.map(|row| {
-            let (record, status, reason) = row?;
+            let (record, status, reason, record_id_conflict) = row?;
             Ok(InboxEntry {
                 record,
                 status: Admission::parse(&status)?,
                 reason,
+                record_id_conflict,
             })
         })
         .collect()
@@ -441,7 +521,9 @@ fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
         );
         if !matches!(
             marker.as_deref(),
-            Ok("matters-sync-prototype/0" | "matters-sync-prototype/1")
+            Ok("matters-sync-prototype/0"
+                | "matters-sync-prototype/1"
+                | "matters-sync-prototype/2")
         ) {
             return Err(invalid("refusing to open a non-prototype database"));
         }
@@ -460,7 +542,7 @@ fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
     conn.execute_batch("PRAGMA synchronous=FULL;")?;
     let tx = conn.transaction()?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS prototype_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,bytes BLOB NOT NULL,outgoing INTEGER NOT NULL CHECK(outgoing IN (0,1)));
+        CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,id TEXT NOT NULL,bytes BLOB NOT NULL,outgoing INTEGER NOT NULL CHECK(outgoing IN (0,1)),UNIQUE(id,bytes));
         CREATE TABLE IF NOT EXISTS projection(id TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS checkpoint(singleton INTEGER PRIMARY KEY CHECK(singleton=1),bytes BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS inbox(seq INTEGER PRIMARY KEY,id TEXT NOT NULL,bytes BLOB NOT NULL,status TEXT NOT NULL CHECK(status IN ('received','pending','applied','quarantined')),reason TEXT NOT NULL,UNIQUE(id,bytes));")?;
@@ -480,6 +562,11 @@ fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
             "pending",
             "ALTER TABLE checkpoint ADD COLUMN pending BLOB",
         ),
+        (
+            "inbox",
+            "id_conflict",
+            "ALTER TABLE inbox ADD COLUMN id_conflict INTEGER NOT NULL DEFAULT 0",
+        ),
     ] {
         let mut query = tx.prepare(&format!("PRAGMA table_info({table})"))?;
         let columns = query
@@ -489,8 +576,20 @@ fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
             tx.execute_batch(ddl)?;
         }
     }
+    // Format 2: transport IDs are unique only together with their bytes.
+    let journal: String = tx.query_row(
+        "SELECT sql FROM sqlite_schema WHERE type='table' AND name='journal'",
+        [],
+        |r| r.get(0),
+    )?;
+    if !journal.contains("UNIQUE(id,bytes)") {
+        tx.execute_batch("CREATE TABLE journal_v2(seq INTEGER PRIMARY KEY,id TEXT NOT NULL,bytes BLOB NOT NULL,outgoing INTEGER NOT NULL CHECK(outgoing IN (0,1)),request_body TEXT,UNIQUE(id,bytes));
+            INSERT INTO journal_v2(seq,id,bytes,outgoing,request_body) SELECT seq,id,bytes,outgoing,request_body FROM journal;
+            DROP TABLE journal;
+            ALTER TABLE journal_v2 RENAME TO journal;")?;
+    }
     tx.execute_batch("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) SELECT id,bytes,'received','restoring admission status' FROM journal WHERE outgoing=0;
-        INSERT INTO prototype_meta VALUES ('format','matters-sync-prototype/1') ON CONFLICT(key) DO UPDATE SET value=excluded.value;")?;
+        INSERT INTO prototype_meta VALUES ('format','matters-sync-prototype/2') ON CONFLICT(key) DO UPDATE SET value=excluded.value;")?;
     tx.commit()?;
     Ok(())
 }
@@ -499,7 +598,7 @@ fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn receive_projects_once_and_persists_that_result() -> Result<()> {
+    fn receive_projects_within_budget_and_persists_that_result() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let mut sender = Replica::open(dir.path().join("sender.db"))?;
         let record = sender.execute(&Request::new(Command::Create {
@@ -511,7 +610,9 @@ mod tests {
         let mut receiver = Replica::open(dir.path().join("receiver.db"))?;
         model::PROJECT_CALLS.with(|n| n.set(0));
         receiver.receive(&record)?;
-        model::PROJECT_CALLS.with(|n| assert_eq!(n.get(), 1));
+        // Two projections judge the record in its causal past (with and
+        // without it); one projects the merged state that is persisted.
+        model::PROJECT_CALLS.with(|n| assert_eq!(n.get(), 3));
         let stored: String =
             receiver
                 .conn
