@@ -299,7 +299,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
 - [ ] **Partly:** inline task expansion. Title, notes and When are edited in place; checklists aren't shown (#21).
 - [ ] **Partly:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find and `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) work. Missing: `Ctrl+Shift+M` (#19, with #54).
-- [ ] **Partly:** project progress. Shown as a filling circle, not yet a ring (#28).
+- [x] **Done:** project progress, as a pie beside the project's title that fills as its tasks are done.
 - [ ] **Partly:** Quick Find popover. Finds tasks; projects and areas are found by the core but not shown (#26).
 - [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.
 
