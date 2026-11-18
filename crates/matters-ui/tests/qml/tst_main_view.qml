@@ -828,6 +828,25 @@ Item {
             }
         }
 
+        // Controls follow Matters' scheme, not the desktop's palette: in
+        // dark mode a popover's buttons and field are dark too.
+        function test_controls_take_matters_colours_in_dark_mode() {
+            view.appearance = "dark";
+            const row = addToToday("palette-task");
+            expandRow(row);
+            mouseClick(findChild(row, "schedule-date"));
+            const popup = findChild(view, "whenPopup");
+            tryVerify(() => popup.opened, 1000);
+            const button = findChild(popup.contentItem, "when-today");
+            const field = findChild(popup.contentItem, "whenInput");
+            compare(String(button.palette.button), "#2c2e33");
+            compare(String(button.palette.buttonText), "#f8f9fa");
+            compare(String(field.palette.base), "#25262b");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !popup.visible, 2000);
+            view.appearance = "system";
+        }
+
         function test_picking_a_day_next_month_from_the_date_button() {
             const row = addToToday("cal-mouse");
             expandRow(row);
