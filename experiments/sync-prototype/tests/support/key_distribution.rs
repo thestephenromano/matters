@@ -1,7 +1,7 @@
 //! Test-only authority/key-distribution experiment. No application-facing API,
 //! durable identity store, enrollment ceremony, or recovery implementation.
-#[path = "record_crypto.rs"]
-mod record_crypto;
+pub use crate::record_chain::{hash, Hash, Id};
+use crate::record_crypto;
 use hpke_rs::{Hpke, HpkeKeyPair, HpkePublicKey, Mode};
 use hpke_rs_crypto::{
     types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm},
@@ -11,11 +11,8 @@ use hpke_rs_libcrux::{HpkeLibcrux, HpkeLibcruxPrng};
 use libcrux_ml_dsa::ml_dsa_65;
 use matters_sync_prototype::wire;
 use minicbor::{Decoder, Encoder};
-use sha2::{Digest, Sha384};
 use std::collections::BTreeMap;
 
-pub type Hash = [u8; 48];
-pub type Id = [u8; 32];
 pub const SIG_PK: usize = 1952;
 pub const KEM_PK: usize = 1249; // ML-KEM-768 (1184) + uncompressed P-256 (65).
 pub const KEM_ENC: usize = 1153; // ML-KEM ciphertext (1088) + P-256 (65).
@@ -72,9 +69,6 @@ fn hpke() -> Result<Hpke<Provider>> {
         AeadAlgorithm::Aes256Gcm,
     )
     .map_err(|_| Error::Crypto)
-}
-pub fn hash(bytes: &[u8]) -> Hash {
-    Sha384::digest(bytes).into()
 }
 pub fn fingerprint(label: &str, pk: &[u8]) -> Result<Hash> {
     let mut e = Encoder::new(Vec::new());
@@ -1042,8 +1036,9 @@ pub fn envelope_aad(message: &Message) -> Result<Vec<u8>> {
 fn content_key(id: &Id, cek: &Id, info: &[u8]) -> Result<Vec<u8>> {
     record_crypto::content_key(id, cek, info).map_err(|_| Error::Crypto)
 }
-/// Test fixture builder ONLY: each call supplies a fresh random record ID. No
-/// durable nonce reservation/outbox implementation or user-data sealing API.
+/// Test fixture builder ONLY: each call supplies a fresh random record ID.
+/// This helper owns no reservation/retry state; the outbox harness supplies
+/// committed reservations. It is not an application sealing API.
 pub fn seal_fixture(
     h: wire::Header<'_>,
     cek: &Id,

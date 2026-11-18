@@ -1,0 +1,26 @@
+# Encrypted outbox review remediation
+
+Reviewed source: PR #98 at `d187c504e3b8311357f84ddd55b11d066aadbc00`.
+The active [execution evidence](evidence/record-contract-2026-11-18.json) binds the corrected source, tests and contract; historical mutation results retain their original source revision.
+
+## Findings, owning boundaries and corrections
+
+1. **Restored writer head can fork.** A locally retained predecessor does not establish the latest signed history after rollback. `Outbox::seal` now rejects an unsealed intent whose incarnation differs from the active handle, before randomness, reservation or crypto. `RecoveryRequired` is a typed error; `recovery_required()` exposes preserved batch, original incarnation/actor and plaintext. It never rebinds old actor bytes. Already-stored ciphertext still returns byte-for-byte. Clone and all nine crash-boundary tests now distinguish safe stored-byte delivery from old-intent recovery. Authenticated reconciliation/domain replay is a remaining gate; ordinary restart also retires the writer because it cannot be distinguished from rollback here.
+2. **Writer capacity blocks restart/delivery.** Open count was a database-lifetime limit on access. Writer identity history is retained without that cap. `Delivery` opens existing databases read-only or read-write with binding validation, no entropy, no writer allocation and no owner fencing. ACK bookkeeping does not grant signing authority. Tests exercise 20 writable reopens with a pending ACK, 20 read-only delivery opens, successful delivery ACKs, no-create behavior and unchanged signing ownership.
+3. **Transient busy consumes lifetime capacity.** Attempt count was a database-lifetime limit on retries. Remove that cap while retaining every consumed ID. A regression forces 70 real SQLite `SQLITE_BUSY` COMMIT failures, then verifies sealing succeeds on attempt 71 with no uncommitted ciphertext exposed. The separate failed-COMMIT test checks abandonment and unchanged predecessor. The 16-intent fixture cap remains a new-enqueue limit; writer/attempt metadata can grow and production disk quotas/retention remain open.
+4. **Foreign database table detection.** The `LIKE` pattern treated underscore as a wildcard and matched case insensitively. Both the outbox and sibling `Replica` now use case-sensitive `NOT GLOB 'sqlite_*'`. Real-SQLite regressions reject `SQLiteCache`, `sqliteXmeta` and `tasks`, preserving the original table and value.
+5. **Direct ignored helper discovery.** Both outbox and sibling replica workers return successfully only when all their invocation variables are absent. Partial configuration still errors. Parent tests still require their exact crash exit code. CI additionally runs the complete suite with `--include-ignored`.
+6. **Queue contract mismatch.** The contract now describes caller-selected `seal(batch, ...)`, plus `next_batch()` for eligible work. FIFO is per active writer; old recovery-required intents cannot block new-writer work. Tests assert discovery, refusal of out-of-order work, completion and progress past a retired intent.
+7. **Duplicated helpers.** `record_chain` owns the full-signed-record SHA-384 definition and the Id/Hash aliases used by control/content admission and outbox persistence. `stored_row` owns stored-record conversion for both single-record and pending queries; delivery uses the same storage/ACK functions.
+
+## Regression and mutation evidence
+
+Four added tests were run against the reviewed implementation before changes and all failed for the reported behavior: restored old writer sealing, more than 16 opens, more than 64 attempts, and foreign `SQLiteCache` acceptance. The baseline retry witness used injected post-seal failure; the final regression strengthens this to actual reader-held SQLite COMMIT contention. The recorded output identifies the tested baseline.
+
+Nine manual mutations were compiled and caught by named tests: permit old-writer sealing; reinstate global FIFO; omit the eligible next batch; restore the 16-writer cap; restore the 64-attempt cap; restore each of the two faulty foreign-database filters; make read-only delivery writable; delete stored bytes on ACK. The active evidence records each exact substitution, command and failure output. This is targeted invariant testing, not exhaustive mutation coverage.
+
+The final gates run after restoring all mutated source: formatting, Clippy with warnings denied, the full Rust suite under normal and ignored-inclusive discovery, both independent Python fixture regenerations, optimized-Python oracle guards and source/evidence hash verification. See the execution record for measured counts and command output.
+
+## Limits
+
+This remains test-only code using a trusted sealer and local plaintext intents. It does not provide automatic recovery delivery for unfinished old-writer work, durable membership/admission, production quota/compaction policy, service durability, encrypted local storage or OS/RNG-snapshot protection. The [outbox contract](../../docs/SYNC_ENCRYPTED_OUTBOX.md) defines the scope and references the governing record contract and SQLite documentation. No new infrastructure dependency or cryptographic construction was introduced.
