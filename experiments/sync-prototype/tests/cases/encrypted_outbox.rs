@@ -570,7 +570,7 @@ fn bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history()
 
 // Public deterministic fixture credentials ONLY, so an abruptly exiting child
 // and its parent can operate on the same synthetic authority without saving keys.
-fn crash_device() -> Device {
+pub(super) fn crash_device() -> Device {
     use hpke_rs::{Hpke, Mode};
     use hpke_rs_crypto::types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
     use hpke_rs_libcrux::HpkeLibcrux;

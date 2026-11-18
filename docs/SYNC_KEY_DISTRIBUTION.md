@@ -86,3 +86,7 @@ The control oracle uses patterned public bytes and invalid zero signatures. It p
 Before application integration: durable authenticated membership/fork evidence and writer state; secure local key storage; root/enrollment possession ceremonies; recovery envelopes and all-devices-lost recovery; historical frontier admission; receive-chain/idempotency/quarantine semantics; crash-safe encrypted outbox and immutable retry bytes; restore/clone safety; task-domain import validation; aggregate crypto and hostile-import resource budgets; cross-target execution and independent review. The generic service API, acknowledged failure domain, transport/storage adoption and relay conformance remain with #34. The existing SQLite-backed task app remains unchanged.
 
 The [review record](../experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md) maps the review findings to their owning invariants and regression evidence.
+
+## Durable receiver extension
+
+[Durable authenticated receive](SYNC_DURABLE_RECEIVE.md) reuses the current-membership and writer-signature gate for multi-record chains. It pins the signed authority bundle to a dedicated SQLite database, retains encrypted pending/quarantined records and fork evidence, and atomically commits accepted replay order and task projections. The original first-record helper remains as a narrow regression fixture. Changing membership, historical admission, key storage and production integration remain outside this extension.

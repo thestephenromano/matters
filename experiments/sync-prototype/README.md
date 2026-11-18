@@ -89,3 +89,7 @@ The [outbox contract](../../docs/SYNC_ENCRYPTED_OUTBOX.md) and test-only SQLite 
 ## SQLite dependency gate
 
 The app, this standalone prototype and the optional measurement baseline each run an exact linked-version/source-ID test for SQLite 3.54.1. [Upgrade provenance and integration coverage](../../docs/SQLITE_UPGRADE.md) records the upstream-fixed bundled release. Shared test source does not join their Cargo dependency graphs. Historical latency artifacts still describe their recorded older dependencies; no new timing claim follows from this upgrade.
+
+### Durable authenticated receive
+
+The [fixed-epoch inbox experiment](../../docs/SYNC_DURABLE_RECEIVE.md) adds persistent encrypted receipt, authenticated chains, retained rejection/fork evidence and atomic task projection application. It uses the existing feature gates and test suite; it does not connect the application or implement a relay.
