@@ -813,10 +813,12 @@ enum Role {
     DeadlineStatus,
     /// The section the row sits under (`QueryEngine::section_keys`).
     Section,
+    /// Whether the task is deferred to Someday.
+    Someday,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 9] = [
+    const ALL: [(Role, &'static str); 10] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -826,6 +828,7 @@ impl Role {
         (Role::Deadline, "deadline"),
         (Role::DeadlineStatus, "deadlineStatus"),
         (Role::Section, "section"),
+        (Role::Someday, "someday"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -972,6 +975,7 @@ impl qobject::TaskListModel {
             Role::Deadline => QVariant::from(&QString::from(
                 task.deadline.map(|d| d.to_string()).unwrap_or_default().as_str(),
             )),
+            Role::Someday => QVariant::from(&task.is_someday),
             Role::Section => QVariant::from(&QString::from(
                 self.sections.get(&task.id).map(String::as_str).unwrap_or_default(),
             )),

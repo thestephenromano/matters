@@ -503,7 +503,7 @@ Item {
             controller.selectView("someday");
             view.captureTask("sd-grip");
             const row = waitForRow("sd-grip");
-            verify(!findChild(row, "dragGrip").visible, "Someday is not arranged by hand");
+            verify(!findChild(row, "dragGrip").enabled, "Someday is not arranged by hand");
         }
 
         function test_dragging_a_project_in_the_sidebar_reorders_it() {
@@ -1067,6 +1067,78 @@ Item {
             compare(controller.errorMessage, "");
         }
 
+        // ---- Calmer rows -----------------------------------------------------
+
+        function test_rows_show_only_dates_the_list_does_not_already_say() {
+            const day = addToToday("plain-today");
+            const eve = addToToday("evening-today");
+            controller.scheduleTask(eve.taskId, "evening");
+            settle();
+            verify(!findChild(day, "startBadge").visible, "Today doesn't repeat today's date");
+            tryVerify(() => eve.evening, 2000);
+            verify(!findChild(eve, "eveningBadge").visible, "nor mark tasks under This Evening");
+            // Leave Today without an evening task: later tests select its last row.
+            controller.scheduleTask(eve.taskId, "someday");
+            waitForNoRow("evening-today");
+
+            // In a project, the same information is shown, for people.
+            openFreshProject("badges-proj", ["b-tomorrow", "b-evening"]);
+            controller.scheduleTaskTyped(rowFor("b-tomorrow").taskId, "tomorrow", true);
+            controller.scheduleTask(rowFor("b-evening").taskId, "evening");
+            tryCompare(findChild(rowFor("b-tomorrow"), "startLabel"), "text", "Tomorrow", 2000);
+            tryVerify(() => findChild(rowFor("b-evening"), "eveningBadge").visible, 2000);
+            compare(findChild(rowFor("b-evening"), "startLabel").text, "Today");
+            // It is in Today's This Evening too; clear it so later tests that
+            // select Today's last row aren't affected.
+            controller.scheduleTask(rowFor("b-evening").taskId, "none");
+        }
+
+        function test_rows_line_up_in_every_list() {
+            const today = addToToday("align-today");
+            settle();
+            const x = (row) => findChild(row, "checkCircle").mapToItem(list, 0, 0).x;
+            const todayX = x(today);
+            controller.selectView("someday");
+            view.captureTask("align-someday");
+            const someday = waitForRow("align-someday");
+            settle();
+            compare(x(someday), todayX, "the checkbox column doesn't move between lists");
+        }
+
+        // ---- An open task is a page ------------------------------------------
+
+        function test_an_open_task_keeps_when_and_deadline_in_its_corner() {
+            const row = addToToday("corner-task");
+            expandRow(row);
+            const when = findChild(row, "schedule-date");
+            const deadline = findChild(row, "schedule-deadline");
+            compare(when.text, "📅 Today");
+            compare(deadline.text, "⚑ Deadline");
+            verify(when.mapToItem(row, 0, 0).x > row.width / 2, "tucked to the right");
+
+            controller.setTaskDeadline(row.taskId, Qt.formatDate(new Date(), "yyyy-MM-dd"));
+            tryCompare(deadline, "text", "⚑ Due today", 2000);
+            controller.scheduleTask(row.taskId, "evening");
+            tryCompare(when, "text", "📅 This Evening", 2000);
+            controller.scheduleTask(row.taskId, "someday");
+            waitForNoRow("corner-task"); // left Today for Someday
+        }
+
+        function test_notes_grow_with_what_is_written() {
+            const row = addToToday("long-notes");
+            expandRow(row);
+            const notes = findChild(row, "notesInput");
+            const before = notes.height;
+            mouseClick(notes);
+            for (let i = 0; i < 5; ++i) {
+                typeText("line");
+                keyClick(Qt.Key_Return);
+            }
+            tryVerify(() => notes.height > before + 40, 2000, "the notes grew: " + before + " -> " + notes.height);
+            tryVerify(() => row.height === row.targetHeight, 2000, "and the card with them");
+            keyClick(Qt.Key_Escape);
+        }
+
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {
             focusList();
             keyClick(Qt.Key_N, Qt.ControlModifier);
@@ -1117,7 +1189,12 @@ Item {
         function test_when_button_reschedules_the_task() {
             const row = addToToday("defer-me");
             expandRow(row);
-            mouseClick(findChild(row, "schedule-someday"));
+            // The open task's When control opens the When popover.
+            mouseClick(findChild(row, "schedule-date"));
+            const popup = findChild(view, "whenPopup");
+            tryVerify(() => popup.opened, 1000);
+            waitForRendering(popup.contentItem);
+            mouseClick(findChild(popup.contentItem, "when-someday"));
             waitForNoRow("defer-me");
             controller.selectView("someday");
             waitForRow("defer-me");

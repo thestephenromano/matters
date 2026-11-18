@@ -464,6 +464,44 @@ Item {
         return Qt.formatDate(date, "dddd, MMMM d");
     }
 
+    // A start date as shown on a row, or "" where the list already says it:
+    // Today and Upcoming (grouped by day) imply the date, and the Logbook is
+    // about when tasks were finished. Elsewhere: Today, Tomorrow, a weekday
+    // within the coming week, or the date (with the year when it differs).
+    function describeStart(iso) {
+        const view = controller.currentView;
+        if (iso === "" || view === "today" || view === "upcoming" || view === "logbook")
+            return "";
+        return describeDay(iso);
+    }
+
+    // A task's When for its open card: Someday, This Evening, a day, or
+    // just "When" when it has none.
+    function describeWhenOf(iso, evening, someday) {
+        if (someday)
+            return "Someday";
+        if (evening)
+            return "This Evening";
+        return iso === "" ? "When" : describeDay(iso);
+    }
+
+    // A day for people: Today, Tomorrow, a weekday within the coming week, or
+    // the date (with the year when it differs).
+    function describeDay(iso) {
+        const parts = iso.split("-");
+        const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const days = Math.round((date - today) / 86400000);
+        if (days === 0)
+            return "Today";
+        if (days === 1)
+            return "Tomorrow";
+        if (days > 1 && days < 7)
+            return Qt.formatDate(date, "ddd");
+        return Qt.formatDate(date, date.getFullYear() === today.getFullYear() ? "MMM d" : "MMM d, yyyy");
+    }
+
     // A deadline as shown on a row: "Due today", "Overdue: Nov 10" or the date.
     function describeDeadline(iso, status) {
         if (iso === "")
@@ -1067,7 +1105,7 @@ Item {
 
                             Text {
                                 anchors.fill: parent
-                                text: "New to-do... (Press Enter to add)"
+                                text: "Add a task"
                                 color: root.colTextSecondary
                                 font.pixelSize: 14
                                 visible: !newTaskInput.text && !newTaskInput.activeFocus
@@ -1339,6 +1377,7 @@ Item {
                             required property bool evening
                             required property string deadline
                             required property string deadlineStatus
+                            required property bool someday
                             required property int index
 
                             readonly property bool isExpanded: taskListView.expandedTaskId === taskId
@@ -1382,11 +1421,14 @@ Item {
 
                             Rectangle {
                                 anchors.fill: parent
-                                radius: 8
-                                color: taskRow.isSelected
-                                    ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
-                                    : rowHover.hovered || taskRow.isExpanded ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
-                                border.color: taskRow.isExpanded ? root.colBorder : "transparent"
+                                // An open task is a card, like a page; a closed one is
+                                // tinted when selected or hovered.
+                                radius: taskRow.isExpanded ? 10 : 8
+                                color: taskRow.isExpanded ? root.colCardBg
+                                    : taskRow.isSelected ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
+                                    : rowHover.hovered ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                border.color: !taskRow.isExpanded ? "transparent"
+                                    : taskRow.isSelected ? (root.isDark ? "#2F5F8F" : "#A5C8EC") : root.colBorder
                                 border.width: 1
                             }
 
@@ -1428,13 +1470,14 @@ Item {
 
                                     // Drag grip: reorders the task (lists arranged by
                                     // hand only). Dragging takes over from the row's
-                                    // click once the pointer moves.
+                                    // click once the pointer moves. It keeps its space
+                                    // in every list, so rows line up the same everywhere.
                                     Item {
                                         objectName: "dragGrip"
-                                        visible: controller.reorderable
+                                        enabled: controller.reorderable
                                         Layout.preferredWidth: 12
                                         Layout.preferredHeight: 24
-                                        opacity: rowHover.hovered || gripDrag.active ? 1 : 0
+                                        opacity: enabled && (rowHover.hovered || gripDrag.active) ? 1 : 0
 
                                         Text {
                                             anchors.centerIn: parent
@@ -1540,9 +1583,11 @@ Item {
                                         Layout.fillWidth: true
                                     }
 
-                                    // "This Evening" Badge
+                                    // "This Evening" badge; Today has a This Evening
+                                    // heading instead.
                                     Rectangle {
-                                        visible: taskRow.evening
+                                        objectName: "eveningBadge"
+                                        visible: taskRow.evening && controller.currentView !== "today"
                                         Layout.preferredHeight: 20
                                         Layout.preferredWidth: eveningLabel.contentWidth + 12
                                         radius: 4
@@ -1558,9 +1603,11 @@ Item {
                                         }
                                     }
 
-                                    // Schedule Date Badge
+                                    // Start date badge, where the list doesn't already
+                                    // say it (root.describeStart).
                                     Rectangle {
-                                        visible: taskRow.startDate !== ""
+                                        objectName: "startBadge"
+                                        visible: dateLabel.text !== ""
                                         Layout.preferredHeight: 20
                                         Layout.preferredWidth: dateLabel.contentWidth + 12
                                         radius: 4
@@ -1568,8 +1615,9 @@ Item {
 
                                         Text {
                                             id: dateLabel
+                                            objectName: "startLabel"
                                             anchors.centerIn: parent
-                                            text: taskRow.startDate
+                                            text: root.describeStart(taskRow.startDate)
                                             font.pixelSize: 11
                                             color: root.colTextSecondary
                                         }
@@ -1629,7 +1677,7 @@ Item {
                                     visible: taskRow.newBelowHere
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 34
-                                    Layout.leftMargin: 36
+                                    Layout.leftMargin: 56 // in line with the title
                                     radius: 6
                                     color: root.isDark ? "#1A1B1E" : "#FFFFFF"
                                     border.color: root.colAccent
@@ -1678,7 +1726,9 @@ Item {
                                     id: expandedContent
                                     visible: taskRow.isExpanded
                                     Layout.fillWidth: true
-                                    Layout.leftMargin: 32
+                                    // In line with the title: past the grip (12),
+                                    // the checkbox (20) and their spacing (2 × 12).
+                                    Layout.leftMargin: 56
                                     spacing: 10
 
                                     // Notes Editor. Saves after a pause in typing and
@@ -1689,16 +1739,14 @@ Item {
                                         // Editing a task's notes selects that task.
                                         onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 60
-                                        placeholderText: "Notes (Markdown supported)..."
+                                        // Grows with what is written.
+                                        Layout.preferredHeight: Math.max(44, contentHeight + topPadding + bottomPadding)
+                                        placeholderText: "Notes"
                                         font.pixelSize: 13
                                         color: root.colTextPrimary
                                         wrapMode: TextArea.Wrap
-                                        background: Rectangle {
-                                            color: root.isDark ? "#1A1B1E" : "#FFFFFF"
-                                            border.color: root.colBorder
-                                            radius: 6
-                                        }
+                                        leftPadding: 0
+                                        background: null
 
                                         function save() {
                                             saveTimer.stop();
@@ -1728,47 +1776,34 @@ Item {
                                         }
                                     }
 
-                                    // Quick Schedule Buttons
+                                    // When and Deadline, tucked into the corner; each
+                                    // shows its current value and opens its popover.
                                     RowLayout {
-                                        spacing: 8
+                                        Layout.fillWidth: true
+                                        spacing: 4
 
-                                        Text {
-                                            text: "When:"
-                                            color: root.colTextSecondary
-                                            font.pixelSize: 12
-                                        }
+                                        Item { Layout.fillWidth: true }
 
-                                        Repeater {
-                                            model: [
-                                                { label: "Today", when: "today" },
-                                                { label: "This Evening", when: "evening" },
-                                                { label: "Someday", when: "someday" }
-                                            ]
-                                            delegate: Button {
-                                                required property var modelData
-                                                objectName: "schedule-" + modelData.when
-                                                focusPolicy: Qt.NoFocus
-                                                text: modelData.label
-                                                font.pixelSize: 11
-                                                onClicked: controller.scheduleTask(taskRow.taskId, modelData.when)
-                                            }
-                                        }
-
-                                        // Any date: the When popover.
-                                        Button {
+                                        ToolButton {
                                             objectName: "schedule-date"
                                             focusPolicy: Qt.NoFocus
-                                            text: "Date…"
-                                            font.pixelSize: 11
+                                            flat: true
+                                            font.pixelSize: 12
+                                            text: "📅 " + root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: "When (Ctrl+S)"
                                             onClicked: root.openWhenFor(taskRow.taskId)
                                         }
 
-                                        // The deadline: the same popover in deadline mode.
-                                        Button {
+                                        ToolButton {
                                             objectName: "schedule-deadline"
                                             focusPolicy: Qt.NoFocus
-                                            text: "Deadline…"
-                                            font.pixelSize: 11
+                                            flat: true
+                                            font.pixelSize: 12
+                                            text: "⚑ " + (taskRow.deadline === "" ? "Deadline"
+                                                : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus))
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: "Deadline (Ctrl+D)"
                                             onClicked: root.openDeadlineFor(taskRow.taskId)
                                         }
                                     }
