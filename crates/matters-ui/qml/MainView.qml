@@ -358,18 +358,49 @@ Item {
         controller.trashTask(id);
     }
 
-    function openWhenMenu() {
-        const id = taskListView.selectedTaskId;
+    // ---- When popover (Ctrl+S, the Date… button; #59) ------------------
+
+    // Numeric dates typed by the user follow the locale: 12/24 or 24/12.
+    readonly property bool monthFirst: {
+        const format = Qt.locale().dateFormat(Locale.ShortFormat);
+        return format.indexOf("M") < format.indexOf("d");
+    }
+
+    function openWhenFor(id) {
         const row = taskModel.rowOf(id);
         if (row < 0)
             return;
-        taskListView.positionViewAtIndex(row, ListView.Contain);
-        whenMenu.taskId = id;
-        const item = taskListView.itemAtIndex(row);
-        if (item)
-            whenMenu.popup(item, 32, 40);
-        else
-            whenMenu.popup();
+        taskListView.selectedTaskId = id;
+        scrollToTask(id);
+        whenPopup.taskId = id;
+        whenPopup.open();
+    }
+
+    function openWhenMenu() {
+        openWhenFor(taskListView.selectedTaskId);
+    }
+
+    // A date picked on the calendar; past days can't be chosen.
+    function applyWhenDate(date) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (date < today)
+            return;
+        controller.scheduleTask(whenPopup.taskId, Qt.formatDate(date, "yyyy-MM-dd"));
+        whenPopup.close();
+    }
+
+    // How a typed When reads back, for the preview under the field.
+    function describeWhen(preview) {
+        if (preview === "today")
+            return "Today";
+        if (preview === "evening")
+            return "This Evening";
+        if (preview === "someday")
+            return "Someday";
+        const parts = preview.split("-");
+        const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        return Qt.formatDate(date, "dddd, MMMM d, yyyy");
     }
 
     Component.onCompleted: reloadTasks()
@@ -1417,6 +1448,15 @@ Item {
                                                 onClicked: controller.scheduleTask(taskRow.taskId, modelData.when)
                                             }
                                         }
+
+                                        // Any date: the When popover.
+                                        Button {
+                                            objectName: "schedule-date"
+                                            focusPolicy: Qt.NoFocus
+                                            text: "Date…"
+                                            font.pixelSize: 11
+                                            onClicked: root.openWhenFor(taskRow.taskId)
+                                        }
                                     }
                                 }
                             }
@@ -1659,17 +1699,199 @@ Item {
         onActivated: root.undo()
     }
 
-    // When popover (Ctrl+S) for the selected task.
-    Menu {
-        id: whenMenu
-        objectName: "whenMenu"
+    // When popover for a task (Ctrl+S, Date…): quick choices, a typed date
+    // with a preview of what it means, and a calendar (#59).
+    Popup {
+        id: whenPopup
+        objectName: "whenPopup"
         property string taskId: ""
+        // The day the calendar's keyboard cursor is on.
+        property date cursor: new Date()
 
-        MenuItem { objectName: "when-today"; text: "Today"; onTriggered: controller.scheduleTask(whenMenu.taskId, "today") }
-        MenuItem { objectName: "when-evening"; text: "This Evening"; onTriggered: controller.scheduleTask(whenMenu.taskId, "evening") }
-        MenuItem { objectName: "when-someday"; text: "Someday"; onTriggered: controller.scheduleTask(whenMenu.taskId, "someday") }
-        MenuItem { objectName: "when-none"; text: "Clear"; onTriggered: controller.scheduleTask(whenMenu.taskId, "none") }
+        x: (parent.width - width) / 2
+        y: 120
+        width: 320
+        modal: true
+        dim: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
+        background: Rectangle {
+            color: root.isDark ? "#202124" : "#FFFFFF"
+            radius: 10
+            border.color: root.colBorder
+        }
+
+        onOpened: {
+            whenInput.text = "";
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            cursor = today;
+            calendar.month = today.getMonth();
+            calendar.year = today.getFullYear();
+            whenInput.forceActiveFocus();
+        }
         onClosed: taskListView.forceActiveFocus()
+
+        function moveCursor(days) {
+            const next = new Date(cursor);
+            next.setDate(next.getDate() + days);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            if (next < today)
+                return;
+            cursor = next;
+            calendar.month = next.getMonth();
+            calendar.year = next.getFullYear();
+        }
+
+        function showMonth(delta) {
+            const first = new Date(calendar.year, calendar.month + delta, 1);
+            calendar.month = first.getMonth();
+            calendar.year = first.getFullYear();
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 8
+
+            TextField {
+                id: whenInput
+                objectName: "whenInput"
+                Layout.fillWidth: true
+                placeholderText: "Type a date: tomorrow, fri, dec 24"
+                // Enter applies what was typed; a refused text keeps the
+                // popover open.
+                onAccepted: {
+                    if (controller.scheduleTaskTyped(whenPopup.taskId, text, root.monthFirst))
+                        whenPopup.close();
+                }
+                // Down moves into the calendar.
+                Keys.onDownPressed: calendar.forceActiveFocus()
+            }
+
+            Label {
+                id: whenPreview
+                objectName: "whenPreview"
+                readonly property string meaning: controller.previewWhen(whenInput.text, root.monthFirst)
+                Layout.fillWidth: true
+                visible: whenInput.text.trim() !== ""
+                text: meaning === "" ? "Not a date" : root.describeWhen(meaning)
+                color: meaning === "" ? root.colTextSecondary : root.colAccent
+                font.pixelSize: 12
+            }
+
+            RowLayout {
+                spacing: 4
+                Repeater {
+                    model: [
+                        { label: "Today", when: "today" },
+                        { label: "This Evening", when: "evening" },
+                        { label: "Someday", when: "someday" },
+                        { label: "Clear", when: "none" }
+                    ]
+                    delegate: Button {
+                        required property var modelData
+                        objectName: "when-" + modelData.when
+                        text: modelData.label
+                        font.pixelSize: 11
+                        onClicked: {
+                            controller.scheduleTask(whenPopup.taskId, modelData.when);
+                            whenPopup.close();
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                ToolButton {
+                    objectName: "whenPrevMonth"
+                    text: "‹"
+                    onClicked: whenPopup.showMonth(-1)
+                }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    text: Qt.formatDate(new Date(calendar.year, calendar.month, 1), "MMMM yyyy")
+                    font.weight: Font.DemiBold
+                }
+                ToolButton {
+                    objectName: "whenNextMonth"
+                    text: "›"
+                    onClicked: whenPopup.showMonth(1)
+                }
+            }
+
+            DayOfWeekRow {
+                Layout.fillWidth: true
+                locale: calendar.locale
+            }
+
+            MonthGrid {
+                id: calendar
+                objectName: "whenCalendar"
+                Layout.fillWidth: true
+                // Six week rows. MonthGrid takes no height from its cells, so
+                // without this the calendar was laid out with none at all.
+                Layout.preferredHeight: 6 * 32
+                locale: Qt.locale()
+                activeFocusOnTab: true
+
+                delegate: Rectangle {
+                    id: day
+                    required property var model
+                    readonly property date date: model.date
+                    readonly property bool past: {
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        return date < today;
+                    }
+                    readonly property bool isCursor: calendar.activeFocus
+                        && date.getFullYear() === whenPopup.cursor.getFullYear()
+                        && date.getMonth() === whenPopup.cursor.getMonth()
+                        && date.getDate() === whenPopup.cursor.getDate()
+                    objectName: "day-" + Qt.formatDate(date, "yyyy-MM-dd")
+                    implicitHeight: 30
+                    radius: 15
+                    color: isCursor ? root.colAccent : (model.today ? root.colSidebarActive : "transparent")
+                    opacity: model.month === calendar.month ? 1 : 0.35
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: day.model.day
+                        font.pixelSize: 12
+                        color: day.isCursor ? "#FFFFFF" : (day.past ? root.colTextSecondary : root.colTextPrimary)
+                    }
+                }
+
+                onClicked: (date) => root.applyWhenDate(date)
+
+                // Arrows move the cursor (days, weeks), Enter picks it, Up from
+                // the first week returns to the text field.
+                Keys.onPressed: (event) => {
+                    switch (event.key) {
+                    case Qt.Key_Left:
+                        whenPopup.moveCursor(-1);
+                        break;
+                    case Qt.Key_Right:
+                        whenPopup.moveCursor(1);
+                        break;
+                    case Qt.Key_Up:
+                        whenPopup.moveCursor(-7);
+                        break;
+                    case Qt.Key_Down:
+                        whenPopup.moveCursor(7);
+                        break;
+                    case Qt.Key_Return:
+                    case Qt.Key_Enter:
+                        root.applyWhenDate(whenPopup.cursor);
+                        break;
+                    default:
+                        return;
+                    }
+                    event.accepted = true;
+                }
+            }
+        }
     }
 }

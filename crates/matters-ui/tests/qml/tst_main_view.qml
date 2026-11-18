@@ -67,6 +67,9 @@ Item {
         // Wait for the task to be listed, scroll it into view as a user would,
         // and return its row.
         function waitForRow(title) {
+            // Let a pending reload (after selectView, say) run first, so the
+            // list isn't checked while it still shows the previous view.
+            wait(0);
             tryVerify(() => indexOf(title) >= 0, 2000, "row '" + title + "' should be listed");
             list.positionViewAtIndex(indexOf(title), ListView.Contain);
             tryVerify(() => rowFor(title) !== null, 2000, "row '" + title + "' should be shown");
@@ -74,6 +77,7 @@ Item {
         }
 
         function waitForNoRow(title) {
+            wait(0);
             tryVerify(() => indexOf(title) < 0, 2000, "row '" + title + "' should not be listed");
         }
 
@@ -704,22 +708,112 @@ Item {
             keyClick(Qt.Key_Escape);
         }
 
-        function test_ctrl_s_opens_the_when_menu_for_the_selection() {
-            addToToday("menu-me");
+        // ---- When popover (#59) --------------------------------------------
+
+        function isoInDays(days) {
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() + days);
+            return Qt.formatDate(d, "yyyy-MM-dd");
+        }
+
+        function selectLast(title) {
             settle();
             focusList();
             keyClick(Qt.Key_Up);
-            compare(selectedTitle(), "menu-me");
+            compare(selectedTitle(), title);
+        }
 
-            const menu = findChild(view, "whenMenu");
+        function openWhen() {
+            const popup = findChild(view, "whenPopup");
             keyClick(Qt.Key_S, Qt.ControlModifier);
-            tryVerify(() => menu.opened, 1000, "Ctrl+S opens the When menu");
-            mouseClick(findChild(menu, "when-someday"));
+            tryVerify(() => popup.opened, 1000, "Ctrl+S opens the When popover");
+            return popup;
+        }
+
+        function test_ctrl_s_opens_the_when_popover_for_the_selection() {
+            addToToday("menu-me");
+            selectLast("menu-me");
+            const popup = openWhen();
+            verify(findChild(popup.contentItem, "whenInput").activeFocus, "ready for a typed date");
+            mouseClick(findChild(popup.contentItem, "when-someday"));
             waitForNoRow("menu-me");
-            tryVerify(() => !menu.visible, 1000);
+            tryVerify(() => !popup.visible, 1000);
             tryVerify(() => list.activeFocus, 1000, "focus returns to the list");
             controller.selectView("someday");
             waitForRow("menu-me");
+        }
+
+        function test_typing_a_date_shows_what_it_means_and_schedules() {
+            const row = addToToday("typed-when");
+            selectLast("typed-when");
+            const popup = openWhen();
+            const preview = findChild(popup.contentItem, "whenPreview");
+            typeText("tomorrow");
+            verify(preview.visible && preview.text !== "Not a date", "a preview: " + preview.text);
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !popup.visible, 1000);
+            waitForNoRow("typed-when");
+            controller.selectView("upcoming");
+            compare(waitForRow("typed-when").startDate, isoInDays(1));
+        }
+
+        function test_a_refused_date_keeps_the_popover_open() {
+            addToToday("not-a-date");
+            selectLast("not-a-date");
+            const popup = openWhen();
+            typeText("banana");
+            compare(findChild(popup.contentItem, "whenPreview").text, "Not a date");
+            keyClick(Qt.Key_Return);
+            verify(popup.visible, "still open");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !popup.visible, 1000);
+            verify(rowFor("not-a-date") !== null, "unchanged");
+        }
+
+        function test_the_calendar_works_from_the_keyboard() {
+            addToToday("cal-keys");
+            selectLast("cal-keys");
+            const popup = openWhen();
+            keyClick(Qt.Key_Down);
+            verify(findChild(popup.contentItem, "whenCalendar").activeFocus, "Down moves into the calendar");
+            keyClick(Qt.Key_Right);
+            keyClick(Qt.Key_Right);
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !popup.visible, 1000);
+            controller.selectView("upcoming");
+            compare(waitForRow("cal-keys").startDate, isoInDays(2));
+        }
+
+        function test_picking_a_day_next_month_from_the_date_button() {
+            const row = addToToday("cal-mouse");
+            expandRow(row);
+            mouseClick(findChild(row, "schedule-date"));
+            const popup = findChild(view, "whenPopup");
+            tryVerify(() => popup.opened, 1000, "Date… opens the When popover");
+            mouseClick(findChild(popup.contentItem, "whenNextMonth"));
+            const first = new Date();
+            first.setDate(1);
+            first.setMonth(first.getMonth() + 1);
+            first.setDate(15);
+            const iso = Qt.formatDate(first, "yyyy-MM-dd");
+            // The grid's day cells are children of its content item, which
+            // findChild does not search.
+            const grid = findChild(popup.contentItem, "whenCalendar");
+            const dayCell = () => {
+                for (const cell of grid.contentItem.children) {
+                    if (cell.objectName === "day-" + iso)
+                        return cell;
+                }
+                return null;
+            };
+            tryVerify(() => dayCell() !== null, 1000, "day " + iso + " shown");
+            waitForRendering(grid); // the new month's cells are laid out
+            verify(dayCell().height > 20 && grid.height > 150, "the calendar has room on screen");
+            mouseClick(dayCell());
+            tryVerify(() => !popup.visible, 1000);
+            controller.selectView("upcoming");
+            compare(waitForRow("cal-mouse").startDate, iso);
         }
 
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {

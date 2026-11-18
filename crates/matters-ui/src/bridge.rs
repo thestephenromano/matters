@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
 use matters_core::{
-    local_today, Database, DayTracker, Project, QueryEngine, Schedule, Status, Task, View, Visit,
+    local_today, Database, DateOrder, DayTracker, Project, QueryEngine, Schedule, Status, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -123,6 +123,15 @@ pub mod qobject {
         fn schedule_task(self: Pin<&mut AppController>, task_id: &QString, when: &QString);
         #[qinvokable]
         fn update_task_notes(self: Pin<&mut AppController>, task_id: &QString, notes: &QString);
+        /// What a typed When means (`Schedule::parse_typed`): `today`,
+        /// `evening`, `someday`, an ISO date, or an empty string when it is
+        /// refused. `month_first` follows the user's locale (`12/24`).
+        #[qinvokable]
+        fn preview_when(self: &AppController, text: &QString, month_first: bool) -> QString;
+        /// Schedule a task from a typed When; false, changing nothing, when the
+        /// text is refused.
+        #[qinvokable]
+        fn schedule_task_typed(self: Pin<&mut AppController>, task_id: &QString, text: &QString, month_first: bool) -> bool;
         /// Rename a task. Returns false, changing nothing, when the title is
         /// blank (`Database::rename_task`); the field then shows the old title.
         #[qinvokable]
@@ -456,6 +465,33 @@ impl qobject::AppController {
             task.apply_schedule(&schedule, local_today())
         });
         self.finish(result);
+    }
+
+    fn typed_when(&self, text: &QString, month_first: bool) -> Option<Schedule> {
+        let order = if month_first { DateOrder::MonthFirst } else { DateOrder::DayFirst };
+        Schedule::parse_typed(&String::from(text), self.day.day(), order)
+    }
+
+    pub fn preview_when(&self, text: &QString, month_first: bool) -> QString {
+        QString::from(match self.typed_when(text, month_first) {
+            None => String::new(),
+            Some(Schedule::Today { evening: false }) => "today".into(),
+            Some(Schedule::Today { evening: true }) => "evening".into(),
+            Some(Schedule::Someday) => "someday".into(),
+            Some(Schedule::None) => "none".into(),
+            Some(Schedule::Date(date)) => date.format("%Y-%m-%d").to_string(),
+        })
+    }
+
+    pub fn schedule_task_typed(self: Pin<&mut Self>, task_id: &QString, text: &QString, month_first: bool) -> bool {
+        let Some(schedule) = self.typed_when(text, month_first) else {
+            return false;
+        };
+        let today = self.day.day();
+        let result = self.edit_task(&String::from(task_id), |task| task.apply_schedule(&schedule, today));
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
     }
 
     pub fn rename_task(self: Pin<&mut Self>, task_id: &QString, title: &QString) -> bool {
