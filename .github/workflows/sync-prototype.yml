@@ -1,0 +1,41 @@
+name: Sync prototype
+
+on:
+  pull_request:
+    paths:
+      - experiments/sync-prototype/**
+      - .github/workflows/sync-prototype.yml
+  push:
+    branches: [main]
+    paths:
+      - experiments/sync-prototype/**
+      - .github/workflows/sync-prototype.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-prototype-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prototype:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/sync-prototype
+    defaults:
+      run:
+        working-directory: experiments/sync-prototype
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments/sync-prototype -> ../../target/sync-prototype
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets --features crypto-probe -- -D warnings
+      - run: cargo test --locked --features crypto-probe
