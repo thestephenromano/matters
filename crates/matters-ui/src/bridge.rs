@@ -76,6 +76,9 @@ pub mod qobject {
         /// Whether tasks can be captured in the current view
         /// (`View::accepts_new_tasks`): not in the Logbook or the Trash.
         #[qproperty(bool, accepts_new_tasks)]
+        /// Whether the desktop asks for reduced motion
+        /// (`crate::motion::prefers_reduced_motion`); animations are skipped.
+        #[qproperty(bool, reduce_motion)]
         type AppController = super::AppControllerRust;
 
         #[qinvokable]
@@ -317,6 +320,7 @@ pub struct AppControllerRust {
     visit: i32,
     reorderable: bool,
     accepts_new_tasks: bool,
+    reduce_motion: bool,
 
     view: View,
     /// The date the sidebar and header were last built for.
@@ -350,6 +354,7 @@ impl Default for AppControllerRust {
             visit: 0,
             reorderable: view.is_reorderable(),
             accepts_new_tasks: view.accepts_new_tasks(),
+            reduce_motion: crate::motion::prefers_reduced_motion(),
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),

@@ -49,6 +49,8 @@ ci/check.sh                 # every gate CI runs
 
 - clippy with warnings denied;
 - the workspace tests, which include the core tests, a `qmllint` check of the QML against the generated bridge types, and GTK widget tests on a headless Broadway display;
-- the Qt Quick interaction tests, offscreen. Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch them run.
+- the Qt Quick interaction tests, offscreen, twice: with animations off and with them on (`MATTERS_UI_TEST_MOTION=1`). Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch them run.
+
+Matters skips its animations when the desktop asks for reduced motion (KDE's instant animation speed, or GNOME's animations turned off). `MATTERS_REDUCE_MOTION=1` or `=0` overrides that.
 
 CI (`.github/workflows/ci.yml`) runs the same script in a `fedora:44` container on every pull request and every push to `main`.

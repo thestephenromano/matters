@@ -15,6 +15,10 @@ Item {
     readonly property alias appController: controller
     readonly property alias taskList: taskListView
 
+    // No animations when the desktop asks for reduced motion (#77). Writable
+    // so tests can try both.
+    property bool reduceMotion: controller.reduceMotion
+
     readonly property var projects: {
         try {
             return JSON.parse(controller.projectsJson);
@@ -1325,6 +1329,28 @@ Item {
                         // current-index navigation is not used.
                         keyNavigationEnabled: false
 
+                        // Motion (#77): new tasks fade in, removed ones fade out,
+                        // and the rows around them slide into place; a moved task
+                        // glides to its new position. Displacement also finishes
+                        // any interrupted fade, so no row is left half drawn.
+                        add: Transition {
+                            enabled: !root.reduceMotion
+                            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 180; easing.type: Easing.OutCubic }
+                        }
+                        remove: Transition {
+                            enabled: !root.reduceMotion
+                            NumberAnimation { property: "opacity"; to: 0; duration: 140; easing.type: Easing.InCubic }
+                        }
+                        displaced: Transition {
+                            enabled: !root.reduceMotion
+                            NumberAnimation { properties: "x,y"; duration: 180; easing.type: Easing.OutCubic }
+                            NumberAnimation { property: "opacity"; to: 1; duration: 180 }
+                        }
+                        move: Transition {
+                            enabled: !root.reduceMotion
+                            NumberAnimation { properties: "x,y"; duration: 200; easing.type: Easing.OutCubic }
+                        }
+
                         // Keep the selected task in view when the list's visible
                         // height changes (the quick-add bar or error banner shows
                         // or hides, the window is resized): a task just scrolled
@@ -1534,6 +1560,7 @@ Item {
                             }
 
                             Behavior on height {
+                                enabled: !root.reduceMotion
                                 NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
                             }
 
@@ -1602,6 +1629,25 @@ Item {
                                         Layout.preferredWidth: 20
                                         Layout.preferredHeight: 20
                                         radius: 10
+
+                                        // Completing a task: the circle fills with a
+                                        // short pop.
+                                        Behavior on color {
+                                            enabled: !root.reduceMotion
+                                            ColorAnimation { duration: 150 }
+                                        }
+                                        SequentialAnimation {
+                                            id: tickPop
+                                            NumberAnimation { target: checkCircle; property: "scale"; to: 1.2; duration: 90; easing.type: Easing.OutCubic }
+                                            NumberAnimation { target: checkCircle; property: "scale"; to: 1; duration: 140; easing.type: Easing.OutBack }
+                                        }
+                                        Connections {
+                                            target: taskRow
+                                            function onDoneChanged() {
+                                                if (taskRow.done && !root.reduceMotion)
+                                                    tickPop.restart();
+                                            }
+                                        }
                                         color: taskRow.done ? root.colAccent : "transparent"
                                         border.color: taskRow.done ? root.colAccent : (checkMouse.containsMouse ? root.colAccent : root.colTextSecondary)
                                         border.width: 1.5

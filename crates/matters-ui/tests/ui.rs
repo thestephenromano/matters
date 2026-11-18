@@ -20,6 +20,10 @@ fn main() {
     let style = std::env::var("MATTERS_UI_TEST_STYLE").unwrap_or_else(|_| "Basic".into());
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", style);
     std::env::remove_var("QT_QPA_PLATFORMTHEME");
+    // Animations off by default, so tests don't race them; set
+    // MATTERS_UI_TEST_MOTION=1 to run with motion (ci/check.sh does both).
+    let motion = std::env::var_os("MATTERS_UI_TEST_MOTION").is_some_and(|v| v == "1");
+    std::env::set_var("MATTERS_REDUCE_MOTION", if motion { "0" } else { "1" });
     let db = matters_core::Database::open_in_memory().expect("open in-memory database");
     matters_ui::install_database(db);
     matters_ui::init_qml();
