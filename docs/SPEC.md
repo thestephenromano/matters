@@ -282,15 +282,17 @@ CREATE INDEX IF NOT EXISTS idx_tasks_trashed ON tasks(trashed_at);
 ## 6. MVP Scope (v0.1) vs. Future Roadmap
 
 ### In Scope for MVP (v0.1)
-- [x] Full local SQLite persistence with WAL mode.
-- [x] Complete domain hierarchy: Area → Project → Heading → Task → Checklist.
-- [x] Core views: Inbox, Today (with "This Evening"), Upcoming, Anytime, Someday, Logbook, Trash.
-- [x] When vs. Deadline scheduling engine.
-- [x] Inline task expansion (title, notes, checklists).
-- [x] Keyboard navigation and shortcuts (`Enter`, `Space`, `Ctrl+S`, `Ctrl+D`, `Ctrl+K`, arrows).
-- [x] Circular project progress ring component in QML.
-- [x] Quick Find popover.
-- [x] Automatic dark/light theme tracking (respecting KDE Plasma Breeze / system color scheme).
+Status of the Qt app. **Done** items are built; **Partly** items say what is missing and link the issue tracking it.
+
+- [x] **Done:** local SQLite persistence with WAL mode.
+- [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app shows projects and tasks; areas (#15), headings (#22) and checklists (#21) have no interface yet.
+- [ ] **Partly:** core views Inbox, Today, Upcoming, Anytime, Someday, Logbook and Trash all exist. Each is one flat list; the This Evening section, date groups in Upcoming, area and project groups in Anytime, and date groups in the Logbook are missing (#25).
+- [ ] **Partly:** When vs. Deadline. The core schedules both. The app sets When to Today, This Evening or Someday, but has no date picker and can't set a deadline (#20).
+- [ ] **Partly:** inline task expansion. Notes and When are edited in place; the title can't be edited (#27) and checklists aren't shown (#21).
+- [ ] **Partly:** keyboard control. Only Quick Find (`Ctrl+K`, `/`) has a shortcut (#19).
+- [ ] **Partly:** project progress. Shown as a filling circle, not yet a ring (#28).
+- [ ] **Partly:** Quick Find popover. Finds tasks; projects and areas are found by the core but not shown (#26).
+- [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.
 
 ### Post-MVP (v0.2+)
 - [ ] System-wide floating Quick Capture daemon via Wayland Layer Shell / KGlobalAccel.
