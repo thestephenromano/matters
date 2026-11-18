@@ -1,7 +1,7 @@
 {
-  "date": "2026-11-18T19:30:05.678996+00:00",
-  "source_commit": "8fa803d0852bd50e0d0687c585881664a66607de",
-  "base_commit": "26012daacfc90e936714d9dd0a6fdc02e3ef359e",
+  "date": "2026-11-18T20:01:15.223540+00:00",
+  "source_commit": "a486b520db03c3c9b3b00c09277e068453a93617",
+  "base_commit": "b31d88edebcb3e723cc4758f079ef05d6304dfe9",
   "source_sha256": {
     ".github/workflows/ci.yml": "7835b32344548270fed27c3a63951d7bff6fbe2c766534917a72d374205462e4",
     ".github/workflows/sync-prototype.yml": "f1d4cd2224ce14426924e44e4fc227b241bcfc2b26f621fdf69e5ee61637d6e9",
@@ -17,8 +17,9 @@
     "docs/SQLITE_REVIEW.md": "4fbf9a4820467992c9c86481e1b67798e2a904b3c7dbc4c4eeed62da216e5d97",
     "docs/SQLITE_UPGRADE.md": "2778a279b85d9bf5cf55e6c6cb636044601da1e6b100039d4f732c59efcdc054",
     "docs/SYNC_DESIGN.md": "fe19f5f98f474dc9d49716651c584e46a112891237cdc05efcc130298297fe16",
+    "docs/SYNC_DURABLE_RECEIVE.md": "99ebbf09d35d57ea5584037c4f640ae08d6bf6393d1ee46e77d4bf5952331704",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "17fb477b84869264049e5b46f5525e8c48a412a86517ab075b5befa8280cd201",
-    "docs/SYNC_KEY_DISTRIBUTION.md": "f603ff44776ce94290b99966e1e86bd72ed6db109d8784e8262429114aa9b763",
+    "docs/SYNC_KEY_DISTRIBUTION.md": "fb9e9276bff845f049a19f2128eb70e5ba9d473d7fc62443469e943b655bb776",
     "docs/SYNC_RECORD_CONTRACT.md": "c1e87734a2a1d817aeab0f8176fc0569fe2a597a19a841af89fa0cceace46eea",
     "docs/decisions/0002-post-quantum-sync.md": "ec465816e0e514e4b15f7258929ae615a3a1d4a6b4822b1ccb5db47feab24fea",
     "docs/protocol/sync-key-distribution-v0.cddl": "2806d843c38345780e3fde7d1854f2be1133da8cc42b8ef1e99dbbe21b2c2e29",
@@ -26,23 +27,27 @@
     "experiments/sync-prototype/.gitignore": "395fc2939d3e8df2f16cd3752e9501b85a47191f283fff07ed4bc4d9875013d9",
     "experiments/sync-prototype/Cargo.lock": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
     "experiments/sync-prototype/Cargo.toml": "2cc80c243f4f221f9daa649f99c4b045695fedfe7da8df788deeb0e6c4eb8396",
-    "experiments/sync-prototype/README.md": "d74c682c77b17cd8f702245044e6dbc2123950907c02596ddc2602e3dd275c99",
+    "experiments/sync-prototype/README.md": "fa7b73b78fb9b843d7e619f09afe6b21f8b0064650f99c1df7ddfbbe90338682",
     "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md": "89973fc6fe9d9a1bae64c48010060ee0d6b6ce2a48d9e992e5a50dd53cefa842",
     "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md": "19a43b042517a212e1fce6eebb9c6f136c034032a7e983e4077fced2a592c77f",
     "experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md": "55feba116369cffef17b55203f41224ed0ecbdfe14d87d707ae186eb5c8a1f79",
     "experiments/sync-prototype/baseline/Cargo.lock": "4017e18fb260b9f44603483dadaf041f71df87f5eb6e1cd6002099babf67eff9",
     "experiments/sync-prototype/baseline/Cargo.toml": "1d81dd6fc4a4b8548ee1c570db0ac8b36d9a2bcb413e786d6e3263e92e9278ab",
     "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
+    "experiments/sync-prototype/src/lib.rs": "d5a22c72f022062401c3e670d02df3de01d686e83281776c8ea9ecb486673d2e",
+    "experiments/sync-prototype/src/model.rs": "1744efe66f9a392ed428390a63f530f776e78c0d16e90e81da6156b33e8c87c5",
     "experiments/sync-prototype/src/replica.rs": "732b03fab4d1f072bad2c7eaa4e680734b99c6d1b3c779ab2d7caa1820b0f5ab",
     "experiments/sync-prototype/src/wire.rs": "0291319a3e0563d0d91a50043537df5160e407abdf9bd793a37b93f45aabb549",
-    "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "935c9a9bcfead0002d940f19b3b6f327d33786dec63f847d5ca9f5f3818fce92",
+    "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "e508ab8e5620c9395f19380ac6b6830bb89ab07fcbb210db244a73dfde68a5dc",
+    "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "3fe699017cf54a7ca5beefb4f3bbc7beacb9180bdffd9575b54b846d64ae1204",
     "experiments/sync-prototype/tests/crash.rs": "2630aa621ed3eeb89e3a0dfead0eec30ff04be6dd0eb9eec13ae3717295b9947",
-    "experiments/sync-prototype/tests/key_distribution.rs": "cbe6cb3a796adc5aee76dfb989cd4cd72987046d027c619ac95e15089f025ec0",
+    "experiments/sync-prototype/tests/key_distribution.rs": "7a8c71128f08dbf8a9912b9bbf24a1b1d51b911cc92ed87f0e130987c1ff5566",
     "experiments/sync-prototype/tests/record_contract.rs": "2ff9e6e1fb0bb1d4b5a2b788058750fa7bd94656497ab2a7141dc23fa246e4f7",
     "experiments/sync-prototype/tests/review_regressions.rs": "edde1724bbcf6879a75c1357c5d461241c74c35d339c20b60f0da18464d0af4e",
     "experiments/sync-prototype/tests/sqlite.rs": "7fa0bf70f839356c2326a81dd2ea18992aabbf32d0bb8099a6825fd7d33382b9",
+    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "303e66538cce2f9719404ec32168b57733363e83860bfd1c841a9f52de2eaa36",
     "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "28d3cc274d9ed0e532d500eea102670ee803d23c62451f8ff4b5f0861f6e8c8d",
-    "experiments/sync-prototype/tests/support/key_distribution.rs": "a6aa2a298507bf8973ee62bbcbaaffbdd4053f7bfea9dcb944a904e912c23efa",
+    "experiments/sync-prototype/tests/support/key_distribution.rs": "a0645ea4ddd596d37aaa03659a9f83f075d1f66047498a5fc57aa4a62b4cca05",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
     "experiments/sync-prototype/tests/support/record_crypto.rs": "85f652231a86fb6cc3367a7677d88f6ed61c61ffacc56ca6ff7d0009b41ab8f2",
     "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "ec287e87d072d48329b200d5ad2e4dadd9a6e49a2f213fb02ffe738ff4aef67c",
@@ -51,7 +56,7 @@
     "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "b4468ee8117874a14e6c74d1914f9ce8c83961401715a98f333f418ce376dc5b",
     "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "4bb36d74e83579238a9a00c79a57bf94855a8b5bda17daacdba02419a3b1ac87",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
-    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "6a3e27d0ee2d9212ef41c69f6ad3561d418f91ec93a6cd99af05ad2cec9e562a",
+    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "fbb60e668760091463bac2e7cef233e86b80c85157b6f8e6626c25ea3049a48f",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6"
@@ -89,71 +94,68 @@
   "oracles": {
     "cbor2": "5.9.0",
     "cryptography": "50.0.0",
-    "python": "3.14.10",
-    "openssl": "OpenSSL 4.0.1 9 Jun 2026",
+    "python": "3.13.7",
+    "openssl": "OpenSSL 3.5.3 16 Sep 2025",
     "cddl_cat": "0.7.1",
     "ciborium": "0.2.2",
     "regeneration_check": "passed",
     "regeneration_scope": "Both content-record and key-distribution generators passed locally; CI executes both --check commands using the pinned requirements."
   },
   "checks": {
-    "tests_passed": 96,
-    "include_ignored_tests_passed": 99,
-    "ignored_discovery_helpers": 3,
-    "helper_executions_per_full_run": 13,
+    "tests_passed": 110,
+    "include_ignored_tests_passed": 114,
+    "ignored_discovery_helpers": 4,
+    "helper_executions_per_full_run": 17,
     "helper_execution_breakdown": {
       "outbox": 9,
       "replica": 2,
-      "sqlite_wal": 2
+      "sqlite_wal": 2,
+      "inbox": 4
     },
-    "format": "passed for prototype/baseline and shared/changed test Rust files; existing app formatting style retained",
-    "clippy": "passed with -D warnings",
+    "format": "prototype cargo fmt --check passed",
+    "clippy": "prototype all-targets, both feature gates, warnings denied; passed",
+    "environment": {
+      "CARGO_TARGET_DIR": "/home/stephen/Development/matters/target/sync-prototype",
+      "oracle_python": "/tmp/matters-receive-evidence-20261118/venv/bin/python"
+    },
     "commands_and_outputs": {
-      "format_shared": {
-        "command": [
-          "rustfmt",
-          "--edition",
-          "2021",
-          "--check",
-          "ci/sqlite_runtime.rs",
-          "ci/sqlite_wal_tests.rs",
-          "crates/matters-core/tests/sqlite_tests.rs"
-        ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
-        "exit_code": 0,
-        "output": ""
-      },
-      "format": {
+      "full": {
         "command": [
           "cargo",
-          "fmt",
+          "test",
+          "--locked",
           "--manifest-path",
           "experiments/sync-prototype/Cargo.toml",
-          "--check"
+          "--features",
+          "crypto-probe,record-contract"
         ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "working_directory": ".",
         "exit_code": 0,
-        "output": ""
+        "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.99s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-5cea9b43afdd440d)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-618661693fddb2c8)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c04_schedule_is_atomic ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-0f31e629b6ab3d5a)\n\nrunning 4 tests\ntest process_crash_worker ... ignored, invoked only as a child by abrupt_exit_recovers_sqlite\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-3761b0d03dc7574d)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 50 tests\ntest inbox_cases::inbox_crash_worker ... ignored, child process invoked by abrupt_exit_preserves_receipt_and_application_boundaries\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest inbox_cases::signed_undecryptable_competitor_is_still_fork_evidence ... ok\ntest inbox_cases::overlapping_actor_history_cannot_reapply_a_logical_edit ... ok\ntest outbox_cases::outbox_crash_worker ... ignored, invoked as a child by abrupt_exit_covers_every_outbox_boundary\ntest inbox_cases::cross_writer_causal_dependency_drains_after_missing_update_arrives ... ok\ntest inbox_cases::signed_record_id_conflict_freezes_both_writers_and_preserves_bytes ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest inbox_cases::rejected_record_and_its_blocked_descendant_are_durable_and_visible ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest inbox_cases::forged_competitor_does_not_freeze_an_authorized_chain ... ok\ntest inbox_cases::binding_cursor_capacity_and_foreign_database_guards_preserve_recovery ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest inbox_cases::signed_fork_freezes_chain_across_restart_without_erasing_prior_projection ... ok\ntest inbox_cases::reversed_records_survive_restart_and_apply_once_without_echo ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest inbox_cases::unrelated_epoch_key_is_an_operational_error_without_quarantine ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest inbox_cases::concurrent_handles_and_busy_retry_share_committed_progress ... ok\ntest inbox_cases::reject_context_actor_snapshot_and_domain_violations ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\ntest inbox_cases::abrupt_exit_preserves_receipt_and_application_boundaries ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\n\ntest result: ok. 48 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.24s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-947f79ac4425796f)\n\nrunning 9 tests\ntest route_context_must_be_supplied_independently ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest independently_encoded_rejection_cases ... ok\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-5d1c84ae3ee0a9d3)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest retry_after_rollback_commits_once ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-2d4ac3a9ca8681f8)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ignored, launched by wal_crash_and_consistent_backup_preserve_committed_state\ntest linked_sqlite_matches_approved_release ... ok\ntest file_open_rejects_memory_journal_fallback ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest explicit_in_memory_replica_is_usable ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
       },
-      "format_baseline": {
+      "ignored": {
         "command": [
           "cargo",
-          "fmt",
+          "test",
+          "--locked",
           "--manifest-path",
-          "experiments/sync-prototype/baseline/Cargo.toml",
-          "--check"
+          "experiments/sync-prototype/Cargo.toml",
+          "--features",
+          "crypto-probe,record-contract",
+          "--",
+          "--include-ignored"
         ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "working_directory": ".",
         "exit_code": 0,
-        "output": ""
+        "output": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-5cea9b43afdd440d)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-618661693fddb2c8)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c04_schedule_is_atomic ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-0f31e629b6ab3d5a)\n\nrunning 4 tests\ntest process_crash_worker ... ok\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-3761b0d03dc7574d)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 50 tests\ntest inbox_cases::inbox_crash_worker ... ok\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest inbox_cases::signed_record_id_conflict_freezes_both_writers_and_preserves_bytes ... ok\ntest inbox_cases::overlapping_actor_history_cannot_reapply_a_logical_edit ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest outbox_cases::outbox_crash_worker ... ok\ntest inbox_cases::signed_undecryptable_competitor_is_still_fork_evidence ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently ... ok\ntest inbox_cases::cross_writer_causal_dependency_drains_after_missing_update_arrives ... ok\ntest inbox_cases::rejected_record_and_its_blocked_descendant_are_durable_and_visible ... ok\ntest inbox_cases::binding_cursor_capacity_and_foreign_database_guards_preserve_recovery ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest inbox_cases::signed_fork_freezes_chain_across_restart_without_erasing_prior_projection ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest inbox_cases::forged_competitor_does_not_freeze_an_authorized_chain ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest inbox_cases::unrelated_epoch_key_is_an_operational_error_without_quarantine ... ok\ntest inbox_cases::reversed_records_survive_restart_and_apply_once_without_echo ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest inbox_cases::concurrent_handles_and_busy_retry_share_committed_progress ... ok\ntest inbox_cases::reject_context_actor_snapshot_and_domain_violations ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\ntest inbox_cases::abrupt_exit_preserves_receipt_and_application_boundaries ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\n\ntest result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.18s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-947f79ac4425796f)\n\nrunning 9 tests\ntest route_context_must_be_supplied_independently ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest independently_encoded_rejection_cases ... ok\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-5d1c84ae3ee0a9d3)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest retry_after_rollback_commits_once ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-2d4ac3a9ca8681f8)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ok\ntest linked_sqlite_matches_approved_release ... ok\ntest file_open_rejects_memory_journal_fallback ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest explicit_in_memory_replica_is_usable ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
       },
       "clippy": {
         "command": [
           "cargo",
           "clippy",
+          "--locked",
           "--manifest-path",
           "experiments/sync-prototype/Cargo.toml",
-          "--locked",
           "--all-targets",
           "--features",
           "crypto-probe,record-contract",
@@ -161,97 +163,62 @@
           "-D",
           "warnings"
         ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "working_directory": ".",
         "exit_code": 0,
-        "output": "    Checking matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.73s\n"
+        "output": "    Checking matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s\n"
       },
-      "test": {
+      "fmt": {
         "command": [
           "cargo",
-          "test",
+          "fmt",
+          "--check",
           "--manifest-path",
-          "experiments/sync-prototype/Cargo.toml",
-          "--locked",
-          "--features",
-          "crypto-probe,record-contract"
+          "experiments/sync-prototype/Cargo.toml"
         ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "working_directory": ".",
         "exit_code": 0,
-        "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.01s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-5cea9b43afdd440d)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-618661693fddb2c8)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest c04_schedule_is_atomic ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-0f31e629b6ab3d5a)\n\nrunning 4 tests\ntest process_crash_worker ... ignored, invoked only as a child by abrupt_exit_recovers_sqlite\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-3761b0d03dc7574d)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 35 tests\ntest outbox_cases::outbox_crash_worker ... ignored, invoked as a child by abrupt_exit_covers_every_outbox_boundary\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\n\ntest result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.17s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-947f79ac4425796f)\n\nrunning 9 tests\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest route_context_must_be_supplied_independently ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independently_encoded_rejection_cases ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-5d1c84ae3ee0a9d3)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest retry_after_rollback_commits_once ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-2d4ac3a9ca8681f8)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ignored, launched by wal_crash_and_consistent_backup_preserve_committed_state\ntest linked_sqlite_matches_approved_release ... ok\ntest file_open_rejects_memory_journal_fallback ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest explicit_in_memory_replica_is_usable ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+        "output": ""
       },
-      "include_ignored": {
+      "record-oracle": {
         "command": [
-          "cargo",
-          "test",
-          "--manifest-path",
-          "experiments/sync-prototype/Cargo.toml",
-          "--locked",
-          "--features",
-          "crypto-probe,record-contract",
-          "--",
-          "--include-ignored"
-        ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
-        "exit_code": 0,
-        "output": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-5cea9b43afdd440d)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-618661693fddb2c8)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c04_schedule_is_atomic ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-0f31e629b6ab3d5a)\n\nrunning 4 tests\ntest process_crash_worker ... ok\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-3761b0d03dc7574d)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 35 tests\ntest outbox_cases::outbox_crash_worker ... ok\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\n\ntest result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-947f79ac4425796f)\n\nrunning 9 tests\ntest route_context_must_be_supplied_independently ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independently_encoded_rejection_cases ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-5d1c84ae3ee0a9d3)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest retry_after_rollback_commits_once ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-2d4ac3a9ca8681f8)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ok\ntest linked_sqlite_matches_approved_release ... ok\ntest file_open_rejects_memory_journal_fallback ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest explicit_in_memory_replica_is_usable ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
-      },
-      "record_oracle": {
-        "command": [
-          "/tmp/matters-sqlite-review-meta-20261118/oracle/bin/python",
-          "experiments/sync-prototype/tests/vectors/record-contract/generate.py",
+          "python",
+          "tests/vectors/record-contract/generate.py",
           "--check"
         ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "working_directory": "experiments/sync-prototype",
         "exit_code": 0,
         "output": "2 golden records; 58 rejection splices; max wire 1052451; overhead 3859\n"
       },
-      "key_oracle": {
+      "key-oracle": {
         "command": [
-          "/tmp/matters-sqlite-review-meta-20261118/oracle/bin/python",
-          "experiments/sync-prototype/tests/vectors/key-distribution/generate.py",
+          "python",
+          "tests/vectors/key-distribution/generate.py",
           "--check"
         ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "working_directory": "experiments/sync-prototype",
         "exit_code": 0,
         "output": "4 structural vectors; 10 rejection cases; 16-member genesis 58849 bytes\n"
       },
-      "oracle_guards": {
-        "command": [
-          "/tmp/matters-sqlite-review-meta-20261118/oracle/bin/python",
-          "experiments/sync-prototype/tests/vectors/check_oracles.py"
-        ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
-        "exit_code": 0,
-        "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 1.196s\n\nOK\n"
-      },
-      "evidence_guards": {
+      "oracle-guards": {
         "command": [
           "python",
+          "tests/vectors/check_oracles.py"
+        ],
+        "working_directory": "experiments/sync-prototype",
+        "exit_code": 0,
+        "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 1.299s\n\nOK\n"
+      },
+      "evidence-guards": {
+        "command": [
+          "python3.13",
           "experiments/sync-prototype/tests/vectors/check_evidence_guards.py"
         ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "working_directory": ".",
         "exit_code": 0,
-        "output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.082s\n\nOK\n"
-      },
-      "runtime_and_wal": {
-        "command": [
-          "cargo",
-          "test",
-          "--locked",
-          "--manifest-path",
-          "experiments/sync-prototype/Cargo.toml",
-          "--test",
-          "sqlite",
-          "--",
-          "--include-ignored",
-          "--nocapture"
-        ],
-        "target": "/home/stephen/Development/matters/target/sync-prototype",
-        "exit_code": 0,
-        "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-c87c02d93ca45127)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ok\nSQLite runtime: 3.54.1; source_id: 2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76\ntest file_open_rejects_memory_journal_fallback ... ok\ntest linked_sqlite_matches_approved_release ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\nbefore: 31 WAL frames, 0 commit frames before recovery\ntest explicit_in_memory_replica_is_usable ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\nafter: 37 WAL frames, 1 commit frames before recovery\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n"
+        "output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.100s\n\nOK\n"
       }
     },
-    "evidence_scope": "source_sha256 binds current app, baseline and prototype inputs to source_commit and the checkout. Cargo graphs remain independent. Historical inventories retain original source revisions. Following commit changes only this evidence JSON."
+    "evidence_scope": "Current prototype execution against source_commit. Active hashes also protect unchanged app/baseline inputs; their prior execution is explicitly source-scoped in sqlite_upgrade. Following commit changes only this evidence JSON."
   },
   "fixtures": {
     "golden_records": 2,
@@ -262,21 +229,22 @@
     "max_overhead_bytes": 3859
   },
   "limits": [
-    "Test-only control/content and SQLite outbox experiments; no production app integration, relay, transport or durable service acknowledgement contract.",
+    "Test-only control/content, SQLite outbox and fixed-epoch durable inbox experiments; no production app integration, relay, transport or remote durable acknowledgement contract.",
     "Outbox trusts its synchronous sealer and caller-supplied entropy; tests use approved providers. Structural output checks do not authenticate arbitrary callback output.",
     "Local prepared intents are plaintext. No private keys or CEKs are stored by the outbox; secret storage, secure erasure and device-at-rest encryption remain separate.",
-    "Authority, membership and authenticated writer admission remain in memory. Persistent outbox owner/actor state is not a durable trust chain.",
-    "Epoch resealing, enrollment/recovery, historical frontiers, old-writer reconciliation, authoritative snapshots and receive chains are not implemented.",
+    "The inbox pins a signed genesis and writer bundle durably. Changing membership, writer lifecycle and key storage remain outside its fixed configuration; outbox owner/actor state is not a durable trust chain.",
+    "Epoch resealing, enrollment/recovery, historical frontiers, old-writer reconciliation and authoritative snapshots are not implemented. Inbox receive chains cover one document and fixed epoch only.",
     "Unsealed old-writer intents become recovery-required after any writer reopen, including ordinary restart. They are preserved and observable but not automatically delivered; no unsafe actor rebind or old-writer resealing.",
     "Writer and attempt identity metadata grow without lifetime count caps. Production disk budgets, retention/compaction and storage-exhaustion recovery remain open.",
     "Process crashes and actual SQL errors are tested on local temporary storage, not power loss, media/host loss, hardware flush faults, OS/RNG snapshots or malicious local database writes.",
     "Structural oracle keys/signatures are placeholders; actual crypto round trips use the selected provider. Independent exact-suite hybrid HPKE/signature interoperability is not established.",
-    "No aarch64 run, fuzz campaign, complete aggregate crypto/import resource bound, independent security review or new performance claim."
+    "No aarch64 run, fuzz campaign, complete aggregate crypto/import resource bound, independent security review or new performance claim.",
+    "Inbox retains at most 32 deliveries; replays full accepted history and stages imports, with no hostile Loro CPU/decompression bound. Stored projections and local databases are plaintext. Collection-wide conflict indexing is required before multiple documents."
   ],
   "previous_execution": {
-    "source_commit": "b740b4d432fc5c756d71efbb77cfbca5c994041f",
-    "record_revision": "1ba403648fafc5817fe71d2ef6723363643c635c",
-    "scope": "Initial #101 SQLite upgrade execution. Current review strengthens dependency freezing, open-mode enforcement, WAL witnesses and active evidence coverage."
+    "source_commit": "8fa803d0852bd50e0d0687c585881664a66607de",
+    "record_revision": "37fe08c90d8a9cb998ea6f84aaf2762132c23896",
+    "scope": "Prior SQLite verification execution; historical app/baseline results below remain scoped to their recorded source. This change reruns prototype gates only."
   },
   "key_distribution": {
     "tests_passed": 18,
@@ -1645,5 +1613,181 @@
       }
     },
     "evidence_required_bindings_tested": 48
+  },
+  "durable_receive": {
+    "source_commit": "a486b520db03c3c9b3b00c09277e068453a93617",
+    "contract": "docs/SYNC_DURABLE_RECEIVE.md",
+    "normal_tests": 14,
+    "ignored_helper": 1,
+    "child_exits_per_full_run": 4,
+    "scope": "One pinned route/document, signed genesis and admitted writers, fixed membership epoch, independent local receive generation. Test-only; no dynamic authority or relay.",
+    "storage": {
+      "rusqlite": "0.43.0",
+      "journal_mode": "WAL",
+      "synchronous": "FULL",
+      "max_retained_deliveries": 32,
+      "max_wire_bytes": 1052451,
+      "keys_persisted": false,
+      "projection_at_rest": "plaintext",
+      "busy_timeout_ms": 1000
+    },
+    "invariants": [
+      "Receipt bytes and cursor commit together",
+      "Application order and projection commit together",
+      "Authenticate before decryption; signed conflicts collected before AEAD/import",
+      "Exact bytes retained for duplicates, pending, quarantined and forked records",
+      "Actor ranges and full version-vector effects gate staged import",
+      "Restart reconstructs accepted state without incoming-to-outgoing echo"
+    ],
+    "manual_mutations": {
+      "source_commit": "a486b520db03c3c9b3b00c09277e068453a93617",
+      "scope": "Six explicit guard-removal tests; each compiled and failed its named assertion. Final restored source passes both full suites. Not exhaustive mutation coverage.",
+      "driver": "from pathlib import Path\nimport os, subprocess, json\nroot=Path('/tmp/matters-durable-receive-20261118')\nlogs=Path('/tmp/matters-receive-evidence-20261118')\np=root/'experiments/sync-prototype/tests/support/encrypted_inbox.rs'\nk=root/'experiments/sync-prototype/tests/support/key_distribution.rs'\nsignature='''        verify_signature(\n            &author.sig,\n            p.signed_bytes,\n            h.kind.signature_context(),\n            p.signature,\n        )?;'''\ncases=[\n ('signature',k,signature,'        let _ = author;', 'forged_competitor_does_not_freeze_an_authorized_chain'),\n ('fork_freeze',p,'if frozen.contains(&c.incarnation) {','if false && frozen.contains(&c.incarnation) {','signed_fork_freezes_chain_across_restart_without_erasing_prior_projection'),\n ('actor_overlap',p,'if start < counter {','if false && start < counter {','overlapping_actor_history_cannot_reapply_a_logical_edit'),\n ('actor_binding',p,'let start = meta.partial_start_vv.get(&actor).copied().unwrap_or(0);','let actor = *meta.partial_end_vv.iter().next().unwrap().0;\\n    let start = meta.partial_start_vv.get(&actor).copied().unwrap_or(0);','reject_context_actor_snapshot_and_domain_violations'),\n ('receipt_cursor',p,'UPDATE inbox_meta SET cursor=?1 WHERE singleton=1','UPDATE inbox_meta SET cursor=0 WHERE singleton=1 AND ?1 > 0','receipt_and_projection_transactions_rollback_and_retry_idempotently'),\n ('apply_commit_boundary',p,'hook(Point::BeforeApply)?;\\n        tx.commit()?;','tx.commit()?;\\n        hook(Point::BeforeApply)?;','receipt_and_projection_transactions_rollback_and_retry_idempotently'),\n]\nresults=[]\nenv=dict(os.environ,CARGO_TARGET_DIR='/home/stephen/Development/matters/target/sync-prototype')\nfor name,path,old,new,test in cases:\n original=path.read_text()\n if original.count(old)!=1: raise RuntimeError((name,original.count(old)))\n try:\n  path.write_text(original.replace(old,new))\n  cmd=['cargo','test','--locked','--manifest-path','experiments/sync-prototype/Cargo.toml','--features','crypto-probe,record-contract','--test','key_distribution','inbox_cases::'+test,'--','--exact','--nocapture']\n  result=subprocess.run(cmd,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)\n  (logs/(name+'.log')).write_text(result.stdout)\n  caught=result.returncode!=0 and 'test result: FAILED' in result.stdout and 'could not compile' not in result.stdout\n  results.append(dict(mutation=name,test=test,command=cmd,returncode=result.returncode,caught=caught,output=result.stdout))\n  print(name, 'caught' if caught else 'NOT CAUGHT',flush=True)\n finally:\n  path.write_text(original)\n(logs/'mutations.json').write_text(json.dumps(results,indent=2)+'\\n')\nif not all(x['caught'] for x in results): raise SystemExit(1)\n",
+      "results": [
+        {
+          "mutation": "signature",
+          "test": "forged_competitor_does_not_freeze_an_authorized_chain",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--manifest-path",
+            "experiments/sync-prototype/Cargo.toml",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "inbox_cases::forged_competitor_does_not_freeze_an_authorized_chain",
+            "--",
+            "--exact",
+            "--nocapture"
+          ],
+          "returncode": 101,
+          "caught": true,
+          "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.37s\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 1 test\n\nthread 'inbox_cases::forged_competitor_does_not_freeze_an_authorized_chain' (1178689) panicked at tests/cases/encrypted_inbox.rs:242:5:\nassertion `left == right` failed\n  left: \"fork\"\n right: \"quarantined\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest inbox_cases::forged_competitor_does_not_freeze_an_authorized_chain ... FAILED\n\nfailures:\n\nfailures:\n    inbox_cases::forged_competitor_does_not_freeze_an_authorized_chain\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.31s\n\nerror: test failed, to rerun pass `--test key_distribution`\n"
+        },
+        {
+          "mutation": "fork_freeze",
+          "test": "signed_fork_freezes_chain_across_restart_without_erasing_prior_projection",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--manifest-path",
+            "experiments/sync-prototype/Cargo.toml",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "inbox_cases::signed_fork_freezes_chain_across_restart_without_erasing_prior_projection",
+            "--",
+            "--exact",
+            "--nocapture"
+          ],
+          "returncode": 101,
+          "caught": true,
+          "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.11s\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 1 test\n\nthread 'inbox_cases::signed_fork_freezes_chain_across_restart_without_erasing_prior_projection' (1178999) panicked at tests/cases/encrypted_inbox.rs:216:5:\nassertion failed: inbox.entries()?.iter().all(|e| e.status == \"fork\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest inbox_cases::signed_fork_freezes_chain_across_restart_without_erasing_prior_projection ... FAILED\n\nfailures:\n\nfailures:\n    inbox_cases::signed_fork_freezes_chain_across_restart_without_erasing_prior_projection\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.29s\n\nerror: test failed, to rerun pass `--test key_distribution`\n"
+        },
+        {
+          "mutation": "actor_overlap",
+          "test": "overlapping_actor_history_cannot_reapply_a_logical_edit",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--manifest-path",
+            "experiments/sync-prototype/Cargo.toml",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "inbox_cases::overlapping_actor_history_cannot_reapply_a_logical_edit",
+            "--",
+            "--exact",
+            "--nocapture"
+          ],
+          "returncode": 101,
+          "caught": true,
+          "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 1 test\n\nthread 'inbox_cases::overlapping_actor_history_cannot_reapply_a_logical_edit' (1179263) panicked at tests/cases/encrypted_inbox.rs:530:5:\nassertion `left == right` failed\n  left: \"\"\n right: \"actor-overlap\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest inbox_cases::overlapping_actor_history_cannot_reapply_a_logical_edit ... FAILED\n\nfailures:\n\nfailures:\n    inbox_cases::overlapping_actor_history_cannot_reapply_a_logical_edit\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.29s\n\nerror: test failed, to rerun pass `--test key_distribution`\n"
+        },
+        {
+          "mutation": "actor_binding",
+          "test": "reject_context_actor_snapshot_and_domain_violations",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--manifest-path",
+            "experiments/sync-prototype/Cargo.toml",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "inbox_cases::reject_context_actor_snapshot_and_domain_violations",
+            "--",
+            "--exact",
+            "--nocapture"
+          ],
+          "returncode": 101,
+          "caught": true,
+          "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\nwarning: unused variable: `actor`\n   --> tests/support/encrypted_inbox.rs:396:39\n    |\n396 | fn stage(doc: &LoroDoc, plain: &[u8], actor: u64) -> Result<Stage> {\n    |                                       ^^^^^ help: if this is intentional, prefix it with an underscore: `_actor`\n    |\n    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nwarning: `matters-sync-prototype` (test \"key_distribution\") generated 1 warning (run `cargo fix --test \"key_distribution\" -p matters-sync-prototype` to apply 1 suggestion)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 1 test\n\nthread 'inbox_cases::reject_context_actor_snapshot_and_domain_violations' (1179525) panicked at tests/cases/encrypted_inbox.rs:279:9:\nassertion `left == right` failed: variant 1\n  left: \"applied\"\n right: \"quarantined\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest inbox_cases::reject_context_actor_snapshot_and_domain_violations ... FAILED\n\nfailures:\n\nfailures:\n    inbox_cases::reject_context_actor_snapshot_and_domain_violations\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.45s\n\nerror: test failed, to rerun pass `--test key_distribution`\n"
+        },
+        {
+          "mutation": "receipt_cursor",
+          "test": "receipt_and_projection_transactions_rollback_and_retry_idempotently",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--manifest-path",
+            "experiments/sync-prototype/Cargo.toml",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently",
+            "--",
+            "--exact",
+            "--nocapture"
+          ],
+          "returncode": 101,
+          "caught": true,
+          "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.83s\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 1 test\n\nthread 'inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently' (1179796) panicked at tests/cases/encrypted_inbox.rs:305:5:\nassertion `left == right` failed\n  left: 0\n right: 1\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently ... FAILED\n\nfailures:\n\nfailures:\n    inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.28s\n\nerror: test failed, to rerun pass `--test key_distribution`\n"
+        },
+        {
+          "mutation": "apply_commit_boundary",
+          "test": "receipt_and_projection_transactions_rollback_and_retry_idempotently",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--manifest-path",
+            "experiments/sync-prototype/Cargo.toml",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently",
+            "--",
+            "--exact",
+            "--nocapture"
+          ],
+          "returncode": 101,
+          "caught": true,
+          "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-durable-receive-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 1 test\n\nthread 'inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently' (1180059) panicked at tests/cases/encrypted_inbox.rs:314:5:\nassertion `left == right` failed\n  left: Some(1)\n right: None\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently ... FAILED\n\nfailures:\n\nfailures:\n    inbox_cases::receipt_and_projection_transactions_rollback_and_retry_idempotently\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.29s\n\nerror: test failed, to rerun pass `--test key_distribution`\n"
+        }
+      ]
+    },
+    "evidence_bound_files": 57,
+    "mandatory_bindings_exercised": 53,
+    "remaining": [
+      "Dynamic membership/writer authority and epoch/history admission",
+      "Collection-wide record-ID conflicts for multiple documents",
+      "Key storage, enrollment and recovery",
+      "Full hostile-document schema/resource validation",
+      "Atomic command/outbox integration",
+      "Relay, authentication-provider, quotas and restore contract",
+      "Cross-target, exact-suite independent interoperability and security review"
+    ]
   }
 }
