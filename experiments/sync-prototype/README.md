@@ -15,7 +15,7 @@ cargo clippy --manifest-path experiments/sync-prototype/Cargo.toml --locked --al
 cargo fmt --manifest-path experiments/sync-prototype/Cargo.toml --check
 ```
 
-The nested lockfile pins only the prototype graph. The optional baseline helper in `baseline/` is an independent workspace and executable; its local lockfile is regenerated against the app checkout selected for measurement. An app dependency bump does not participate in prototype dependency resolution. Its crypto feature enables only the approved PQ draft/provider configuration; it does not enable the incompatible legacy HPKE draft feature. The separate CI workflow checks formatting, Clippy and the tests on Linux x86_64. An aarch64 build is still required before pilot.
+The nested lockfile pins only the prototype graph. The optional baseline helper in `baseline/` is an independent workspace and executable; its committed lockfile pins the chosen app dependency graph. CI and measurements use `--locked`; explicitly update and record that lockfile when changing the measured app checkout. An app dependency bump does not participate in prototype dependency resolution. Its crypto feature enables only the approved PQ draft/provider configuration; it does not enable the incompatible legacy HPKE draft feature. The separate CI workflow checks formatting, Clippy and the tests on Linux x86_64. An aarch64 build is still required before pilot.
 
 `process_crash_worker` is intentionally ignored in ordinary test discovery. Its parent test invokes it twice in subprocesses and checks the exact exit codes and recovered database. It therefore executes as part of the normal test suite without exposing an uncontrolled process-exit path to the application.
 
@@ -56,7 +56,7 @@ For an exploratory comparison against the unchanged Matters core, provide a dire
 
 ```sh
 mkdir -p target/sync-prototype/measure
-cargo build --release --manifest-path experiments/sync-prototype/baseline/Cargo.toml
+cargo build --release --locked --manifest-path experiments/sync-prototype/baseline/Cargo.toml
 cargo run --release --locked --manifest-path experiments/sync-prototype/Cargo.toml --example measure -- target/sync-prototype/measure 1000 "$CARGO_TARGET_DIR/release/matters-sync-baseline"
 ```
 

@@ -59,6 +59,12 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        if mode != "wal" {
+            return Err(MattersError::Validation(format!(
+                "file-backed storage requires WAL journal mode; SQLite selected {mode}"
+            )));
+        }
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
         };

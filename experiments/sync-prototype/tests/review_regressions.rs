@@ -190,7 +190,7 @@ fn retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent()
 
 #[test]
 fn retry_after_rollback_commits_once() -> Result<()> {
-    let mut r = Replica::open(":memory:")?;
+    let mut r = Replica::open_in_memory()?;
     let request = Request::new(create(1));
     assert!(r.execute_with_fault(&request, Fault::BeforeCommit).is_err());
     assert_eq!(r.journal_len()?, 0);
@@ -206,7 +206,7 @@ fn reorder_slots_exclude_purged_prefix_middle_and_suffix() -> Result<()> {
         let visible: Vec<_> = (1..=5).filter(|n| *n != deleted).collect();
         for moved in &visible {
             for position in 0..visible.len() {
-                let mut r = Replica::open(":memory:")?;
+                let mut r = Replica::open_in_memory()?;
                 r.execute(&Request::batch((1..=5).map(create)))?;
                 r.execute(&Request::batch([
                     C::Trash {
@@ -255,7 +255,7 @@ fn reorder_slots_exclude_purged_prefix_middle_and_suffix() -> Result<()> {
 
 #[test]
 fn home_reorders_children_lifted_through_a_deleted_heading() -> Result<()> {
-    let mut r = Replica::open(":memory:")?;
+    let mut r = Replica::open_in_memory()?;
     r.execute(&Request::batch([
         C::Create {
             id: id(10),
@@ -306,8 +306,8 @@ fn home_reorders_children_lifted_through_a_deleted_heading() -> Result<()> {
 
 #[test]
 fn tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links() -> Result<()> {
-    let mut a = Replica::open(":memory:")?;
-    let mut b = Replica::open(":memory:")?;
+    let mut a = Replica::open_in_memory()?;
+    let mut b = Replica::open_in_memory()?;
     let seed = a.execute(&Request::batch([
         create(1),
         create(2),
@@ -374,7 +374,7 @@ fn tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links() -> Resu
 fn snapshot_loads_prefix_pending_bytes_and_journal_tail() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("r.db");
-    let mut sender = Replica::open(":memory:")?;
+    let mut sender = Replica::open_in_memory()?;
     let first = sender.execute(&Request::new(create(1)))?;
     let second = sender.execute(&Request::new(C::Rename {
         id: id(1),
@@ -402,7 +402,7 @@ fn snapshot_loads_prefix_pending_bytes_and_journal_tail() -> Result<()> {
 fn quarantine_and_dependency_wait_are_durable_and_observable() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("r.db");
-    let mut sender = Replica::open(":memory:")?;
+    let mut sender = Replica::open_in_memory()?;
     let mut first = sender.execute(&Request::new(create(1)))?;
     let second = sender.execute(&Request::new(C::Rename {
         id: id(1),
@@ -437,9 +437,9 @@ fn quarantine_and_dependency_wait_are_durable_and_observable() -> Result<()> {
 
 #[test]
 fn invalid_domain_import_is_quarantined_without_changing_valid_state() -> Result<()> {
-    let mut sender = Replica::open(":memory:")?;
+    let mut sender = Replica::open_in_memory()?;
     let record = sender.execute(&Request::new(create(1)))?;
-    let mut r = Replica::open(":memory:")?;
+    let mut r = Replica::open_in_memory()?;
     r.receive(&record)?;
     let before = r.projection()?;
     let doc = loro::LoroDoc::new();
@@ -466,7 +466,7 @@ fn received_bytes_resume_after_sql_admission_failure() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("r.db");
     let mut r = Replica::open(&path)?;
-    let mut sender = Replica::open(":memory:")?;
+    let mut sender = Replica::open_in_memory()?;
     let record = sender.execute(&Request::new(create(1)))?;
     let c = rusqlite::Connection::open(&path)?;
     c.execute_batch(
@@ -486,11 +486,11 @@ fn received_bytes_resume_after_sql_admission_failure() -> Result<()> {
 
 #[test]
 fn normal_and_fixture_ordering_policies_are_separate() -> Result<()> {
-    let mut normal = Replica::open(":memory:")?;
+    let mut normal = Replica::open_in_memory()?;
     assert_eq!(normal.ordering_jitter_bytes(), 8);
     normal.execute(&Request::batch([create(1), create(2)]))?;
     assert_eq!(normal.ordering_jitter_bytes(), 8);
-    let mut fixture = Replica::open(":memory:")?;
+    let mut fixture = Replica::open_in_memory()?;
     fixture.set_test_peer(10)?;
     fixture.execute(&Request::batch([create(1), create(2)]))?;
     assert_eq!(fixture.ordering_jitter_bytes(), 0);
@@ -499,8 +499,8 @@ fn normal_and_fixture_ordering_policies_are_separate() -> Result<()> {
 
 #[test]
 fn quarantine_rejects_changed_bytes_for_an_existing_transport_id() -> Result<()> {
-    let mut r = Replica::open(":memory:")?;
-    let mut sender = Replica::open(":memory:")?;
+    let mut r = Replica::open_in_memory()?;
+    let mut sender = Replica::open_in_memory()?;
     let record = sender.execute(&Request::new(create(1)))?;
     assert!(r
         .receive(&Record {
@@ -522,7 +522,7 @@ fn quarantine_rejects_changed_bytes_for_an_existing_transport_id() -> Result<()>
 fn legacy_checkpoint_migrates_without_losing_its_pending_imports() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("r.db");
-    let mut sender = Replica::open(":memory:")?;
+    let mut sender = Replica::open_in_memory()?;
     let first = sender.execute(&Request::new(create(1)))?;
     let second = sender.execute(&Request::new(C::Rename {
         id: id(1),

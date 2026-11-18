@@ -1,5 +1,4 @@
 pub const SCHEMA_V1: &str = r#"
-PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_migrations (

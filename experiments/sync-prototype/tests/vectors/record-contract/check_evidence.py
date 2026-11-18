@@ -12,6 +12,21 @@ import sys
 ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "experiments/sync-prototype/evidence/record-contract-2026-11-18.json"
 REQUIRED = {
+    "docs/SQLITE_REVIEW.md",
+    ".github/workflows/ci.yml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "ci/check.sh",
+    "crates/matters-core/Cargo.toml",
+    "crates/matters-core/src/storage/db.rs",
+    "crates/matters-core/src/storage/schema.rs",
+    "crates/matters-core/tests/sqlite_tests.rs",
+    "experiments/sync-prototype/.gitignore",
+    "experiments/sync-prototype/baseline/Cargo.lock",
+    "experiments/sync-prototype/baseline/Cargo.toml",
+    "experiments/sync-prototype/baseline/src/main.rs",
+    "experiments/sync-prototype/tests/vectors/check_evidence_guards.py",
+
     "ci/sqlite_runtime.rs",
     "ci/sqlite_wal_tests.rs",
     "docs/SQLITE_UPGRADE.md",
@@ -58,13 +73,16 @@ def main():
     mismatches = []
     for name, expected in evidence["source_sha256"].items():
         path = ROOT / name
+        if not path.is_file():
+            mismatches.append(name)
+            continue
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != expected:
             mismatches.append(name)
     if mismatches:
         print("Execution evidence does not match this checkout: " + ", ".join(mismatches), file=sys.stderr)
         return 1
-    print(f"Execution evidence matches {len(evidence['source_sha256'])} checked files.")
+    print(f"Execution evidence matches {len(evidence["source_sha256"])} checked files.")
     return 0
 
 

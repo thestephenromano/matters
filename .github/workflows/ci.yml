@@ -25,5 +25,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            experiments/sync-prototype/baseline -> ../../../target/baseline
       - name: Clippy and tests
         run: bash ci/check.sh
