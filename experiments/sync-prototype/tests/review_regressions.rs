@@ -498,7 +498,7 @@ fn normal_and_fixture_ordering_policies_are_separate() -> Result<()> {
 }
 
 #[test]
-fn quarantine_rejects_changed_bytes_for_an_existing_transport_id() -> Result<()> {
+fn transport_id_reuse_is_flagged_and_judged_by_bytes() -> Result<()> {
     let mut r = Replica::open_in_memory()?;
     let mut sender = Replica::open_in_memory()?;
     let record = sender.execute(&Request::new(create(1)))?;
@@ -508,13 +508,14 @@ fn quarantine_rejects_changed_bytes_for_an_existing_transport_id() -> Result<()>
             bytes: vec![0, 1, 2]
         })
         .is_err());
-    assert!(r.receive(&record).is_err());
-    assert_eq!(r.inbox()?.len(), 2);
-    assert!(r
-        .inbox()?
-        .iter()
-        .all(|e| e.status == Admission::Quarantined));
-    assert_eq!(r.journal_len()?, 0);
+    assert_eq!(r.receive(&record)?, Admission::Applied);
+    let inbox = r.inbox()?;
+    assert_eq!(inbox.len(), 2);
+    assert_eq!(inbox[0].status, Admission::Quarantined);
+    assert_eq!(inbox[0].reason, "engine-format");
+    assert_eq!(inbox[1].status, Admission::Applied);
+    assert!(inbox.iter().all(|e| e.record_id_conflict));
+    assert_eq!(r.journal_len()?, 1);
     Ok(())
 }
 
@@ -541,5 +542,300 @@ fn legacy_checkpoint_migrates_without_losing_its_pending_imports() -> Result<()>
     assert_eq!(r.inbox()?[0].status, Admission::Pending);
     r.receive(&first)?;
     assert_eq!(r.projection()?.entities[&id(1)].title, "resolved");
+    Ok(())
+}
+
+// #114: Replica admission is independent of delivery order.
+
+/// A record built on `base` that breaks a domain invariant in its own causal
+/// past (the entity's title stops being a string).
+fn malformed_child(base: &[&Record]) -> Result<Option<Record>> {
+    let doc = loro::LoroDoc::new();
+    doc.set_peer_id(777)?;
+    for record in base {
+        doc.import(&record.bytes)?;
+    }
+    let version = doc.oplog_vv();
+    let tree = doc.get_tree("home");
+    // Purged entities are not projected, so target a live one.
+    let purged = doc.get_map("purged");
+    let live = tree.nodes().into_iter().find(|node| {
+        let meta = tree.get_meta(*node).unwrap().get_deep_value();
+        let loro::LoroValue::Map(meta) = meta else {
+            return false;
+        };
+        matches!(meta.get("id"), Some(loro::LoroValue::String(id)) if purged.get(id).is_none())
+    });
+    let Some(live) = live else {
+        return Ok(None);
+    };
+    tree.get_meta(live)?.insert("title", 7)?;
+    doc.commit();
+    Ok(Some(Record {
+        id: id(900),
+        bytes: doc.export(loro::ExportMode::updates(&version))?,
+    }))
+}
+
+fn statuses(r: &Replica) -> Result<std::collections::BTreeMap<Vec<u8>, (String, String)>> {
+    Ok(r.inbox()?
+        .into_iter()
+        .map(|e| (e.record.bytes, (format!("{:?}", e.status), e.reason)))
+        .collect())
+}
+
+#[test]
+fn a_waiting_malformed_record_is_blamed_for_itself_in_either_order() -> Result<()> {
+    let mut sender = Replica::open_in_memory()?;
+    let dependency = sender.execute(&Request::new(create(1)))?;
+    let bad = malformed_child(&[&dependency])?.unwrap();
+    let mut views = Vec::new();
+    for order in [[&bad, &dependency], [&dependency, &bad]] {
+        let mut r = Replica::open_in_memory()?;
+        for record in order {
+            let _ = r.receive(record);
+        }
+        let inbox = r.inbox()?;
+        let of = |record: &Record| inbox.iter().find(|e| e.record == *record).unwrap();
+        assert_eq!(of(&dependency).status, Admission::Applied);
+        assert_eq!(of(&bad).status, Admission::Quarantined);
+        assert_eq!(of(&bad).reason, "domain-projection");
+        assert_eq!(r.journal_len()?, 1);
+        assert_eq!(r.projection()?, sender.projection()?);
+        views.push((statuses(&r)?, r.projection()?));
+    }
+    assert_eq!(views[0], views[1]);
+    Ok(())
+}
+
+#[test]
+fn a_record_may_not_recreate_a_uuid_already_in_its_own_history() -> Result<()> {
+    let mut sender = Replica::open_in_memory()?;
+    let first = sender.execute(&Request::new(create(1)))?;
+    let doc = loro::LoroDoc::new();
+    doc.set_peer_id(778)?;
+    doc.import(&first.bytes)?;
+    let version = doc.oplog_vv();
+    let tree = doc.get_tree("home");
+    let original = tree.get_meta(tree.nodes()[0])?.get_deep_value();
+    let node = tree.create(None)?;
+    let meta = tree.get_meta(node)?;
+    let loro::LoroValue::Map(fields) = original else {
+        panic!("metadata map")
+    };
+    for (key, value) in fields.iter() {
+        if key == "notes" {
+            meta.insert_container("notes", loro::LoroText::new())?;
+        } else {
+            meta.insert(key, value.clone())?;
+        }
+    }
+    doc.commit();
+    let duplicate = Record {
+        id: id(901),
+        bytes: doc.export(loro::ExportMode::updates(&version))?,
+    };
+    let mut r = Replica::open_in_memory()?;
+    r.receive(&first)?;
+    assert!(r.receive(&duplicate).is_err());
+    let entry = r.inbox()?.pop().unwrap();
+    assert_eq!(
+        (entry.status, entry.reason.as_str()),
+        (Admission::Quarantined, "domain-repair")
+    );
+    assert!(r.projection()?.repairs.is_empty());
+    Ok(())
+}
+
+#[test]
+fn a_record_may_not_remove_deletion_evidence() -> Result<()> {
+    let mut sender = Replica::open_in_memory()?;
+    let created = sender.execute(&Request::new(create(1)))?;
+    let trashed = sender.execute(&Request::new(C::Trash {
+        id: id(1),
+        trashed: true,
+    }))?;
+    let purged = sender.execute(&Request::new(C::PurgeTrash))?;
+    let doc = loro::LoroDoc::new();
+    doc.set_peer_id(779)?;
+    for record in [&created, &trashed, &purged] {
+        doc.import(&record.bytes)?;
+    }
+    let version = doc.oplog_vv();
+    doc.get_map("purged").delete(&id(1))?;
+    doc.commit();
+    let resurrect = Record {
+        id: id(902),
+        bytes: doc.export(loro::ExportMode::updates(&version))?,
+    };
+    let mut r = Replica::open_in_memory()?;
+    for record in [&created, &trashed, &purged] {
+        r.receive(record)?;
+    }
+    assert!(r.receive(&resurrect).is_err());
+    assert_eq!(r.inbox()?.pop().unwrap().reason, "deletion-evidence");
+    assert!(r.projection()?.tombstones.contains(&id(1)));
+    Ok(())
+}
+
+/// Seeded concurrent histories with colliding UUIDs and one injected
+/// malformed record, delivered through `Replica::receive` in forward and
+/// reverse order: identical verdicts and projections, and only the malformed
+/// record is quarantined.
+#[test]
+fn receive_verdicts_and_views_agree_across_delivery_orders() -> Result<()> {
+    struct Rng(u64);
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+    const KINDS: [Kind; 3] = [Kind::Project, Kind::Task, Kind::Area];
+    for seed in 1..=25u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut writers = Vec::new();
+        for peer in 0..3 {
+            let mut r = Replica::open_in_memory()?;
+            r.set_test_peer(10 + peer)?;
+            writers.push(r);
+        }
+        for _ in 0..40 {
+            let w = rng.below(3);
+            let target = id(1 + rng.below(5) as u128);
+            let command = match rng.below(6) {
+                0 | 1 => C::Create {
+                    id: target,
+                    kind: KINDS[rng.below(3)],
+                    parent: None,
+                    title: "t".into(),
+                },
+                2 => C::Rename {
+                    id: target,
+                    title: format!("{seed}"),
+                },
+                3 => C::Trash {
+                    id: target,
+                    trashed: true,
+                },
+                4 => C::PurgeTrash,
+                _ => {
+                    let from = rng.below(3);
+                    if from != w {
+                        for record in writers[from].outbox()? {
+                            let _ = writers[w].receive(&record);
+                        }
+                    }
+                    continue;
+                }
+            };
+            let _ = writers[w].execute(&Request::new(command));
+        }
+        let mut records = Vec::new();
+        for w in &writers {
+            records.extend(w.outbox()?);
+        }
+        if records.is_empty() {
+            continue;
+        }
+        let refs: Vec<&Record> = records.iter().collect();
+        let Some(bad) = malformed_child(&refs)? else {
+            continue;
+        };
+        let at = rng.below(records.len());
+        records.insert(at, bad.clone());
+        let mut views = Vec::new();
+        for reverse in [false, true] {
+            let mut ordered = records.clone();
+            if reverse {
+                ordered.reverse();
+            }
+            let mut r = Replica::open_in_memory()?;
+            for record in &ordered {
+                let _ = r.receive(record);
+            }
+            for entry in r.inbox()? {
+                let expected = if entry.record == bad {
+                    Admission::Quarantined
+                } else {
+                    Admission::Applied
+                };
+                assert_eq!(entry.status, expected, "seed {seed}: {}", entry.reason);
+            }
+            views.push((statuses(&r)?, r.projection()?));
+        }
+        assert_eq!(views[0], views[1], "seed {seed}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_concurrent_purge_does_not_launder_a_malformed_record() -> Result<()> {
+    // The malformed edit targets an entity that another writer concurrently
+    // purges. On the merged state the entity is not projected, so judging
+    // there would accept the edit only when the purge happened to arrive first.
+    let mut a = Replica::open_in_memory()?;
+    let created = a.execute(&Request::new(create(1)))?;
+    let bad = malformed_child(&[&created])?.unwrap();
+    let trashed = a.execute(&Request::new(C::Trash {
+        id: id(1),
+        trashed: true,
+    }))?;
+    let purged = a.execute(&Request::new(C::PurgeTrash))?;
+    let mut views = Vec::new();
+    for order in [
+        [&created, &trashed, &purged, &bad],
+        [&created, &bad, &trashed, &purged],
+    ] {
+        let mut r = Replica::open_in_memory()?;
+        for record in order {
+            let _ = r.receive(record);
+        }
+        let entry = r.inbox()?.into_iter().find(|e| e.record == bad).unwrap();
+        assert_eq!(entry.status, Admission::Quarantined);
+        assert_eq!(entry.reason, "domain-projection");
+        views.push((statuses(&r)?, r.projection()?));
+    }
+    assert_eq!(views[0], views[1]);
+    Ok(())
+}
+
+#[test]
+fn format_one_journal_migrates_to_id_and_bytes_uniqueness() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("r.db");
+    let mut sender = Replica::open_in_memory()?;
+    let first = sender.execute(&Request::new(create(1)))?;
+    let mut second = sender.execute(&Request::new(C::Rename {
+        id: id(1),
+        title: "two".into(),
+    }))?;
+    let mut r = Replica::open(&path)?;
+    r.receive(&first)?;
+    r.execute(&Request::new(create(2)))?;
+    drop(r);
+    let c = rusqlite::Connection::open(&path)?;
+    c.execute_batch("CREATE TABLE journal_v1(seq INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,bytes BLOB NOT NULL,outgoing INTEGER NOT NULL CHECK(outgoing IN (0,1)),request_body TEXT);
+        INSERT INTO journal_v1 SELECT seq,id,bytes,outgoing,request_body FROM journal;
+        DROP TABLE journal; ALTER TABLE journal_v1 RENAME TO journal;
+        UPDATE prototype_meta SET value='matters-sync-prototype/1' WHERE key='format';")?;
+    drop(c);
+    let mut r = Replica::open(&path)?;
+    assert_eq!(r.journal_len()?, 2);
+    assert_eq!(r.outbox()?.len(), 1);
+    second.id = first.id.clone();
+    assert_eq!(r.receive(&second)?, Admission::Applied);
+    assert_eq!(r.projection()?.entities[&id(1)].title, "two");
+    drop(r);
+    let c = rusqlite::Connection::open(&path)?;
+    let (sql, format): (String, String) = c.query_row(
+        "SELECT (SELECT sql FROM sqlite_schema WHERE name='journal'),(SELECT value FROM prototype_meta WHERE key='format')",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert!(sql.contains("UNIQUE(id,bytes)"), "{sql}");
+    assert_eq!(format, "matters-sync-prototype/2");
     Ok(())
 }

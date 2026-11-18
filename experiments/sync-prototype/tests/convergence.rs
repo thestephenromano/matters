@@ -1,5 +1,7 @@
 use matters_sync_prototype::Request;
-use matters_sync_prototype::{Command as C, Fault, Kind, Record, Replica, Result, Schedule};
+use matters_sync_prototype::{
+    Admission, Command as C, Fault, Kind, Record, Replica, Result, Schedule,
+};
 use tempfile::TempDir;
 
 fn id(n: u128) -> String {
@@ -530,16 +532,34 @@ fn lost_ack_after_commit_survives_restart_and_projection_rebuild() -> Result<()>
 }
 
 #[test]
-fn record_identity_rejects_conflicting_bytes() -> Result<()> {
-    let mut p = Pair::new()?;
-    let first = p.a.execute(&Request::new(rename(3, "one")))?;
-    p.b.receive(&first)?;
-    let before = p.b.journal_len()?;
-    let mut second = p.a.execute(&Request::new(rename(3, "two")))?;
-    second.id = first.id;
-    assert!(p.b.receive(&second).is_err());
-    assert_eq!(p.b.journal_len()?, before);
-    assert_eq!(p.b.projection()?.entities[&id(3)].title, "one");
+fn record_identity_reuse_is_flagged_and_each_record_is_judged_by_its_bytes() -> Result<()> {
+    // Transport IDs are unauthenticated metadata. Reuse with different bytes
+    // decides no winner (that would depend on delivery order); both records
+    // are judged on their own content and both inbox rows are flagged.
+    for reverse in [false, true] {
+        let mut p = Pair::new()?;
+        let first = p.a.execute(&Request::new(rename(3, "one")))?;
+        let mut second = p.a.execute(&Request::new(rename(3, "two")))?;
+        second.id = first.id.clone();
+        let before = p.b.journal_len()?;
+        let order = if reverse {
+            [&second, &first]
+        } else {
+            [&first, &second]
+        };
+        for record in order {
+            p.b.receive(record)?;
+        }
+        assert_eq!(p.b.journal_len()?, before + 2);
+        assert_eq!(p.b.projection()?.entities[&id(3)].title, "two");
+        let flagged: Vec<_> =
+            p.b.inbox()?
+                .into_iter()
+                .filter(|e| e.record_id_conflict)
+                .collect();
+        assert_eq!(flagged.len(), 2);
+        assert!(flagged.iter().all(|e| e.status == Admission::Applied));
+    }
     Ok(())
 }
 

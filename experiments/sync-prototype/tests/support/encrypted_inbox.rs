@@ -1,9 +1,10 @@
 //! Bounded durable inbox: fixed trusted membership/writers, one route/document.
 //! The service cursor denotes retained bytes, never successful CRDT application.
 use crate::support::{hash, parse, Authority, Body, EpochKey, Hash, Id, Route};
-use loro::{EncodedBlobMode, ExportMode, Frontiers, LoroDoc, ID};
+use loro::{EncodedBlobMode, ExportMode, LoroDoc, ID};
 use matters_sync_prototype::{
-    has_user_schema, invalid as error, project_document, wire, Projection, Result,
+    causal_past_verdict, has_user_schema, invalid as error, project_document, wire, Projection,
+    Result,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::{
@@ -651,24 +652,12 @@ fn stage(doc: &LoroDoc, plain: &[u8], actor: u64) -> Result<Stage> {
     if staged.oplog_vv() != expected {
         return Ok(Stage::Rejected("actor-effects"));
     }
-    // Judge domain validity in the record's own causal past (everything its
-    // last operation depends on), never against concurrently applied records.
-    let past = staged.fork_at(&Frontiers::from_id(ID::new(actor, end - 1)))?;
-    let Ok(after) = project_document(&past) else {
-        return Ok(Stage::Rejected("domain-projection"));
-    };
-    // Merge repairs (conflict copies, duplicate Today entries) arise only from
-    // concurrency. A record may not introduce one in its own causal past: the
-    // same past without the record's operations is causally closed, since
-    // nothing else can depend on an unpublished record.
-    let mut before = past.oplog_vv();
-    before.set_end(ID::new(actor, start));
-    let prior = past.fork_at(&past.vv_to_frontiers(&before))?;
-    let Ok(prior) = project_document(&prior) else {
-        return Err(error("causal past without record does not project"));
-    };
-    if !after.repairs.is_subset(&prior.repairs) {
-        return Ok(Stage::Rejected("domain-repair"));
+    // Judge domain validity in the record's own causal past, never against
+    // concurrently applied records (shared with Replica).
+    if let Some(reason) =
+        causal_past_verdict(&staged, &meta.partial_start_vv, &meta.partial_end_vv)?
+    {
+        return Ok(Stage::Rejected(reason));
     }
     Ok(Stage::Ready(staged))
 }
