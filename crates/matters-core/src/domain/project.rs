@@ -51,7 +51,7 @@ impl Project {
     }
 }
 
-/// Represents the completed vs. total task count for rendering Things 3's circular progress ring.
+/// Completed vs. total task count, for rendering the project's circular progress ring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ProjectProgress {
     pub completed_tasks: usize,

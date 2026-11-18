@@ -8,7 +8,7 @@
 
 ## 1. Product Vision & Principles
 
-Matters is an uncompromising, first-class Linux recreation of the Things 3 experience. Linux task management has historically been divided between utilitarian TUIs/plain text (Org-mode, Taskwarrior) and heavy Electron web wrappers (Todoist, Super Productivity). Matters fills the void for an impeccably crafted, native desktop application prioritizing aesthetic calm, tactile feedback, and strict GTD discipline.
+Matters is a native Linux desktop task manager built around Getting Things Done (GTD). Linux users mostly choose between plain-text and terminal tools and cross-platform apps built on web technology. Matters is a carefully crafted native application that puts aesthetic calm, tactile feedback and strict GTD discipline first.
 
 ### Core Principles
 1. **Restraint over Configuration:** Prevent task bloat by enforcing a proven, finite hierarchy.

@@ -59,7 +59,7 @@ Item {
     readonly property color colSidebarActive: isDark ? "#2C2E33" : "#E2E4E8"
     readonly property color colTextPrimary: isDark ? "#F8F9FA" : "#1A1B1E"
     readonly property color colTextSecondary: isDark ? "#909296" : "#868E96"
-    readonly property color colAccent: "#228BE6" // Things 3 signature blue
+    readonly property color colAccent: "#228BE6"
     readonly property color colBorder: isDark ? "#2C2E33" : "#E9ECEF"
     readonly property color colCardBg: isDark ? "#202124" : "#FFFFFF"
     readonly property color colEvening: "#FAB005" // Warm gold for evening
@@ -637,7 +637,7 @@ Item {
                                     Layout.maximumHeight: 32
                                     spacing: 12
 
-                                    // Things-style Circular Checkbox
+                                    // Circular checkbox
                                     Rectangle {
                                         id: checkCircle
                                         objectName: "checkCircle"
