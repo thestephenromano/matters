@@ -1,5 +1,14 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, NaiveTime, TimeZone, Utc};
+use interim::Dialect;
 use serde::{Deserialize, Serialize};
+
+/// How numeric dates typed by the user are read: `12/24` is month first
+/// (US), `24/12` day first. Frontends choose it from the user's locale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateOrder {
+    MonthFirst,
+    DayFirst,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -50,6 +59,54 @@ impl Schedule {
         }
     }
 
+    /// Parse a "When" the user typed (#59): Matters' own words (`today`,
+    /// `tonight`, `evening`, `this evening`, `someday`), or a date phrase such
+    /// as `tomorrow`, `fri`, `in 3 days`, `dec 24` or `12/24`, read with the
+    /// `interim` crate relative to `today`. `order` says how numeric dates
+    /// like `12/24` are read.
+    ///
+    /// Anything that isn't clearly a day is refused (`None`), never guessed:
+    /// unknown words, dates before `today`, and phrases with a time of day
+    /// (times belong to reminders, #60). A date phrase meaning `today` is
+    /// Today. Case and extra spaces don't matter.
+    ///
+    /// On top of `interim`: `in 3 days` is read as `3 days`, and a month and
+    /// day without a year (`jan 5`, `1/5`) that has passed this year means
+    /// next year. A weekday names the coming one, or today on that weekday.
+    pub fn parse_typed(input: &str, today: NaiveDate, order: DateOrder) -> Option<Schedule> {
+        let text = input.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        match text.as_str() {
+            "" => return None,
+            "today" => return Some(Schedule::Today { evening: false }),
+            "tonight" | "evening" | "this evening" => return Some(Schedule::Today { evening: true }),
+            "someday" => return Some(Schedule::Someday),
+            _ => {}
+        }
+        // `interim` reads "3 days" but not "in 3 days".
+        let text = match text.strip_prefix("in ") {
+            Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => rest.to_string(),
+            _ => text,
+        };
+        let midnight = Utc.from_utc_datetime(&today.and_time(NaiveTime::MIN));
+        let dialect = match order {
+            DateOrder::MonthFirst => Dialect::Us,
+            DateOrder::DayFirst => Dialect::Uk,
+        };
+        let parsed = interim::parse_date_string(&text, midnight, dialect).ok()?;
+        if parsed.time() != NaiveTime::MIN {
+            return None; // a time of day
+        }
+        let mut date = parsed.date_naive();
+        if date < today && names_a_day_of_the_year(&text) {
+            date = date.with_year(date.year() + 1)?; // "jan 5" in November
+        }
+        match date.cmp(&today) {
+            std::cmp::Ordering::Less => None,
+            std::cmp::Ordering::Equal => Some(Schedule::Today { evening: false }),
+            std::cmp::Ordering::Greater => Some(Schedule::Date(date)),
+        }
+    }
+
     pub fn is_someday(&self) -> bool {
         matches!(self, Schedule::Someday)
     }
@@ -66,4 +123,25 @@ impl Schedule {
             Schedule::None => (None, None, false),
         }
     }
+}
+
+/// Whether `text` names a day of the year without a year: it contains a
+/// month name (`jan 5`, `5 january`) or is a numeric `month/day` pair. Such a
+/// day is the next one to come, unlike relative phrases (`yesterday`,
+/// `last friday`), which keep their meaning.
+fn names_a_day_of_the_year(text: &str) -> bool {
+    const MONTHS: [&str; 12] = [
+        "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+        "november", "december",
+    ];
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let month_name = tokens.iter().any(|t| {
+        let word = t.trim_matches(|c: char| !c.is_alphabetic());
+        word.len() >= 3 && MONTHS.iter().any(|m| m.starts_with(word))
+    });
+    let numeric_pair = tokens.len() == 1 && {
+        let parts: Vec<&str> = tokens[0].split(['/', '.', '-']).collect();
+        parts.len() == 2 && parts.iter().all(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
+    };
+    month_name || numeric_pair
 }
