@@ -118,6 +118,10 @@ pub mod qobject {
         fn schedule_task(self: Pin<&mut AppController>, task_id: &QString, when: &QString);
         #[qinvokable]
         fn update_task_notes(self: Pin<&mut AppController>, task_id: &QString, notes: &QString);
+        /// Rename a task. Returns false, changing nothing, when the title is
+        /// blank (`Database::rename_task`); the field then shows the old title.
+        #[qinvokable]
+        fn rename_task(self: Pin<&mut AppController>, task_id: &QString, title: &QString) -> bool;
         #[qinvokable]
         fn create_project(self: Pin<&mut AppController>, title: &QString);
         /// Navigate to the view that contains the task (`View::containing`).
@@ -315,12 +319,10 @@ impl qobject::AppController {
 
     /// Capture a task in the current view (placement rules: `View::new_task`).
     pub fn add_task(self: Pin<&mut Self>, title: &QString) -> QString {
-        let title = String::from(title).trim().to_string();
-        if title.is_empty() {
+        let title = String::from(title);
+        let Some(mut task) = self.view.new_task(Uuid::new_v4().to_string(), &title, local_today()) else {
+            // A blank title, or the Logbook or the Trash.
             return QString::default();
-        }
-        let Some(mut task) = self.view.new_task(Uuid::new_v4().to_string(), title, local_today()) else {
-            return QString::default(); // the Logbook and the Trash take no new tasks
         };
         let result = self.db.add_task(&mut task);
         let id = if result.is_ok() { QString::from(task.id.as_str()) } else { QString::default() };
@@ -432,6 +434,17 @@ impl qobject::AppController {
             task.apply_schedule(&schedule, local_today())
         });
         self.finish(result);
+    }
+
+    pub fn rename_task(self: Pin<&mut Self>, task_id: &QString, title: &QString) -> bool {
+        let title = String::from(title);
+        if matters_core::Task::clean_title(&title).is_none() {
+            return false;
+        }
+        let result = self.db.rename_task(&String::from(task_id), &title);
+        let renamed = result.is_ok();
+        self.finish(result);
+        renamed
     }
 
     pub fn update_task_notes(self: Pin<&mut Self>, task_id: &QString, notes: &QString) {

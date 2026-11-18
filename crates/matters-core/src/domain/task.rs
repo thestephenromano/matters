@@ -57,6 +57,14 @@ impl Task {
         }
     }
 
+    /// A title as stored: line breaks, tabs and runs of spaces become single
+    /// spaces, and the ends are trimmed. `None` when nothing is left: a task
+    /// always has a visible title.
+    pub fn clean_title(raw: &str) -> Option<String> {
+        let title = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!title.is_empty()).then_some(title)
+    }
+
     pub fn is_trashed(&self) -> bool {
         self.trashed_at.is_some()
     }
