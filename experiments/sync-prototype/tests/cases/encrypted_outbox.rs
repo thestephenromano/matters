@@ -888,6 +888,11 @@ fn review_foreign_database_names_are_all_counted() -> TestResult<()> {
             "foreign table {name}"
         );
         assert_eq!(
+            conn.query_row(&format!("SELECT value FROM {name}"), [], |r| r
+                .get::<_, String>(0))?,
+            "keep"
+        );
+        assert_eq!(
             conn.query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table'",
                 [],
