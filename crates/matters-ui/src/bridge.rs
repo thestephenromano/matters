@@ -95,6 +95,11 @@ pub mod qobject {
         /// first when `after_id` is empty (drag and drop).
         #[qinvokable]
         fn place_task(self: Pin<&mut AppController>, task_id: &QString, after_id: &QString);
+        /// Put a Today task in the daytime tasks or This Evening (`evening`),
+        /// after `after_id` within that section, or first when it is empty.
+        /// Changing section switches This Evening (drag and drop in Today).
+        #[qinvokable]
+        fn place_today_task(self: Pin<&mut AppController>, task_id: &QString, evening: bool, after_id: &QString);
         /// Move a project in the sidebar so it follows `after_id`, or comes
         /// first when `after_id` is empty.
         #[qinvokable]
@@ -347,6 +352,21 @@ impl qobject::AppController {
             &self.view,
             self.day.day(),
             &String::from(task_id),
+            (!after.is_empty()).then_some(after.as_str()),
+        );
+        self.finish(result);
+    }
+
+    pub fn place_today_task(self: Pin<&mut Self>, task_id: &QString, evening: bool, after_id: &QString) {
+        if self.view != View::Today {
+            return;
+        }
+        let after = String::from(after_id);
+        let result = matters_core::ordering::place_in_today(
+            &self.db,
+            self.day.day(),
+            &String::from(task_id),
+            evening,
             (!after.is_empty()).then_some(after.as_str()),
         );
         self.finish(result);

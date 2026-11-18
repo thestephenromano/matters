@@ -89,6 +89,8 @@ Item {
         // before the next frame is drawn, so the row's full height is only
         // known once a frame has gone by; a real user can't click sooner.
         function expandRow(row) {
+            // A user scrolls a row into view before clicking it.
+            list.positionViewAtIndex(indexOf(row.title), ListView.Contain);
             settle();
             clickRowBody(row);
             verify(row.isExpanded);
@@ -387,28 +389,94 @@ Item {
                 compare(list.model.idAt(i), order[i], "unchanged");
         }
 
-        function test_dragging_keeps_this_evening_apart() {
-            const day = addToToday("day-task");
-            controller.selectView("today");
-            view.captureTask("eve-task");
-            waitForRow("eve-task");
-            controller.scheduleTask(rowFor("eve-task").taskId, "evening");
-            tryVerify(() => indexOf("eve-task") > indexOf("day-task"), 2000);
+        // Today with one more daytime task and two evening tasks at the end:
+        // the reported case, where the daytime task could not be moved.
+        function eveningFixture(prefix) {
+            addToToday(prefix + "-anchor");
+            const day = addToToday(prefix + "-day");
+            for (const name of [prefix + "-e1", prefix + "-e2"]) {
+                view.captureTask(name);
+                waitForRow(name);
+                controller.scheduleTask(rowFor(name).taskId, "evening");
+            }
+            tryVerify(() => indexOf(prefix + "-e2") === list.count - 1
+                      && indexOf(prefix + "-e1") === list.count - 2, 2000, "evening tasks last");
             settle();
+            return day;
+        }
 
-            // Drag the daytime task onto the middle of the evening one.
-            const eve = rowFor("eve-task");
-            const to = eve.mapToItem(view, eve.width / 2, eve.height - 6);
-            const before = indexOf("day-task");
+        function clearEvening(prefix) {
+            for (const name of [prefix + "-anchor", prefix + "-day", prefix + "-e1", prefix + "-e2"]) {
+                const row = rowFor(name);
+                if (row)
+                    controller.scheduleTask(row.taskId, "someday");
+            }
+            waitForNoRow(prefix + "-e2");
+        }
+
+        // Section headings are children of the list's content item, which
+        // findChild does not search. The list may still hold a heading it is
+        // about to recycle, so callers look for one in the right place.
+        function eveningHeadings() {
+            const found = [];
+            for (const child of list.contentItem.children) {
+                if (child.objectName === "eveningHeading" && child.visible)
+                    found.push(child);
+            }
+            return found;
+        }
+
+        function test_today_shows_a_this_evening_heading() {
+            eveningFixture("head");
+            const day = rowFor("head-day");
+            const e1 = rowFor("head-e1");
+            tryVerify(() => eveningHeadings().some(h => h.y > day.y && h.y < e1.y), 2000,
+                      "a This Evening heading between the daytime and evening tasks");
+            clearEvening("head");
+            controller.selectView("inbox");
+            tryVerify(() => eveningHeadings().length === 0, 2000, "no heading outside Today");
+        }
+
+        function test_ctrl_down_moves_the_last_daytime_task_into_this_evening() {
+            const day = eveningFixture("cross");
+            list.selectedTaskId = day.taskId;
+            list.forceActiveFocus();
+
+            keyClick(Qt.Key_Down, Qt.ControlModifier);
+            tryVerify(() => day.evening, 2000, "now scheduled for This Evening");
+            compare(indexOf("cross-day"), indexOf("cross-e1") - 1, "at the top of This Evening");
+            keyClick(Qt.Key_Down, Qt.ControlModifier);
+            tryVerify(() => indexOf("cross-day") === indexOf("cross-e1") + 1, 2000, "and on down through it");
+
+            keyClick(Qt.Key_Up, Qt.ControlModifier);
+            keyClick(Qt.Key_Up, Qt.ControlModifier);
+            tryVerify(() => !day.evening, 2000, "back among the daytime tasks");
+            compare(list.selectedTaskId, day.taskId, "still selected");
+            clearEvening("cross");
+        }
+
+        function test_dragging_into_this_evening_moves_the_task_there() {
+            const day = eveningFixture("dnd");
+            // Bring the evening tasks into view, as a user would scroll.
+            list.positionViewAtIndex(indexOf("dnd-e2"), ListView.Contain);
+            settle();
+            // Drop on the lower half of the first evening task.
+            const e1 = rowFor("dnd-e1");
+            const to = e1.mapToItem(view, e1.width / 2, e1.height - 6);
             dragGripTo(findChild(day, "dragGrip"), to,
-                       () => verify(!findChild(view, "dropIndicator").visible, "no slot among evening tasks"));
-            wait(100);
-            compare(indexOf("day-task"), before, "the daytime task stays among daytime tasks");
-            compare(controller.errorMessage, "");
+                       () => verify(findChild(view, "dropIndicator").visible, "a slot is offered"));
+            tryVerify(() => day.evening && indexOf("dnd-day") === indexOf("dnd-e1") + 1, 2000,
+                      "after dnd-e1, in This Evening");
 
-            // Leave Today without an evening task: later tests select its last row.
-            controller.scheduleTask(rowFor("eve-task").taskId, "someday");
-            waitForNoRow("eve-task");
+            // And back: onto the lower half of the last daytime task.
+            settle();
+            const lastDay = rowFor("dnd-anchor");
+            const back = lastDay.mapToItem(view, lastDay.width / 2, lastDay.height - 6);
+            dragGripTo(findChild(day, "dragGrip"), back);
+            tryVerify(() => !day.evening && indexOf("dnd-day") === indexOf("dnd-anchor") + 1, 2000,
+                      "back among the daytime tasks, after dnd-anchor");
+            compare(controller.errorMessage, "");
+            clearEvening("dnd");
         }
 
         function test_no_grip_where_the_list_has_its_own_order() {
@@ -452,6 +520,53 @@ Item {
             }
             controller.selectView("inbox");
             verify(bar.visible, "the field is back in the Inbox");
+        }
+
+        // Reorder the top task of a short, fresh list (issue report: with three
+        // tasks, the one on top could not be reordered).
+        function openFreshProject(name, titles) {
+            controller.createProject(name);
+            const id = JSON.parse(controller.projectsJson).find(p => p.title === name).id;
+            controller.selectProject(id);
+            for (const t of titles)
+                view.captureTask(t);
+            waitForRow(titles[titles.length - 1]);
+            settle();
+        }
+
+        function titlesInOrder() {
+            const out = [];
+            for (let i = 0; i < list.count; ++i)
+                out.push(list.model.titleAt(i));
+            return out.join(",");
+        }
+
+        function test_top_task_moves_down_with_ctrl_down() {
+            openFreshProject("top-keys", ["t1", "t2", "t3"]);
+            focusList();
+            keyClick(Qt.Key_Down);
+            compare(selectedTitle(), "t1");
+            keyClick(Qt.Key_Down, Qt.ControlModifier);
+            tryVerify(() => titlesInOrder() === "t2,t1,t3", 2000, "t1 moved down: " + titlesInOrder());
+        }
+
+        function test_top_task_moves_down_by_dragging() {
+            openFreshProject("top-drag", ["d1", "d2", "d3"]);
+            const top = rowFor("d1");
+            const last = rowFor("d3");
+            // Drop below the middle of the last row: d1 goes to the end.
+            const to = last.mapToItem(view, last.width / 2, last.height - 6);
+            dragGripTo(findChild(top, "dragGrip"), to,
+                       () => verify(findChild(view, "dropIndicator").visible, "a slot is offered"));
+            tryVerify(() => titlesInOrder() === "d2,d3,d1", 2000, "d1 moved to the end: " + titlesInOrder());
+
+            // And from the top to the middle.
+            settle();
+            const nowTop = rowFor("d2");
+            const mid = rowFor("d3");
+            const to2 = mid.mapToItem(view, mid.width / 2, mid.height - 6);
+            dragGripTo(findChild(nowTop, "dragGrip"), to2);
+            tryVerify(() => titlesInOrder() === "d3,d2,d1", 2000, "d2 moved below d3: " + titlesInOrder());
         }
 
         function test_ctrl_s_opens_the_when_menu_for_the_selection() {
