@@ -10,8 +10,8 @@ From the repository root:
 
 ```sh
 export CARGO_TARGET_DIR="$PWD/target/sync-prototype"
-cargo test --manifest-path experiments/sync-prototype/Cargo.toml --locked --features crypto-probe
-cargo clippy --manifest-path experiments/sync-prototype/Cargo.toml --locked --all-targets --features crypto-probe -- -D warnings
+cargo test --manifest-path experiments/sync-prototype/Cargo.toml --locked --features crypto-probe,record-contract
+cargo clippy --manifest-path experiments/sync-prototype/Cargo.toml --locked --all-targets --features crypto-probe,record-contract -- -D warnings
 cargo fmt --manifest-path experiments/sync-prototype/Cargo.toml --check
 ```
 
@@ -71,3 +71,9 @@ Keep #32/#33/#35/#36 open. Reconcile the final ordering changes; complete missin
 ## Review assurance
 
 [The review record](REVIEW.md) maps the reported findings to their owning invariants, regression evidence and remaining limits. No production encryption or authenticated-device claim follows from these local persistence corrections.
+
+## Content-record contract experiment
+
+The opt-in `record-contract` feature exposes a bounded minicbor adapter for the [experimental content-record contract](../../docs/SYNC_RECORD_CONTRACT.md). It is not connected to the replica journal or the application. `wire::parse` returns structural validity only; membership, signature, epoch/actor/chain admission, AEAD and domain validation remain mandatory downstream gates. Snapshot bytes are defined, but authoritative snapshot import still requires authenticated coverage.
+
+[Golden fixtures](tests/vectors/record-contract/README.md) compare exact CBOR transcripts with Python cbor2, validate the CDDL shape through cddl-cat/Ciborium, and cross-check HKDF/AES bytes with Python cryptography. Signature tests use the selected ML-DSA provider and public synthetic keys; they do not establish independent signature or hybrid HPKE interoperability.

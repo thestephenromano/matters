@@ -17,9 +17,13 @@ hpke-rs = { version = "=0.8.0", default-features = false, features = ["std", "li
 hpke-rs-crypto = { version = "=0.8.0", optional = true }
 hpke-rs-libcrux = { version = "=0.8.0", default-features = false, features = ["std", "sys-rng", "draft-ietf-hpke-pq"], optional = true }
 libcrux-ml-dsa = { version = "=0.0.11", default-features = false, features = ["std", "mldsa65"], optional = true }
+minicbor = { version = "=2.3.1", default-features = false, features = ["std"], optional = true }
 
 [features]
 crypto-probe = ["dep:hpke-rs", "dep:hpke-rs-crypto", "dep:hpke-rs-libcrux", "dep:libcrux-ml-dsa"]
+record-contract = ["dep:minicbor"]
 
 [dev-dependencies]
+cddl-cat = { version = "=0.7.1", default-features = false, features = ["ciborium"] }
+sha2 = "=0.11.1"
 tempfile = "3"
