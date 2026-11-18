@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
-use chrono::NaiveDate;
+use std::collections::{BTreeMap, HashMap};
+use chrono::{NaiveDate, TimeZone};
 use rusqlite::params;
 
 use crate::domain::{Area, Project, ProjectProgress, Task, View};
@@ -205,9 +205,86 @@ impl<'a> QueryEngine<'a> {
             .collect())
     }
 
+    /// Anytime, grouped (#25): each area in sidebar order with its own tasks
+    /// first and then its projects' tasks, project by project; then projects
+    /// with no area. Within a group, the manual order is kept.
     pub fn anytime(&self, reference_date: NaiveDate) -> Result<Vec<Task>> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
-        self.select_live(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])
+        let mut tasks = self.select_live(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])?;
+        let areas: HashMap<String, Area> = self.db.list_areas()?.into_iter().map(|a| (a.id.clone(), a)).collect();
+        let projects: HashMap<String, Project> =
+            self.db.list_projects()?.into_iter().map(|p| (p.id.clone(), p)).collect();
+        // (no area?, area order, area id, in a project?, project order, project id)
+        let group = |task: &Task| {
+            let project = task.project_id.as_ref().and_then(|id| projects.get(id));
+            let area_id = project.and_then(|p| p.area_id.clone()).or_else(|| task.area_id.clone());
+            let area = area_id.as_ref().and_then(|id| areas.get(id));
+            (
+                area.is_none(),
+                area.map_or(0.0, |a| a.sort_order),
+                area.map_or(String::new(), |a| a.id.clone()),
+                project.is_some(),
+                project.map_or(0.0, |p| p.sort_order),
+                project.map_or(String::new(), |p| p.id.clone()),
+            )
+        };
+        // Stable: the manual order survives within each group.
+        tasks.sort_by(|a, b| {
+            let (ga, gb) = (group(a), group(b));
+            ga.0.cmp(&gb.0)
+                .then(ga.1.total_cmp(&gb.1))
+                .then(ga.2.cmp(&gb.2))
+                .then(ga.3.cmp(&gb.3))
+                .then(ga.4.total_cmp(&gb.4))
+                .then(ga.5.cmp(&gb.5))
+        });
+        Ok(tasks)
+    }
+
+    /// The section each listed task belongs to in `view` (#25), as a key the
+    /// frontends turn into a heading; consecutive rows with the same key form
+    /// one section, and an empty key has no heading.
+    ///
+    /// * Today: `evening` for This Evening.
+    /// * Upcoming: `date:YYYY-MM-DD`, the start date.
+    /// * Anytime: `project:<id>:<title>` or `area:<id>:<title>`.
+    /// * Logbook: `done:YYYY-MM-DD`, the local day it was finished
+    ///   (`done:` when unknown).
+    ///
+    /// Dates are left for the frontend to format in the user's locale.
+    pub fn section_keys(&self, view: &View, tasks: &[Task]) -> Result<Vec<String>> {
+        Ok(match view {
+            View::Today => tasks.iter().map(|t| if t.is_evening() { "evening".into() } else { String::new() }).collect(),
+            View::Upcoming => tasks
+                .iter()
+                .map(|t| t.start_date.map_or(String::new(), |d| format!("date:{d}")))
+                .collect(),
+            View::Anytime => {
+                let areas: HashMap<String, String> =
+                    self.db.list_areas()?.into_iter().map(|a| (a.id, a.title)).collect();
+                let projects: HashMap<String, String> =
+                    self.db.list_projects()?.into_iter().map(|p| (p.id, p.title)).collect();
+                tasks
+                    .iter()
+                    .map(|t| match (&t.project_id, &t.area_id) {
+                        (Some(id), _) => projects.get(id).map_or(String::new(), |title| format!("project:{id}:{title}")),
+                        (None, Some(id)) => areas.get(id).map_or(String::new(), |title| format!("area:{id}:{title}")),
+                        (None, None) => String::new(),
+                    })
+                    .collect()
+            }
+            View::Logbook => tasks
+                .iter()
+                .map(|t| {
+                    let day = t
+                        .completed_at
+                        .and_then(|ms| chrono::Local.timestamp_millis_opt(ms).single())
+                        .map(|at| at.date_naive().to_string());
+                    format!("done:{}", day.unwrap_or_default())
+                })
+                .collect(),
+            View::Inbox | View::Someday | View::Trash | View::Project(_) => vec![String::new(); tasks.len()],
+        })
     }
 
     pub fn someday_tasks(&self) -> Result<Vec<Task>> {

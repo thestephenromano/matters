@@ -295,7 +295,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 
 - [x] **Done:** local SQLite persistence with WAL mode.
 - [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app shows projects and tasks; areas (#15), headings (#22) and checklists (#21) have no interface yet.
-- [ ] **Partly:** core views Inbox, Today, Upcoming, Anytime, Someday, Logbook and Trash all exist. Each is one flat list; the This Evening section, date groups in Upcoming, area and project groups in Anytime, and date groups in the Logbook are missing (#25).
+- [x] **Done:** core views Inbox, Today (with a This Evening section), Upcoming (grouped by day), Anytime (grouped by area and project), Someday, Logbook (grouped by the day tasks were finished) and Trash.
 - [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
 - [ ] **Partly:** inline task expansion. Title, notes and When are edited in place; checklists aren't shown (#21).
 - [ ] **Partly:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find and `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) work. Missing: `Ctrl+Shift+M` (#19, with #54).

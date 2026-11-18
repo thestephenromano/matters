@@ -883,6 +883,57 @@ Item {
             verify(!findChild(t.row, "deadlineBadge").visible);
         }
 
+        // ---- Sections (#25) ---------------------------------------------------
+
+        // The visible heading titled `title`, if the list shows one.
+        function headingTitled(title) {
+            for (const child of list.contentItem.children) {
+                if ((child.objectName === "sectionHeading" || child.objectName === "eveningHeading")
+                        && child.visible && child.title === title)
+                    return child;
+            }
+            return null;
+        }
+
+        // The nearest heading above the row of `task` is `title`: the task is
+        // in that section, wherever it sits within it.
+        function headedBy(task, title) {
+            const row = waitForRow(task);
+            tryVerify(() => headingTitled(title) !== null, 2000, "a heading '" + title + "'");
+            let nearest = null;
+            for (const child of list.contentItem.children) {
+                if ((child.objectName === "sectionHeading" || child.objectName === "eveningHeading")
+                        && child.visible && child.y < row.y && (nearest === null || child.y > nearest.y))
+                    nearest = child;
+            }
+            verify(nearest !== null, "'" + task + "' has a heading above it");
+            compare(nearest.title, title, "'" + task + "' sits under '" + title + "'");
+        }
+
+        function test_upcoming_is_grouped_by_day() {
+            controller.selectView("upcoming");
+            view.captureTask("up-tomorrow"); // captured in Upcoming: tomorrow
+            waitForRow("up-tomorrow");
+            headedBy("up-tomorrow", "Tomorrow");
+        }
+
+        function test_anytime_is_grouped_by_project() {
+            controller.createProject("Grouped");
+            const id = JSON.parse(controller.projectsJson).find(p => p.title === "Grouped").id;
+            controller.selectProject(id);
+            view.captureTask("in-grouped");
+            waitForRow("in-grouped");
+            controller.selectView("anytime");
+            headedBy("in-grouped", "📁 Grouped");
+        }
+
+        function test_the_logbook_is_grouped_by_day() {
+            const row = addToToday("finish-me");
+            controller.toggleTask(row.taskId);
+            controller.selectView("logbook");
+            headedBy("finish-me", "Today");
+        }
+
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {
             focusList();
             keyClick(Qt.Key_N, Qt.ControlModifier);
