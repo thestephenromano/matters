@@ -9,7 +9,8 @@ require_tool git
 require_tool shellcheck "dnf install ShellCheck"
 
 group "tracked files that should be ignored"
-ignored="$(git ls-files --cached --ignored --exclude-standard)"
+ignored="$(git ls-files --cached --ignored --exclude-standard)" \
+    || cannot_run "git could not read the index (in a container, is the checkout a safe.directory?)"
 if [ -n "$ignored" ]; then
     echo "$ignored"
     refuse "tracked files match .gitignore; remove them from the index or fix .gitignore"

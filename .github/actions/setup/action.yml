@@ -13,6 +13,11 @@ inputs:
 runs:
   using: composite
   steps:
+    # The checkout belongs to another user than the container's root, and
+    # actions/checkout trusts it only during its own step.
+    - name: Trust the checkout for git
+      shell: bash
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
     - name: Install system packages
       shell: bash
       run: bash ci/fedora-deps.sh ${{ inputs.deps-args }}
