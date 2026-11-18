@@ -71,8 +71,15 @@ pub mod qobject {
         fn add_task(self: Pin<&mut AppController>, title: &QString);
         #[qinvokable]
         fn toggle_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Move a task to the Trash (recoverable until the Trash is emptied).
         #[qinvokable]
-        fn delete_task(self: Pin<&mut AppController>, task_id: &QString);
+        fn trash_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Put a trashed task back where it was.
+        #[qinvokable]
+        fn restore_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Permanently delete every task in the Trash.
+        #[qinvokable]
+        fn empty_trash(self: Pin<&mut AppController>);
         #[qinvokable]
         fn schedule_task(self: Pin<&mut AppController>, task_id: &QString, when: &QString);
         #[qinvokable]
@@ -279,8 +286,18 @@ impl qobject::AppController {
         self.finish(result);
     }
 
-    pub fn delete_task(self: Pin<&mut Self>, task_id: &QString) {
-        let result = self.db.delete_task(&String::from(task_id));
+    pub fn trash_task(self: Pin<&mut Self>, task_id: &QString) {
+        let result = self.db.trash_task(&String::from(task_id));
+        self.finish(result);
+    }
+
+    pub fn restore_task(self: Pin<&mut Self>, task_id: &QString) {
+        let result = self.db.restore_task(&String::from(task_id));
+        self.finish(result);
+    }
+
+    pub fn empty_trash(self: Pin<&mut Self>) {
+        let result = self.db.empty_trash().map(drop);
         self.finish(result);
     }
 

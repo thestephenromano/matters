@@ -108,13 +108,50 @@ Item {
             verify(!row.isExpanded);
         }
 
-        function test_delete_button_deletes_the_task() {
+        function test_delete_button_moves_the_task_to_the_trash() {
             const row = addToToday("delete-me");
             mouseMove(row, row.width / 2, 24);
             const button = findChild(row, "deleteButton");
             tryVerify(() => button.visible, 1000, "delete button shows on hover");
             mouseClick(button);
             waitForNoRow("delete-me");
+
+            controller.selectView("trash");
+            const trashed = waitForRow("delete-me");
+            verify(!findChild(trashed, "deleteButton").visible, "no delete button in the Trash");
+            mouseClick(findChild(trashed, "restoreButton"));
+            waitForNoRow("delete-me");
+
+            controller.selectView("today");
+            waitForRow("delete-me");
+        }
+
+        function test_empty_trash_asks_before_deleting_for_good() {
+            addToToday("doomed");
+            controller.trashTask(rowFor("doomed").taskId);
+            controller.selectView("trash");
+            waitForRow("doomed");
+
+            const button = findChild(view, "emptyTrashButton");
+            const dialog = findChild(view, "emptyTrashDialog");
+            verify(button.visible);
+
+            // Cancelling keeps the Trash as it was.
+            mouseClick(button);
+            tryVerify(() => dialog.opened, 1000, "confirmation opens");
+            mouseClick(findChild(dialog.footer, "cancelEmptyTrash"));
+            tryVerify(() => !dialog.visible, 1000);
+            verify(rowFor("doomed") !== null, "cancel keeps the task");
+
+            mouseClick(button);
+            tryVerify(() => dialog.opened, 1000);
+            mouseClick(findChild(dialog.footer, "confirmEmptyTrash"));
+            waitForNoRow("doomed");
+            tryVerify(() => !button.visible, 1000, "nothing left to empty");
+            // The modal dialog takes key presses until its close transition
+            // ends; later tests need the window back.
+            tryVerify(() => !dialog.visible, 1000, "confirmation closes");
+            tryVerify(() => list.activeFocus, 1000, "focus goes to the list, not the hidden button");
         }
 
         function test_when_button_reschedules_the_task() {
@@ -160,7 +197,7 @@ Item {
             mouseClick(notes);
             verify(notes.activeFocus);
 
-            controller.deleteTask(above.taskId); // a row above disappears
+            controller.trashTask(above.taskId); // a row above disappears
             waitForNoRow("focus-a");
             wait(50);
             const f = testCase.Window.window.activeFocusItem;

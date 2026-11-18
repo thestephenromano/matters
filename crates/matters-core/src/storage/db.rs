@@ -5,7 +5,12 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
 use crate::error::{MattersError, Result};
-use super::schema::SCHEMA_V1;
+use super::schema::{MIGRATION_V2, SCHEMA_V1};
+
+/// Columns read by [`Database::map_task_row`], in its expected order.
+pub(crate) const TASK_COLUMNS: &str = "id, area_id, project_id, heading_id, title, notes, start_date,
+     time_of_day, is_someday, deadline, status, completed_at, sort_order,
+     created_at, updated_at, trashed_at";
 
 #[derive(Clone)]
 pub struct Database {
@@ -54,15 +59,25 @@ impl Database {
     }
 
     fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
         conn.execute_batch(SCHEMA_V1)?;
-
-        // Ensure initial migration record
+        let now = chrono::Utc::now().timestamp_millis();
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?1)",
-            params![chrono::Utc::now().timestamp_millis()],
+            params![now],
         )?;
 
+        let version: i64 =
+            conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))?;
+        if version < 2 {
+            let tx = conn.transaction()?;
+            tx.execute_batch(MIGRATION_V2)?;
+            tx.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?1)",
+                params![now],
+            )?;
+            tx.commit()?;
+        }
         Ok(())
     }
 
@@ -273,8 +288,8 @@ impl Database {
             "INSERT INTO tasks (
                 id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                created_at, updated_at, trashed_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 task.id,
                 task.area_id,
@@ -291,6 +306,7 @@ impl Database {
                 task.sort_order,
                 task.created_at,
                 task.updated_at,
+                task.trashed_at,
             ],
         )?;
         Ok(())
@@ -298,16 +314,14 @@ impl Database {
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                    time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                    created_at, updated_at
-             FROM tasks WHERE id = ?1",
-        )?;
+        let mut stmt = conn.prepare(&format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"))?;
         let task = stmt.query_row(params![id], Self::map_task_row).optional()?;
         Ok(task)
     }
 
+    /// Write the task's editable fields. Trash state is not one of them: it
+    /// changes only through [`Self::trash_task`] and [`Self::restore_task`],
+    /// so saving a stale copy can neither trash nor resurrect a task.
     pub fn update_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();
@@ -361,10 +375,36 @@ impl Database {
         Ok(())
     }
 
-    pub fn delete_task(&self, id: &str) -> Result<()> {
+    /// Move a task to the Trash. It keeps its status and place, and leaves
+    /// every view except the Trash until it is put back. Trashing a task that
+    /// is already in the Trash leaves its original trash time.
+    pub fn trash_task(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE tasks SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
+            params![now, id],
+        )?;
         Ok(())
+    }
+
+    /// Put a trashed task back where it was.
+    pub fn restore_task(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE tasks SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
+            params![now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Permanently delete every task in the Trash, with their checklist items
+    /// and tags. This is the only way a task is destroyed. Returns how many
+    /// tasks were deleted.
+    pub fn empty_trash(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute("DELETE FROM tasks WHERE trashed_at IS NOT NULL", [])?)
     }
 
     // =========================================================================
@@ -504,6 +544,7 @@ impl Database {
             sort_order: row.get(12)?,
             created_at: row.get(13)?,
             updated_at: row.get(14)?,
+            trashed_at: row.get(15)?,
         })
     }
 

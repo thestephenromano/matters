@@ -23,7 +23,7 @@ fn view_keys_round_trip() {
     }
     assert_eq!(View::from_key("project", None), None);
     assert_eq!(View::from_key("project", Some("")), None);
-    assert_eq!(View::from_key("trash", None), None);
+    assert_eq!(View::from_key("archive", None), None);
 }
 
 #[test]
@@ -36,11 +36,11 @@ fn captured_task_lands_where_the_view_says() {
         let task = view.new_task(format!("t-{}", view.key()), "captured", today());
         db.create_task(&task).unwrap();
 
-        // Anytime lists only area/project tasks and the Logbook only finished
-        // ones, so captures there are filed in the Inbox; every other view
-        // shows the task it was typed into.
+        // Anytime lists only area/project tasks, the Logbook only finished
+        // ones and the Trash only trashed ones, so captures there are filed in
+        // the Inbox; every other view shows the task it was typed into.
         let expected_home = match view {
-            View::Anytime | View::Logbook => View::Inbox,
+            View::Anytime | View::Logbook | View::Trash => View::Inbox,
             ref other => other.clone(),
         };
         let listed = engine.tasks_in(&expected_home, today()).unwrap();
@@ -124,9 +124,10 @@ fn counts_match_listed_tasks() {
     let done = add(&|t| t.project_id = Some("p1".into()));
     db.complete_task(&done.id).unwrap(); // logbook
     let trashed = add(&|t| t.project_id = Some("p1".into()));
-    let mut trashed = db.get_task(&trashed.id).unwrap().unwrap();
-    trashed.status = Status::Trashed;
-    db.update_task(&trashed).unwrap(); // nowhere
+    db.trash_task(&trashed.id).unwrap(); // trash only
+    let trashed_done = add(&|t| t.start_date = Some(today()));
+    db.complete_task(&trashed_done.id).unwrap();
+    db.trash_task(&trashed_done.id).unwrap(); // trash only, not the logbook
 
     let counts = engine.counts(today()).unwrap();
     let len = |v: View| engine.tasks_in(&v, today()).unwrap().len();
@@ -144,7 +145,8 @@ fn counts_match_listed_tasks() {
     // The project view lists open and completed tasks, never trashed ones.
     let project = engine.tasks_in(&View::Project("p1".into()), today()).unwrap();
     assert_eq!(project.len(), 3);
-    assert!(project.iter().all(|t| t.status != Status::Trashed));
+    assert!(project.iter().all(|t| !t.is_trashed()));
+    assert_eq!(len(View::Trash), 2);
 }
 
 #[test]
@@ -195,6 +197,12 @@ fn containing_view_lists_the_task() {
             t.is_someday = true;
         })),
         ("done", Box::new(|t| t.status = Status::Completed)),
+        ("trashed", Box::new(|t| t.trashed_at = Some(1))),
+        ("trashed project done", Box::new(|t| {
+            t.project_id = Some("p1".into());
+            t.status = Status::Completed;
+            t.trashed_at = Some(1);
+        })),
     ];
 
     for (name, setup) in setups {

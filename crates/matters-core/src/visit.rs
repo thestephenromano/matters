@@ -5,7 +5,7 @@
 //! whose completion status changes while the view is open stays in place,
 //! with its new status, until the user leaves the view (SPEC §3, "Completing
 //! a task"). Any other change that removes a task from the view, such as
-//! rescheduling or deleting it, takes effect immediately.
+//! rescheduling, trashing or putting it back, takes effect immediately.
 
 use std::collections::HashSet;
 
@@ -65,6 +65,9 @@ impl Visit {
             let Some(current) = lookup(&old.id)? else {
                 continue; // deleted
             };
+            if current.is_trashed() != old.is_trashed() {
+                continue; // trashed or put back: always takes effect
+            }
             if !(self.kept.contains(&old.id) || current.status != old.status) {
                 continue; // left the view for another reason
             }

@@ -102,7 +102,7 @@ fn add_task(ui: &Rc<Ui>, title: &str) {
 }
 
 fn activate_nav(ui: &Ui, view: &View) {
-    let index = View::sidebar().iter().position(|v| v == view).unwrap();
+    let index = crate::ui::nav_views().iter().position(|v| v == view).unwrap();
     ui.nav_list.row_at_index(index as i32).unwrap().emit_activate();
     settle();
 }
@@ -161,8 +161,8 @@ fn sidebar_views_and_counts(ui: &Rc<Ui>) {
     assert_eq!(ui.content_page.title(), "Someday");
     add_task(ui, "gtk-someday");
 
-    let someday = View::sidebar().iter().position(|v| *v == View::Someday).unwrap();
-    let logbook = View::sidebar().iter().position(|v| *v == View::Logbook).unwrap();
+    let someday = crate::ui::nav_views().iter().position(|v| *v == View::Someday).unwrap();
+    let logbook = crate::ui::nav_views().iter().position(|v| *v == View::Logbook).unwrap();
     assert_eq!(ui.nav_counts[someday].label(), "1");
     assert_eq!(ui.nav_counts[logbook].label(), "1", "the ticked task");
 }

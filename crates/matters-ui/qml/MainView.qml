@@ -140,7 +140,8 @@ Item {
                             { id: "upcoming", title: "Upcoming", icon: "📅", count: controller.upcomingCount, color: "#FF6B6B" },
                             { id: "anytime", title: "Anytime", icon: "📦", count: controller.anytimeCount, color: "#20C997" },
                             { id: "someday", title: "Someday", icon: "🗃️", count: controller.somedayCount, color: "#FAB005" },
-                            { id: "logbook", title: "Logbook", icon: "📓", count: controller.logbookCount, color: "#51CF66" }
+                            { id: "logbook", title: "Logbook", icon: "📓", count: controller.logbookCount, color: "#51CF66" },
+                            { id: "trash", title: "Trash", icon: "🗑️", count: 0, color: "#868E96" }
                         ]
 
                         delegate: Rectangle {
@@ -317,6 +318,14 @@ Item {
                         font.weight: Font.Bold
                         color: root.colTextPrimary
                         Layout.fillWidth: true
+                    }
+
+                    Button {
+                        id: emptyTrashButton
+                        objectName: "emptyTrashButton"
+                        text: "Empty Trash"
+                        visible: controller.currentView === "trash" && taskListView.count > 0
+                        onClicked: emptyTrashDialog.open()
                     }
 
                     // Circular Progress Display for Projects
@@ -582,13 +591,25 @@ Item {
                                         }
                                     }
 
-                                    // Quick Delete Button (shows on hover)
+                                    // Move to Trash (shows on hover). Nothing is
+                                    // destroyed until the Trash is emptied.
                                     ToolButton {
                                         objectName: "deleteButton"
                                         text: "✕"
-                                        visible: rowHover.hovered
+                                        visible: rowHover.hovered && controller.currentView !== "trash"
                                         font.pixelSize: 11
-                                        onClicked: controller.deleteTask(taskRow.taskId)
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: "Move to Trash"
+                                        onClicked: controller.trashTask(taskRow.taskId)
+                                    }
+
+                                    // In the Trash, each task can be put back.
+                                    ToolButton {
+                                        objectName: "restoreButton"
+                                        text: "Put Back"
+                                        visible: controller.currentView === "trash"
+                                        font.pixelSize: 11
+                                        onClicked: controller.restoreTask(taskRow.taskId)
                                     }
                                 }
 
@@ -774,6 +795,42 @@ Item {
     }
 
     // New Project Dialog
+    Dialog {
+        id: emptyTrashDialog
+        objectName: "emptyTrashDialog"
+        title: "Empty Trash?"
+        modal: true
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 380
+
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: taskListView.count === 1
+                ? "The task in the Trash will be permanently deleted. This can't be undone."
+                : "The " + taskListView.count + " tasks in the Trash will be permanently deleted. This can't be undone."
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                objectName: "confirmEmptyTrash"
+                text: "Delete Permanently"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                objectName: "cancelEmptyTrash"
+                text: "Cancel"
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+
+        onAccepted: controller.emptyTrash()
+        // Focus returns to the button that opened the dialog, which hides once
+        // the Trash is empty; give it to the task list instead.
+        onClosed: if (!emptyTrashButton.visible) taskListView.forceActiveFocus()
+    }
+
     Dialog {
         id: newProjectDialog
         title: "Create New Project"

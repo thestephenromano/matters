@@ -87,3 +87,16 @@ CREATE INDEX IF NOT EXISTS idx_tasks_heading ON tasks(heading_id);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 CREATE INDEX IF NOT EXISTS idx_projects_area ON projects(area_id);
 "#;
+
+/// v2: Trash is a timestamp beside `status` rather than a status value, so a
+/// trashed task keeps its completion state. Rows using the old
+/// `status = 'trashed'` are converted; their earlier status was not recorded,
+/// so it is inferred from `completed_at`.
+pub const MIGRATION_V2: &str = r#"
+ALTER TABLE tasks ADD COLUMN trashed_at INTEGER;
+UPDATE tasks
+   SET trashed_at = updated_at,
+       status = CASE WHEN completed_at IS NOT NULL THEN 'completed' ELSE 'open' END
+ WHERE status = 'trashed';
+CREATE INDEX IF NOT EXISTS idx_tasks_trashed ON tasks(trashed_at);
+"#;

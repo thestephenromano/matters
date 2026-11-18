@@ -18,6 +18,12 @@ pub struct Task {
     pub deadline: Option<NaiveDate>,
     pub status: Status,
     pub completed_at: Option<i64>,
+    /// When the task was moved to the Trash; `None` while it is not trashed.
+    /// Trash is kept apart from `status` so a trashed task keeps its
+    /// completion state and Put Back returns it exactly where it was. Only
+    /// `Database::trash_task` and `Database::restore_task` change it.
+    #[serde(default)]
+    pub trashed_at: Option<i64>,
     pub sort_order: f64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -39,10 +45,15 @@ impl Task {
             deadline: None,
             status: Status::Open,
             completed_at: None,
+            trashed_at: None,
             sort_order,
             created_at: now,
             updated_at: now,
         }
+    }
+
+    pub fn is_trashed(&self) -> bool {
+        self.trashed_at.is_some()
     }
 
     pub fn is_open(&self) -> bool {

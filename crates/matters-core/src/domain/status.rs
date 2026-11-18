@@ -8,7 +8,6 @@ pub enum Status {
     Open,
     Completed,
     Canceled,
-    Trashed,
 }
 
 impl Status {
@@ -17,7 +16,6 @@ impl Status {
             Status::Open => "open",
             Status::Completed => "completed",
             Status::Canceled => "canceled",
-            Status::Trashed => "trashed",
         }
     }
 
@@ -25,7 +23,6 @@ impl Status {
         match s.to_ascii_lowercase().as_str() {
             "completed" => Status::Completed,
             "canceled" | "cancelled" => Status::Canceled,
-            "trashed" => Status::Trashed,
             _ => Status::Open,
         }
     }
