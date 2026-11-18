@@ -279,6 +279,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_trashed ON tasks(trashed_at);
 ```
 
+### 5.4 Planned encrypted synchronization
+
+Sync must preserve offline SQLite operation and use post-quantum end-to-end encryption, including device enrollment, sharing and recovery. Matters will be the first customer of a sync client and service that can later serve other applications, with managed and self-hosted deployment options. Task semantics remain in the application domain.
+
+The [encrypted sync design](SYNC_DESIGN.md) records the security contract, proposed key lifecycle, adoption alternatives and evaluation gates. CRDT engine, cryptographic protocol and implementation choices remain subject to that evaluation; this is planned functionality.
+
 ---
 
 ## 6. MVP Scope (v0.1) vs. Future Roadmap
@@ -301,5 +307,5 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [ ] Recurrence engine (Daily, Weekly, Monthly, after completion).
 - [ ] Calendar overlay in Upcoming via Evolution Data Server (EDS) / CalDAV.
 - [ ] KRunner plugin (`Alt+Space` quick task entry).
-- [ ] End-to-end encrypted peer-to-peer or self-hosted sync.
+- [ ] Post-quantum end-to-end encrypted sync with an independently usable client/service and managed or self-hosted deployment; peer-to-peer transport remains a future option. See [sync design and evaluation gates](SYNC_DESIGN.md).
 - [ ] Import from Things 3 JSON export.
