@@ -464,6 +464,28 @@ Item {
         return Qt.formatDate(date, "dddd, MMMM d");
     }
 
+    // A start date as shown on a row, or "" where the list already says it:
+    // Today and Upcoming (grouped by day) imply the date, and the Logbook is
+    // about when tasks were finished. Elsewhere: Today, Tomorrow, a weekday
+    // within the coming week, or the date (with the year when it differs).
+    function describeStart(iso) {
+        const view = controller.currentView;
+        if (iso === "" || view === "today" || view === "upcoming" || view === "logbook")
+            return "";
+        const parts = iso.split("-");
+        const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const days = Math.round((date - today) / 86400000);
+        if (days === 0)
+            return "Today";
+        if (days === 1)
+            return "Tomorrow";
+        if (days > 1 && days < 7)
+            return Qt.formatDate(date, "ddd");
+        return Qt.formatDate(date, date.getFullYear() === today.getFullYear() ? "MMM d" : "MMM d, yyyy");
+    }
+
     // A deadline as shown on a row: "Due today", "Overdue: Nov 10" or the date.
     function describeDeadline(iso, status) {
         if (iso === "")
@@ -1067,7 +1089,7 @@ Item {
 
                             Text {
                                 anchors.fill: parent
-                                text: "New to-do... (Press Enter to add)"
+                                text: "Add a task"
                                 color: root.colTextSecondary
                                 font.pixelSize: 14
                                 visible: !newTaskInput.text && !newTaskInput.activeFocus
@@ -1428,13 +1450,14 @@ Item {
 
                                     // Drag grip: reorders the task (lists arranged by
                                     // hand only). Dragging takes over from the row's
-                                    // click once the pointer moves.
+                                    // click once the pointer moves. It keeps its space
+                                    // in every list, so rows line up the same everywhere.
                                     Item {
                                         objectName: "dragGrip"
-                                        visible: controller.reorderable
+                                        enabled: controller.reorderable
                                         Layout.preferredWidth: 12
                                         Layout.preferredHeight: 24
-                                        opacity: rowHover.hovered || gripDrag.active ? 1 : 0
+                                        opacity: enabled && (rowHover.hovered || gripDrag.active) ? 1 : 0
 
                                         Text {
                                             anchors.centerIn: parent
@@ -1540,9 +1563,11 @@ Item {
                                         Layout.fillWidth: true
                                     }
 
-                                    // "This Evening" Badge
+                                    // "This Evening" badge; Today has a This Evening
+                                    // heading instead.
                                     Rectangle {
-                                        visible: taskRow.evening
+                                        objectName: "eveningBadge"
+                                        visible: taskRow.evening && controller.currentView !== "today"
                                         Layout.preferredHeight: 20
                                         Layout.preferredWidth: eveningLabel.contentWidth + 12
                                         radius: 4
@@ -1558,9 +1583,11 @@ Item {
                                         }
                                     }
 
-                                    // Schedule Date Badge
+                                    // Start date badge, where the list doesn't already
+                                    // say it (root.describeStart).
                                     Rectangle {
-                                        visible: taskRow.startDate !== ""
+                                        objectName: "startBadge"
+                                        visible: dateLabel.text !== ""
                                         Layout.preferredHeight: 20
                                         Layout.preferredWidth: dateLabel.contentWidth + 12
                                         radius: 4
@@ -1568,8 +1595,9 @@ Item {
 
                                         Text {
                                             id: dateLabel
+                                            objectName: "startLabel"
                                             anchors.centerIn: parent
-                                            text: taskRow.startDate
+                                            text: root.describeStart(taskRow.startDate)
                                             font.pixelSize: 11
                                             color: root.colTextSecondary
                                         }
