@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "experiments/sync-prototype/evidence/record-contract-2026-11-18.json"
 REQUIRED = {
     "docs/SYNC_DURABLE_RECEIVE.md",
+    "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md",
     "experiments/sync-prototype/src/lib.rs",
     "experiments/sync-prototype/src/model.rs",
     "experiments/sync-prototype/tests/support/encrypted_inbox.rs",
