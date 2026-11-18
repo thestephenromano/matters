@@ -1222,6 +1222,36 @@ Item {
             view.reduceMotion = preference;
         }
 
+        // ---- Details ----------------------------------------------------------
+
+        function test_upcoming_days_lead_with_the_day_number() {
+            controller.selectView("upcoming");
+            view.captureTask("up-number"); // tomorrow
+            waitForRow("up-number");
+            tryVerify(() => headingTitled("Tomorrow") !== null, 2000);
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            compare(findChild(headingTitled("Tomorrow"), "headingDay").text, String(tomorrow.getDate()));
+        }
+
+        function test_f9_and_the_toggle_hide_and_show_the_sidebar() {
+            const sidebar = findChild(view, "sidebar");
+            verify(sidebar.visible && sidebar.width >= 200);
+            focusList();
+            keyClick(Qt.Key_F9);
+            tryVerify(() => !sidebar.visible, 2000, "F9 hides the sidebar");
+
+            // Everything still works without it.
+            const find = findChild(view, "quickFindDialog");
+            keyClick(Qt.Key_K, Qt.ControlModifier);
+            tryVerify(() => find.opened, 1000, "Quick Find opens");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !find.visible, 2000);
+
+            clickWhenShown(findChild(view, "sidebarToggle"));
+            tryVerify(() => sidebar.visible && sidebar.width >= 200, 2000, "the toggle shows it again");
+        }
+
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {
             focusList();
             keyClick(Qt.Key_N, Qt.ControlModifier);
