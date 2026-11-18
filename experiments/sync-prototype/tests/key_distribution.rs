@@ -22,6 +22,16 @@ struct Setup {
     genesis: Vec<u8>,
     authority: Authority,
 }
+/// Deterministic test content key per epoch; genesis and transitions commit
+/// to it. Fixture material only.
+fn epoch_key(epoch: u64) -> Id {
+    let mut key = [0x5a; 32];
+    key[..8].copy_from_slice(&epoch.to_be_bytes());
+    key
+}
+fn commitment(epoch: u64) -> Hash {
+    key_commitment(&route(), 0, epoch, &epoch_key(epoch)).unwrap()
+}
 fn setup() -> Setup {
     setup_with_receiver(Device::generate().unwrap())
 }
@@ -42,6 +52,7 @@ fn setup_with_receiver(b: Device) -> Setup {
                 admin: a.id().unwrap(),
                 epoch: 0,
                 checkpoint: None,
+                key_commitment: commitment(0),
             },
         },
         &root,
@@ -69,6 +80,7 @@ fn transition(s: &Setup) -> Message {
             admin: s.a.id().unwrap(),
             epoch: s.authority.epoch().unwrap() + 1,
             recovery: s.authority.recovery().unwrap(),
+            key_commitment: commitment(s.authority.epoch().unwrap() + 1),
         },
     }
 }
@@ -130,7 +142,7 @@ fn two_devices_distribute_a_key_and_import_an_authenticated_first_update() {
         s.root.signing.verification_key.as_slice(),
     )
     .unwrap();
-    let cek = random32().unwrap();
+    let cek = epoch_key(s.authority.epoch().unwrap());
     let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
     let received_key = receiver.unwrap_key(&envelope, &s.b).unwrap();
     let incarnation = random32().unwrap();
@@ -270,7 +282,7 @@ fn two_valid_membership_successors_freeze_key_and_record_admission() {
     s.authority
         .apply_membership(&sign(&first, &s.a).unwrap())
         .unwrap();
-    let cek = random32().unwrap();
+    let cek = epoch_key(s.authority.epoch().unwrap());
     let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
     let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
     let inc = random32().unwrap();
@@ -346,7 +358,7 @@ fn envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys()
     let s = setup();
     let envelope = s
         .authority
-        .wrap_key(&s.a, s.b.id().unwrap(), &random32().unwrap())
+        .wrap_key(&s.a, s.b.id().unwrap(), &epoch_key(0))
         .unwrap();
     let original = parse(&envelope).unwrap().message;
     assert!(matches!(
@@ -406,7 +418,7 @@ fn envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys()
 #[test]
 fn rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority() {
     let mut s = setup();
-    let old_cek = random32().unwrap();
+    let old_cek = epoch_key(0);
     let old = s
         .authority
         .wrap_key(&s.a, s.b.id().unwrap(), &old_cek)
@@ -423,7 +435,7 @@ fn rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority(
         s.authority.unwrap_key(&old, &s.b),
         Err(Error::Stale)
     ));
-    let new_cek = random32().unwrap();
+    let new_cek = epoch_key(1);
     let new = s
         .authority
         .wrap_key(&s.a, s.b.id().unwrap(), &new_cek)
@@ -458,7 +470,7 @@ fn rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority(
         s.authority.wrap_key(&s.a, s.b.id().unwrap(), &[1; 32]),
         Err(Error::Unauthorized)
     );
-    let cek = random32().unwrap();
+    let cek = epoch_key(s.authority.epoch().unwrap());
     let envelope = s.authority.wrap_key(&s.a, s.a.id().unwrap(), &cek).unwrap();
     let key = s.authority.unwrap_key(&envelope, &s.a).unwrap();
     // Even a removed writer given the new key cannot acquire current authority.
@@ -517,7 +529,7 @@ fn writer_admission_binds_document_actor_and_incarnation() {
 #[test]
 fn signed_content_still_requires_writer_epoch_actor_and_supported_history() {
     let mut s = setup();
-    let cek = random32().unwrap();
+    let cek = epoch_key(s.authority.epoch().unwrap());
     let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
     let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
     let author = s.a.id().unwrap();
@@ -595,6 +607,22 @@ fn independent_control_bytes_fingerprints_and_hpke_contexts_match() {
         assert_eq!(package(&p.message, p.signature).unwrap(), wire);
         assert_eq!(hash(&wire).as_slice(), bytes(v, "hash_hex"));
         cddl_cat::validate_cbor_bytes("control", schema, &wire).unwrap();
+        let commitments = f["key_commitments"].as_array().unwrap();
+        match &p.message.body {
+            Body::Genesis { key_commitment, .. } => {
+                assert_eq!(
+                    key_commitment.as_slice(),
+                    bytes(&commitments[0], "commitment_hex")
+                )
+            }
+            Body::Membership { key_commitment, .. } => {
+                assert_eq!(
+                    key_commitment.as_slice(),
+                    bytes(&commitments[1], "commitment_hex")
+                )
+            }
+            _ => {}
+        }
         if let Body::Genesis {
             root,
             roster,
@@ -700,7 +728,7 @@ fn roster_budget_is_independently_measured_and_rejects_one_more_member() {
 #[test]
 fn first_update_gate_rejects_snapshot_and_causal_tail_payloads() {
     let mut s = setup();
-    let cek = random32().unwrap();
+    let cek = epoch_key(s.authority.epoch().unwrap());
     let key = s
         .authority
         .unwrap_key(
@@ -744,10 +772,12 @@ fn malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke() {
     let s = setup();
     let envelope = s
         .authority
-        .wrap_key(&s.a, s.b.id().unwrap(), &random32().unwrap())
+        .wrap_key(&s.a, s.b.id().unwrap(), &epoch_key(0))
         .unwrap();
     let base = parse(&envelope).unwrap().message;
-    for change in 0..3 {
+    // Change 3 is well formed but wraps a key other than the committed one:
+    // an admin cannot hand this device a different key for the epoch.
+    for change in 0..4 {
         let mut e = minicbor::Encoder::new(Vec::new());
         e.array(3)
             .unwrap()
@@ -785,11 +815,46 @@ fn malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke() {
             *out = enc;
             *ct = ciphertext;
         }
+        let expected = if change == 3 {
+            Error::KeyCommitment
+        } else {
+            Error::Format
+        };
         assert!(matches!(
             s.authority.unwrap_key(&sign(&m, &s.a).unwrap(), &s.b),
-            Err(Error::Format)
+            Err(e) if e == expected
         ));
     }
+}
+
+#[test]
+fn epoch_key_commitments_bind_each_epoch_and_refuse_other_keys() {
+    let f = fixtures();
+    for c in f["key_commitments"].as_array().unwrap() {
+        let key: Id = bytes(c, "key_hex").try_into().unwrap();
+        let epoch = c["epoch"].as_u64().unwrap();
+        assert_eq!(
+            key_commitment(&route(), c["generation"].as_u64().unwrap(), epoch, &key)
+                .unwrap()
+                .as_slice(),
+            bytes(c, "commitment_hex")
+        );
+    }
+    let mut s = setup();
+    let b = s.b.id().unwrap();
+    assert_eq!(
+        s.authority.wrap_key(&s.a, b, &epoch_key(1)),
+        Err(Error::KeyCommitment)
+    );
+    let m = sign(&transition(&s), &s.a).unwrap();
+    s.authority.apply_membership(&m).unwrap();
+    // The previous epoch's key no longer matches; the rotated key does.
+    assert_eq!(
+        s.authority.wrap_key(&s.a, b, &epoch_key(0)),
+        Err(Error::KeyCommitment)
+    );
+    let envelope = s.authority.wrap_key(&s.a, b, &epoch_key(1)).unwrap();
+    s.authority.unwrap_key(&envelope, &s.b).unwrap();
 }
 
 #[test]
@@ -811,7 +876,10 @@ fn unsupported_roster_key_material_and_experiment_state_limits_fail_closed() {
         .into_iter()
         .find(|m| !m.admin)
         .unwrap();
-    assert_eq!(state.wrap_key(&s.a, bad.id, &[1; 32]), Err(Error::Crypto));
+    assert_eq!(
+        state.wrap_key(&s.a, bad.id, &epoch_key(0)),
+        Err(Error::Crypto)
+    );
     for _ in 0..16 {
         let m = transition(&s);
         s.authority
@@ -840,7 +908,7 @@ fn unsupported_roster_key_material_and_experiment_state_limits_fail_closed() {
 #[test]
 fn replacement_retires_old_writer_and_replay_does_not_reactivate_it() {
     let mut s = setup();
-    let cek = random32().unwrap();
+    let cek = epoch_key(s.authority.epoch().unwrap());
     let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
     let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
     let author = s.a.id().unwrap();
@@ -891,7 +959,7 @@ fn replacement_retires_old_writer_and_replay_does_not_reactivate_it() {
 #[test]
 fn first_record_gate_rejects_chained_records_before_signature_and_context_checks() {
     let mut s = setup();
-    let cek = random32().unwrap();
+    let cek = epoch_key(s.authority.epoch().unwrap());
     let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
     let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
     let author = s.a.id().unwrap();
@@ -923,7 +991,7 @@ fn competing_writer_successors_freeze_the_lineage_in_both_orders() {
     for root_conflict in [false, true] {
         for reversed in [false, true] {
             let mut s = setup();
-            let cek = random32().unwrap();
+            let cek = epoch_key(s.authority.epoch().unwrap());
             let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
             let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
             let base = [20; 32];
