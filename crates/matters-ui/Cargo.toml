@@ -24,6 +24,12 @@ path = "tests/ui.rs"
 harness = false
 required-features = ["ui-tests"]
 
+[[test]]
+name = "style"
+path = "tests/style.rs"
+harness = false
+required-features = ["ui-tests"]
+
 [dependencies]
 cxx = "1.0"
 cxx-qt = "0.10.0"

@@ -104,6 +104,40 @@ Item {
     readonly property color colCardBg: isDark ? "#202124" : "#FFFFFF"
     readonly property color colEvening: "#FAB005" // Warm gold for evening
 
+    // Controls (buttons, fields, menus, tooltips) take their colours from
+    // this palette, built from the colours above, rather than from the
+    // desktop's, which can disagree with Matters' light or dark scheme.
+    palette {
+        window: colCardBg
+        windowText: colTextPrimary
+        base: isDark ? "#25262B" : "#FFFFFF"
+        alternateBase: colSidebarBg
+        text: colTextPrimary
+        placeholderText: colTextSecondary
+        button: isDark ? "#2C2E33" : "#F1F3F5"
+        buttonText: colTextPrimary
+        brightText: "#FFFFFF"
+        highlight: colAccent
+        highlightedText: "#FFFFFF"
+        accent: colAccent
+        link: colAccent
+        light: isDark ? "#373A40" : "#FFFFFF"
+        midlight: isDark ? "#303237" : "#E9ECEF"
+        mid: isDark ? "#3A3C42" : "#CED4DA"
+        dark: isDark ? "#101113" : "#ADB5BD"
+        shadow: "#000000"
+        toolTipBase: isDark ? "#373A40" : "#25262B"
+        toolTipText: "#F8F9FA"
+    }
+    // Popups (menus, dialogs, popovers, tooltips) take their palette from
+    // the window rather than from the item that declares them.
+    Binding {
+        target: root.Window.window
+        property: "palette"
+        value: root.palette
+        when: root.Window.window !== null
+    }
+
     AppController {
         id: controller
         // Every state change bumps the revision; reload once per event-loop

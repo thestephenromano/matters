@@ -2,6 +2,9 @@ use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 use matters_core::Database;
 
 fn main() {
+    // Read before the application starts: the user's explicit style choice.
+    let explicit_style = std::env::var_os("QT_QUICK_CONTROLS_STYLE");
+
     // Open the user's database before the UI exists. If it cannot be opened,
     // refuse to start rather than run against a store that would not persist.
     let db = match Database::open_default() {
@@ -18,6 +21,9 @@ fn main() {
     matters_ui::init_qml();
 
     let mut app = QGuiApplication::new();
+    // After the application (and the desktop's platform theme) has started,
+    // before any QML loads.
+    matters_ui::apply_app_style(explicit_style.as_deref());
     let mut engine = QQmlApplicationEngine::new();
 
     if let Some(engine) = engine.as_mut() {
