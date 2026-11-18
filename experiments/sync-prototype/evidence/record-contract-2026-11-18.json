@@ -1,12 +1,21 @@
 {
-  "date": "2026-11-18T17:46:12.019091+00:00",
-  "source_commit": "b740b4d432fc5c756d71efbb77cfbca5c994041f",
-  "base_commit": "5eca8ad931dc785d2a80134e458c71dd6644411d",
+  "date": "2026-11-18T19:30:05.678996+00:00",
+  "source_commit": "8fa803d0852bd50e0d0687c585881664a66607de",
+  "base_commit": "26012daacfc90e936714d9dd0a6fdc02e3ef359e",
   "source_sha256": {
-    ".github/workflows/sync-prototype.yml": "f8e8a9d46c4e9501bde92c2195c385eb58a69db45a07852dfbbb6deab7207b49",
-    "ci/sqlite_runtime.rs": "3d25d66567420ef05ab6953fe12443a63278365400f39b48cdd8e881ff3e4057",
-    "ci/sqlite_wal_tests.rs": "66f5630be69da10dae93dd782a127c19fd21776d472d9fe819e77156917010c0",
-    "docs/SQLITE_UPGRADE.md": "7bef417645234f0adcb5f79286d5754135cc7e6d1c18324dcbd4b5b7b802d22b",
+    ".github/workflows/ci.yml": "7835b32344548270fed27c3a63951d7bff6fbe2c766534917a72d374205462e4",
+    ".github/workflows/sync-prototype.yml": "f1d4cd2224ce14426924e44e4fc227b241bcfc2b26f621fdf69e5ee61637d6e9",
+    "Cargo.lock": "d9107137e79eaa2790825e35b2dc0e1a404efe3fdf07904594eb874925654673",
+    "Cargo.toml": "762a80055fcaf32c5347c430f65ccaaa22ec286cd491510d2e86588836f819b8",
+    "ci/check.sh": "917380f5539bef6c90e2f1cfa5368810e00419b11faff9d0bb3a30dceb8c8598",
+    "ci/sqlite_runtime.rs": "c668549e37ad8feb6c4898e9d08eef2ddf1553f443e1cd8f5a023d0cff4f416c",
+    "ci/sqlite_wal_tests.rs": "740ef3c4ede5883161274782ba7e6e46b0b98c938d9f7deb02a1ba352e0f8f10",
+    "crates/matters-core/Cargo.toml": "98085de9a7a0008564b8a28ed9cf15e20e12a9467a9335c5e804a960ae18434b",
+    "crates/matters-core/src/storage/db.rs": "6f9f56fd8f6c1ce39b78f584ddab5f3edf298cf60992a24c7238cbcce493c884",
+    "crates/matters-core/src/storage/schema.rs": "18edce81ac283d34157a212d7e6a8afe1740b7749e953a29086691fec97e1837",
+    "crates/matters-core/tests/sqlite_tests.rs": "a7ad0bf30443a96a8db047a181422855d43dae1cae11ccf044f63ad76a8101c4",
+    "docs/SQLITE_REVIEW.md": "4fbf9a4820467992c9c86481e1b67798e2a904b3c7dbc4c4eeed62da216e5d97",
+    "docs/SQLITE_UPGRADE.md": "2778a279b85d9bf5cf55e6c6cb636044601da1e6b100039d4f732c59efcdc054",
     "docs/SYNC_DESIGN.md": "fe19f5f98f474dc9d49716651c584e46a112891237cdc05efcc130298297fe16",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "17fb477b84869264049e5b46f5525e8c48a412a86517ab075b5befa8280cd201",
     "docs/SYNC_KEY_DISTRIBUTION.md": "f603ff44776ce94290b99966e1e86bd72ed6db109d8784e8262429114aa9b763",
@@ -14,30 +23,35 @@
     "docs/decisions/0002-post-quantum-sync.md": "ec465816e0e514e4b15f7258929ae615a3a1d4a6b4822b1ccb5db47feab24fea",
     "docs/protocol/sync-key-distribution-v0.cddl": "2806d843c38345780e3fde7d1854f2be1133da8cc42b8ef1e99dbbe21b2c2e29",
     "docs/protocol/sync-record-v0.cddl": "fe3c16e53791efa6b7a25ae48f3be862cb61253b9b8df9c47617aadd7d1dfd18",
-    "experiments/sync-prototype/Cargo.lock": "0b48a50603054b09f3214da21f1fb4542719c21e8e37174c893118b97a1f515e",
-    "experiments/sync-prototype/Cargo.toml": "3049e162b0a7725308e3878748219f77a6ddfedd404a986f1523fddae2ff9244",
-    "experiments/sync-prototype/README.md": "311d925043232614998a1b15d24e854da30b9c5198a0802083e02833a06023af",
+    "experiments/sync-prototype/.gitignore": "395fc2939d3e8df2f16cd3752e9501b85a47191f283fff07ed4bc4d9875013d9",
+    "experiments/sync-prototype/Cargo.lock": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
+    "experiments/sync-prototype/Cargo.toml": "2cc80c243f4f221f9daa649f99c4b045695fedfe7da8df788deeb0e6c4eb8396",
+    "experiments/sync-prototype/README.md": "d74c682c77b17cd8f702245044e6dbc2123950907c02596ddc2602e3dd275c99",
     "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md": "89973fc6fe9d9a1bae64c48010060ee0d6b6ce2a48d9e992e5a50dd53cefa842",
     "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md": "19a43b042517a212e1fce6eebb9c6f136c034032a7e983e4077fced2a592c77f",
     "experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md": "55feba116369cffef17b55203f41224ed0ecbdfe14d87d707ae186eb5c8a1f79",
-    "experiments/sync-prototype/src/replica.rs": "c205d85b064304af3e8bf42b111a4c838d10183defec8aa2ffd2dd1440ce36f8",
+    "experiments/sync-prototype/baseline/Cargo.lock": "4017e18fb260b9f44603483dadaf041f71df87f5eb6e1cd6002099babf67eff9",
+    "experiments/sync-prototype/baseline/Cargo.toml": "1d81dd6fc4a4b8548ee1c570db0ac8b36d9a2bcb413e786d6e3263e92e9278ab",
+    "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
+    "experiments/sync-prototype/src/replica.rs": "732b03fab4d1f072bad2c7eaa4e680734b99c6d1b3c779ab2d7caa1820b0f5ab",
     "experiments/sync-prototype/src/wire.rs": "0291319a3e0563d0d91a50043537df5160e407abdf9bd793a37b93f45aabb549",
     "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "935c9a9bcfead0002d940f19b3b6f327d33786dec63f847d5ca9f5f3818fce92",
     "experiments/sync-prototype/tests/crash.rs": "2630aa621ed3eeb89e3a0dfead0eec30ff04be6dd0eb9eec13ae3717295b9947",
     "experiments/sync-prototype/tests/key_distribution.rs": "cbe6cb3a796adc5aee76dfb989cd4cd72987046d027c619ac95e15089f025ec0",
     "experiments/sync-prototype/tests/record_contract.rs": "2ff9e6e1fb0bb1d4b5a2b788058750fa7bd94656497ab2a7141dc23fa246e4f7",
-    "experiments/sync-prototype/tests/review_regressions.rs": "7d1d0f6120daab33edc5ec9169048e4cc2c3a5a132c03bda62e7e73ed5dacbb2",
-    "experiments/sync-prototype/tests/sqlite.rs": "cad4828c00ceb0a70b66c46683c5e9055924be1394b38add38c6ab15e722530f",
+    "experiments/sync-prototype/tests/review_regressions.rs": "edde1724bbcf6879a75c1357c5d461241c74c35d339c20b60f0da18464d0af4e",
+    "experiments/sync-prototype/tests/sqlite.rs": "7fa0bf70f839356c2326a81dd2ea18992aabbf32d0bb8099a6825fd7d33382b9",
     "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "28d3cc274d9ed0e532d500eea102670ee803d23c62451f8ff4b5f0861f6e8c8d",
     "experiments/sync-prototype/tests/support/key_distribution.rs": "a6aa2a298507bf8973ee62bbcbaaffbdd4053f7bfea9dcb944a904e912c23efa",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
     "experiments/sync-prototype/tests/support/record_crypto.rs": "85f652231a86fb6cc3367a7677d88f6ed61c61ffacc56ca6ff7d0009b41ab8f2",
+    "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "ec287e87d072d48329b200d5ad2e4dadd9a6e49a2f213fb02ffe738ff4aef67c",
     "experiments/sync-prototype/tests/vectors/check_oracles.py": "041c17e18d1c1be220b1935c13992cf96e939b0660a8f820be01f3fc5d3bba7e",
     "experiments/sync-prototype/tests/vectors/key-distribution/README.md": "eb2de80970524e9338628ee79fbda77171220bc9a6d2be6a4fdf20b3c41c5e96",
     "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "b4468ee8117874a14e6c74d1914f9ce8c83961401715a98f333f418ce376dc5b",
     "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "4bb36d74e83579238a9a00c79a57bf94855a8b5bda17daacdba02419a3b1ac87",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
-    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "be43840733d3b079fae66bab647ebc190ded1f3ae90351d7432180e1bfb3d337",
+    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "6a3e27d0ee2d9212ef41c69f6ad3561d418f91ec93a6cd99af05ad2cec9e562a",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6"
@@ -83,8 +97,8 @@
     "regeneration_scope": "Both content-record and key-distribution generators passed locally; CI executes both --check commands using the pinned requirements."
   },
   "checks": {
-    "tests_passed": 93,
-    "include_ignored_tests_passed": 96,
+    "tests_passed": 96,
+    "include_ignored_tests_passed": 99,
     "ignored_discovery_helpers": 3,
     "helper_executions_per_full_run": 13,
     "helper_execution_breakdown": {
@@ -92,7 +106,7 @@
       "replica": 2,
       "sqlite_wal": 2
     },
-    "format": "passed for prototype/baseline and changed shared Rust test files; no repo-wide formatting claim",
+    "format": "passed for prototype/baseline and shared/changed test Rust files; existing app formatting style retained",
     "clippy": "passed with -D warnings",
     "commands_and_outputs": {
       "format_shared": {
@@ -105,6 +119,7 @@
           "ci/sqlite_wal_tests.rs",
           "crates/matters-core/tests/sqlite_tests.rs"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
         "output": ""
       },
@@ -116,6 +131,7 @@
           "experiments/sync-prototype/Cargo.toml",
           "--check"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
         "output": ""
       },
@@ -127,6 +143,7 @@
           "experiments/sync-prototype/baseline/Cargo.toml",
           "--check"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
         "output": ""
       },
@@ -144,8 +161,9 @@
           "-D",
           "warnings"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
-        "output": "    Checking foldhash v0.2.0\n    Checking libsqlite3-sys v0.40.0\n    Checking hashbrown v0.17.1\n    Checking hashlink v0.12.2\n    Checking rusqlite v0.43.0\n    Checking matters-sync-prototype v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.00s\n"
+        "output": "    Checking matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.73s\n"
       },
       "test": {
         "command": [
@@ -157,8 +175,9 @@
           "--features",
           "crypto-probe,record-contract"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
-        "output": "   Compiling rusqlite v0.43.0\n   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.67s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-1f8dad09e0b3c967)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-1ccf6458cd671a24)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest c04_schedule_is_atomic ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-25901ecf0d6066fa)\n\nrunning 4 tests\ntest process_crash_worker ... ignored, invoked only as a child by abrupt_exit_recovers_sqlite\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-4a5bc0dad074f805)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-100b163be8d0facc)\n\nrunning 35 tests\ntest outbox_cases::outbox_crash_worker ... ignored, invoked as a child by abrupt_exit_covers_every_outbox_boundary\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\n\ntest result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.38s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-82ec0e35ec6d326b)\n\nrunning 9 tests\ntest route_context_must_be_supplied_independently ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest independently_encoded_rejection_cases ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-cf6191843ca05f7e)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest retry_after_rollback_commits_once ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-035ea1d22cb5cc55)\n\nrunning 5 tests\ntest wal::wal_crash_worker ... ignored, launched by wal_crash_and_consistent_backup_preserve_committed_state\ntest linked_sqlite_matches_approved_release ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+        "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.01s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-5cea9b43afdd440d)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-618661693fddb2c8)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest c04_schedule_is_atomic ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-0f31e629b6ab3d5a)\n\nrunning 4 tests\ntest process_crash_worker ... ignored, invoked only as a child by abrupt_exit_recovers_sqlite\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-3761b0d03dc7574d)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 35 tests\ntest outbox_cases::outbox_crash_worker ... ignored, invoked as a child by abrupt_exit_covers_every_outbox_boundary\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\n\ntest result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.17s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-947f79ac4425796f)\n\nrunning 9 tests\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest route_context_must_be_supplied_independently ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independently_encoded_rejection_cases ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-5d1c84ae3ee0a9d3)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest retry_after_rollback_commits_once ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-2d4ac3a9ca8681f8)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ignored, launched by wal_crash_and_consistent_backup_preserve_committed_state\ntest linked_sqlite_matches_approved_release ... ok\ntest file_open_rejects_memory_journal_fallback ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest explicit_in_memory_replica_is_usable ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
       },
       "include_ignored": {
         "command": [
@@ -172,37 +191,67 @@
           "--",
           "--include-ignored"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
-        "output": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-1f8dad09e0b3c967)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-1ccf6458cd671a24)\n\nrunning 20 tests\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c04_schedule_is_atomic ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-25901ecf0d6066fa)\n\nrunning 4 tests\ntest process_crash_worker ... ok\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-4a5bc0dad074f805)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-100b163be8d0facc)\n\nrunning 35 tests\ntest outbox_cases::outbox_crash_worker ... ok\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\n\ntest result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-82ec0e35ec6d326b)\n\nrunning 9 tests\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independently_encoded_rejection_cases ... ok\ntest route_context_must_be_supplied_independently ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-cf6191843ca05f7e)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest retry_after_rollback_commits_once ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.68s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-035ea1d22cb5cc55)\n\nrunning 5 tests\ntest linked_sqlite_matches_approved_release ... ok\ntest wal::wal_crash_worker ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+        "output": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-5cea9b43afdd440d)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-618661693fddb2c8)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c04_schedule_is_atomic ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-0f31e629b6ab3d5a)\n\nrunning 4 tests\ntest process_crash_worker ... ok\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-3761b0d03dc7574d)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s\n\n     Running tests/key_distribution.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/key_distribution-068b978d363340ea)\n\nrunning 35 tests\ntest outbox_cases::outbox_crash_worker ... ok\ntest independent_control_bytes_fingerprints_and_hpke_contexts_match ... ok\ntest malformed_control_fixtures_and_every_truncation_reject ... ok\ntest outbox_cases::bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history ... ok\ntest outbox_cases::review_foreign_database_names_are_all_counted ... ok\ntest roster_budget_is_independently_measured_and_rejects_one_more_member ... ok\ntest outbox_cases::lost_ack_resends_exact_bytes_and_ack_never_deletes_history ... ok\ntest outbox_cases::delivery_access_never_allocates_or_fences_a_writer ... ok\ntest outbox_cases::batch_conflicts_binding_and_foreign_database_fail_without_losing_work ... ok\ntest outbox_cases::entropy_failure_and_known_record_or_writer_collisions_never_seal ... ok\ntest outbox_cases::fifo_and_hash_chain_advance_only_with_committed_ciphertext ... ok\ntest outbox_cases::review_restarts_do_not_exhaust_delivery_access ... ok\ntest outbox_cases::review_restore_must_not_seal_retired_incarnation ... ok\ntest outbox_cases::sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation ... ok\ntest outbox_cases::clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer ... ok\ntest membership_uses_previous_admin_and_preserves_state_on_rejection ... ok\ntest outbox_cases::reopening_fences_old_handles_even_during_a_seal ... ok\ntest outbox_cases::durable_bytes_round_trip_through_admitted_writer_and_survive_restart ... ok\ntest first_update_gate_rejects_snapshot_and_causal_tail_payloads ... ok\ntest bootstrap_requires_pinned_root_route_and_exact_device_key_binding ... ok\ntest unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized ... ok\ntest schema_and_parser_agree_on_structural_bootstrap_and_generation_values ... ok\ntest replacement_retires_old_writer_and_replay_does_not_reactivate_it ... ok\ntest writer_admission_binds_document_actor_and_incarnation ... ok\ntest two_valid_membership_successors_freeze_key_and_record_admission ... ok\ntest envelope_rejects_unauthorized_signers_wrong_recipients_and_substituted_keys ... ok\ntest two_devices_distribute_a_key_and_import_an_authenticated_first_update ... ok\ntest malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... ok\ntest signed_content_still_requires_writer_epoch_actor_and_supported_history ... ok\ntest rotation_rejects_old_envelopes_and_revocation_removes_distribution_authority ... ok\ntest outbox_cases::same_process_uncertain_seals_and_sql_rejection_consume_new_ids ... ok\ntest outbox_cases::abrupt_exit_covers_every_outbox_boundary ... ok\ntest unsupported_roster_key_material_and_experiment_state_limits_fail_closed ... ok\ntest outbox_cases::review_retry_history_does_not_exhaust_sealing ... ok\ntest competing_writer_successors_freeze_the_lineage_in_both_orders ... ok\n\ntest result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-947f79ac4425796f)\n\nrunning 9 tests\ntest route_context_must_be_supplied_independently ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independently_encoded_rejection_cases ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-5d1c84ae3ee0a9d3)\n\nrunning 18 tests\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest retry_after_rollback_commits_once ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s\n\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-2d4ac3a9ca8681f8)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ok\ntest linked_sqlite_matches_approved_release ... ok\ntest file_open_rejects_memory_journal_fallback ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest explicit_in_memory_replica_is_usable ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
       },
       "record_oracle": {
         "command": [
-          "/tmp/matters-sqlite97-meta-20261118/oracle/bin/python",
+          "/tmp/matters-sqlite-review-meta-20261118/oracle/bin/python",
           "experiments/sync-prototype/tests/vectors/record-contract/generate.py",
           "--check"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
         "output": "2 golden records; 58 rejection splices; max wire 1052451; overhead 3859\n"
       },
       "key_oracle": {
         "command": [
-          "/tmp/matters-sqlite97-meta-20261118/oracle/bin/python",
+          "/tmp/matters-sqlite-review-meta-20261118/oracle/bin/python",
           "experiments/sync-prototype/tests/vectors/key-distribution/generate.py",
           "--check"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
         "output": "4 structural vectors; 10 rejection cases; 16-member genesis 58849 bytes\n"
       },
       "oracle_guards": {
         "command": [
-          "/tmp/matters-sqlite97-meta-20261118/oracle/bin/python",
+          "/tmp/matters-sqlite-review-meta-20261118/oracle/bin/python",
           "experiments/sync-prototype/tests/vectors/check_oracles.py"
         ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
         "exit_code": 0,
-        "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 1.809s\n\nOK\n"
+        "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 1.196s\n\nOK\n"
+      },
+      "evidence_guards": {
+        "command": [
+          "python",
+          "experiments/sync-prototype/tests/vectors/check_evidence_guards.py"
+        ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "exit_code": 0,
+        "output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.082s\n\nOK\n"
+      },
+      "runtime_and_wal": {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "experiments/sync-prototype/Cargo.toml",
+          "--test",
+          "sqlite",
+          "--",
+          "--include-ignored",
+          "--nocapture"
+        ],
+        "target": "/home/stephen/Development/matters/target/sync-prototype",
+        "exit_code": 0,
+        "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-c87c02d93ca45127)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ok\nSQLite runtime: 3.54.1; source_id: 2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76\ntest file_open_rejects_memory_journal_fallback ... ok\ntest linked_sqlite_matches_approved_release ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\nbefore: 31 WAL frames, 0 commit frames before recovery\ntest explicit_in_memory_replica_is_usable ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\nafter: 37 WAL frames, 1 commit frames before recovery\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n"
       }
     },
-    "evidence_scope": "source_sha256 binds current prototype inputs and source_commit; app/baseline inventory below is revision-bound, not an app dependency graph embedded in prototype CI. Following commit changes this evidence JSON only."
+    "evidence_scope": "source_sha256 binds current app, baseline and prototype inputs to source_commit and the checkout. Cargo graphs remain independent. Historical inventories retain original source revisions. Following commit changes only this evidence JSON."
   },
   "fixtures": {
     "golden_records": 2,
@@ -225,9 +274,9 @@
     "No aarch64 run, fuzz campaign, complete aggregate crypto/import resource bound, independent security review or new performance claim."
   ],
   "previous_execution": {
-    "source_commit": "4fde50e28a8f370154b1ff70e9352df087ae15d4",
-    "record_revision": "5eca8ad931dc785d2a80134e458c71dd6644411d",
-    "scope": "Reviewed outbox execution with rusqlite 0.32.1 / SQLite 3.46.0; historical timing/mutation results retain their original source revisions."
+    "source_commit": "b740b4d432fc5c756d71efbb77cfbca5c994041f",
+    "record_revision": "1ba403648fafc5817fe71d2ef6723363643c635c",
+    "scope": "Initial #101 SQLite upgrade execution. Current review strengthens dependency freezing, open-mode enforcement, WAL witnesses and active evidence coverage."
   },
   "key_distribution": {
     "tests_passed": 18,
@@ -442,7 +491,6 @@
     "synchronous": "FULL",
     "foreign_keys": true,
     "busy_timeout_ms": 0,
-    "wal_upgrade_issue": "https://github.com/thestephenromano/matters/issues/97",
     "limits": {
       "intents": 16,
       "reservations": "retained without lifetime count cap",
@@ -459,7 +507,13 @@
     ],
     "delivery_scope": "Existing-database read-only/read-write delivery handles require binding but no entropy or writer allocation; SQLite read-only flag rejects ACK writes.",
     "contention_regression": "70 real SQLITE_BUSY failures at ciphertext COMMIT followed by success on attempt 71; consumed IDs retained.",
-    "journal_mode_decision": "Retain DELETE/FULL for the existing bounded outbox contract and fault fixtures; no mode change or performance claim."
+    "journal_mode_decision": "Retain DELETE/FULL for the existing bounded outbox contract and fault fixtures; no mode change or performance claim.",
+    "wal_upgrade": {
+      "status": "completed",
+      "issue": "https://github.com/thestephenromano/matters/issues/97",
+      "implementation_pr": "https://github.com/thestephenromano/matters/pull/101",
+      "journal_decision": "DELETE/FULL retained for this experiment; completed dependency upgrade does not change that contract."
+    }
   },
   "historical_key_distribution_review_findings": {
     "reviewed_head": "b15a89189a141ed0220ad8c5948d48d6dc1d0c1d",
@@ -753,7 +807,7 @@
     },
     "fixture_comparison": "All golden JSON fields except provenance equal reviewed d187c50; content/control bytes, digests, bounds and rejection fixtures unchanged."
   },
-  "sqlite_upgrade": {
+  "historical_initial_sqlite_upgrade": {
     "issue": 97,
     "source_commit": "b740b4d432fc5c756d71efbb77cfbca5c994041f",
     "upstream_references": [
@@ -1118,5 +1172,478 @@
       "encrypted_outbox": "DELETE/FULL retained after reassessment"
     },
     "limits": "Linux x86_64 execution; no power-loss/media-fault/cross-target durability or new latency claim. Upstream-fixed identity establishes fix provenance separately from local integration tests."
+  },
+  "sqlite_upgrade": {
+    "issue": 97,
+    "implementation_pr": 101,
+    "status": "completed with review corrections",
+    "source_commit": "8fa803d0852bd50e0d0687c585881664a66607de",
+    "runtime_version": "3.54.1",
+    "runtime_source_id": "2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76",
+    "crate_sources": {
+      "rusqlite-0.43.0": {
+        "license": "MIT",
+        "rust_version": "1.89.0",
+        "archive_sha256": "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba",
+        "vcs": {
+          "git": {
+            "sha1": "43326c07c018323d9c0ed0b7cd68c35f5b9a3c28"
+          },
+          "path_in_vcs": ""
+        },
+        "files_sha256": {
+          "Cargo.toml": "fa46642caaa73de23cb42fc6d4b311ee857f78e0f7cb04f421ef1a13e6001644"
+        }
+      },
+      "libsqlite3-sys-0.40.0": {
+        "license": "MIT",
+        "rust_version": "1.88.0",
+        "archive_sha256": "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215",
+        "vcs": {
+          "git": {
+            "sha1": "812d63147ebea21c9c3de4db9e556f2e4e9f8161"
+          },
+          "path_in_vcs": "libsqlite3-sys"
+        },
+        "files_sha256": {
+          "Cargo.toml": "4d652f24e5f1caefc2a5a2a24c05937462501c87f792af974a8f8873101cd204",
+          "sqlite3/sqlite3.c": "0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52",
+          "sqlite3/sqlite3.h": "d6c84557261893439b341d2e6c35187ae3ea24fbfd843ad94616f72d89242b8c"
+        },
+        "amalgamation_sha3_256": "e2b869d3003b33c942b7dd7063604fbc53553e1b66609570df39b9b7b558ee81"
+      }
+    },
+    "dependency_graphs": {
+      "app": {
+        "manifest": "Cargo.toml",
+        "committed_lockfile": "Cargo.lock",
+        "lockfile_sha256": "d9107137e79eaa2790825e35b2dc0e1a404efe3fdf07904594eb874925654673",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n        \u251c\u2500\u2500 matters-gtk v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-gtk)\n        \u2514\u2500\u2500 matters-ui v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-ui)\n",
+        "native_rusqlite_tree": "rusqlite v0.43.0\n\u251c\u2500\u2500 bitflags v2.13.2\n\u251c\u2500\u2500 chrono v0.4.45\n\u2502   \u251c\u2500\u2500 iana-time-zone v0.1.65\n\u2502   \u251c\u2500\u2500 num-traits v0.2.19\n\u2502   \u2502   [build-dependencies]\n\u2502   \u2502   \u2514\u2500\u2500 autocfg v1.5.1\n\u2502   \u2514\u2500\u2500 serde v1.0.229\n\u2502       \u251c\u2500\u2500 serde_core v1.0.229\n\u2502       \u2514\u2500\u2500 serde_derive v1.0.229 (proc-macro)\n\u2502           \u251c\u2500\u2500 proc-macro2 v1.0.107\n\u2502           \u2502   \u2514\u2500\u2500 unicode-ident v1.0.27\n\u2502           \u251c\u2500\u2500 quote v1.0.47\n\u2502           \u2502   \u2514\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502           \u2514\u2500\u2500 syn v3.0.10\n\u2502               \u251c\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502               \u251c\u2500\u2500 quote v1.0.47 (*)\n\u2502               \u2514\u2500\u2500 unicode-ident v1.0.27\n\u251c\u2500\u2500 fallible-iterator v0.3.0\n\u251c\u2500\u2500 fallible-streaming-iterator v0.1.9\n\u251c\u2500\u2500 hashlink v0.12.2\n\u2502   \u2514\u2500\u2500 hashbrown v0.17.1\n\u2502       \u2514\u2500\u2500 foldhash v0.2.0\n\u251c\u2500\u2500 libsqlite3-sys v0.40.0\n\u2502   [build-dependencies]\n\u2502   \u251c\u2500\u2500 cc v1.11.2\n\u2502   \u2502   \u251c\u2500\u2500 find-msvc-tools v0.1.15\n\u2502   \u2502   \u251c\u2500\u2500 jobserver v0.1.35\n\u2502   \u2502   \u2502   \u2514\u2500\u2500 libc v0.2.191\n\u2502   \u2502   \u251c\u2500\u2500 libc v0.2.191\n\u2502   \u2502   \u2514\u2500\u2500 shlex v2.0.1\n\u2502   \u251c\u2500\u2500 pkg-config v0.3.34\n\u2502   \u2514\u2500\u2500 vcpkg v0.2.15\n\u251c\u2500\u2500 smallvec v1.16.5\n\u2514\u2500\u2500 uuid v1.29.3\n    \u251c\u2500\u2500 getrandom v0.4.3\n    \u2502   \u251c\u2500\u2500 cfg-if v1.0.5\n    \u2502   \u2514\u2500\u2500 libc v0.2.191\n    \u2514\u2500\u2500 serde_core v1.0.229\n",
+        "selected_packages": [
+          {
+            "name": "hashlink",
+            "version": "0.12.2",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb",
+            "dependencies": [
+              "hashbrown"
+            ]
+          },
+          {
+            "name": "libsqlite3-sys",
+            "version": "0.40.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215",
+            "dependencies": [
+              "cc",
+              "pkg-config",
+              "vcpkg"
+            ]
+          },
+          {
+            "name": "rusqlite",
+            "version": "0.43.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba",
+            "dependencies": [
+              "bitflags",
+              "chrono",
+              "fallible-iterator",
+              "fallible-streaming-iterator",
+              "hashlink",
+              "libsqlite3-sys",
+              "smallvec",
+              "sqlite-wasm-rs",
+              "uuid"
+            ]
+          },
+          {
+            "name": "sqlite-wasm-rs",
+            "version": "0.6.3",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "a6cd504cecbfe7eef649988840f9a6cb768d11085efec138f8e99f160632d867",
+            "dependencies": [
+              "cc",
+              "rsqlite-vfs"
+            ]
+          }
+        ]
+      },
+      "prototype": {
+        "manifest": "experiments/sync-prototype/Cargo.toml",
+        "committed_lockfile": "experiments/sync-prototype/Cargo.lock",
+        "lockfile_sha256": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n",
+        "native_rusqlite_tree": "rusqlite v0.43.0\n\u251c\u2500\u2500 bitflags v2.13.2\n\u251c\u2500\u2500 fallible-iterator v0.3.0\n\u251c\u2500\u2500 fallible-streaming-iterator v0.1.9\n\u251c\u2500\u2500 hashlink v0.12.2\n\u2502   \u2514\u2500\u2500 hashbrown v0.17.1\n\u2502       \u2514\u2500\u2500 foldhash v0.2.0\n\u251c\u2500\u2500 libsqlite3-sys v0.40.0\n\u2502   [build-dependencies]\n\u2502   \u251c\u2500\u2500 cc v1.11.2\n\u2502   \u2502   \u251c\u2500\u2500 find-msvc-tools v0.1.15\n\u2502   \u2502   \u2514\u2500\u2500 shlex v2.0.1\n\u2502   \u251c\u2500\u2500 pkg-config v0.3.34\n\u2502   \u2514\u2500\u2500 vcpkg v0.2.15\n\u2514\u2500\u2500 smallvec v1.16.6\n    \u2514\u2500\u2500 serde v1.0.229\n        \u251c\u2500\u2500 serde_core v1.0.229\n        \u2514\u2500\u2500 serde_derive v1.0.229 (proc-macro)\n            \u251c\u2500\u2500 proc-macro2 v1.0.107\n            \u2502   \u2514\u2500\u2500 unicode-ident v1.0.27\n            \u251c\u2500\u2500 quote v1.0.47\n            \u2502   \u2514\u2500\u2500 proc-macro2 v1.0.107 (*)\n            \u2514\u2500\u2500 syn v3.0.10\n                \u251c\u2500\u2500 proc-macro2 v1.0.107 (*)\n                \u251c\u2500\u2500 quote v1.0.47 (*)\n                \u2514\u2500\u2500 unicode-ident v1.0.27\n",
+        "selected_packages": [
+          {
+            "name": "hashlink",
+            "version": "0.12.2",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb",
+            "dependencies": [
+              "hashbrown 0.17.1"
+            ]
+          },
+          {
+            "name": "libsqlite3-sys",
+            "version": "0.40.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215",
+            "dependencies": [
+              "cc",
+              "pkg-config",
+              "vcpkg"
+            ]
+          },
+          {
+            "name": "rusqlite",
+            "version": "0.43.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba",
+            "dependencies": [
+              "bitflags",
+              "fallible-iterator",
+              "fallible-streaming-iterator",
+              "hashlink",
+              "libsqlite3-sys",
+              "smallvec",
+              "sqlite-wasm-rs"
+            ]
+          },
+          {
+            "name": "sqlite-wasm-rs",
+            "version": "0.6.3",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "a6cd504cecbfe7eef649988840f9a6cb768d11085efec138f8e99f160632d867",
+            "dependencies": [
+              "cc",
+              "rsqlite-vfs"
+            ]
+          }
+        ]
+      },
+      "baseline": {
+        "manifest": "experiments/sync-prototype/baseline/Cargo.toml",
+        "committed_lockfile": "experiments/sync-prototype/baseline/Cargo.lock",
+        "lockfile_sha256": "4017e18fb260b9f44603483dadaf041f71df87f5eb6e1cd6002099babf67eff9",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n        \u2514\u2500\u2500 matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n    [dev-dependencies]\n    \u2514\u2500\u2500 matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n",
+        "native_rusqlite_tree": "rusqlite v0.43.0\n\u251c\u2500\u2500 bitflags v2.13.2\n\u251c\u2500\u2500 chrono v0.4.45\n\u2502   \u251c\u2500\u2500 iana-time-zone v0.1.65\n\u2502   \u251c\u2500\u2500 num-traits v0.2.19\n\u2502   \u2502   [build-dependencies]\n\u2502   \u2502   \u2514\u2500\u2500 autocfg v1.5.1\n\u2502   \u2514\u2500\u2500 serde v1.0.229\n\u2502       \u251c\u2500\u2500 serde_core v1.0.229\n\u2502       \u2514\u2500\u2500 serde_derive v1.0.229 (proc-macro)\n\u2502           \u251c\u2500\u2500 proc-macro2 v1.0.107\n\u2502           \u2502   \u2514\u2500\u2500 unicode-ident v1.0.27\n\u2502           \u251c\u2500\u2500 quote v1.0.47\n\u2502           \u2502   \u2514\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502           \u2514\u2500\u2500 syn v3.0.10\n\u2502               \u251c\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502               \u251c\u2500\u2500 quote v1.0.47 (*)\n\u2502               \u2514\u2500\u2500 unicode-ident v1.0.27\n\u251c\u2500\u2500 fallible-iterator v0.3.0\n\u251c\u2500\u2500 fallible-streaming-iterator v0.1.9\n\u251c\u2500\u2500 hashlink v0.12.2\n\u2502   \u2514\u2500\u2500 hashbrown v0.17.1\n\u2502       \u2514\u2500\u2500 foldhash v0.2.0\n\u251c\u2500\u2500 libsqlite3-sys v0.40.0\n\u2502   [build-dependencies]\n\u2502   \u251c\u2500\u2500 cc v1.11.2\n\u2502   \u2502   \u251c\u2500\u2500 find-msvc-tools v0.1.15\n\u2502   \u2502   \u2514\u2500\u2500 shlex v2.0.1\n\u2502   \u251c\u2500\u2500 pkg-config v0.3.34\n\u2502   \u2514\u2500\u2500 vcpkg v0.2.15\n\u251c\u2500\u2500 smallvec v1.16.6\n\u2514\u2500\u2500 uuid v1.29.3\n    \u251c\u2500\u2500 getrandom v0.4.3\n    \u2502   \u251c\u2500\u2500 cfg-if v1.0.5\n    \u2502   \u2514\u2500\u2500 libc v0.2.191\n    \u2514\u2500\u2500 serde_core v1.0.229\n",
+        "selected_packages": [
+          {
+            "name": "hashlink",
+            "version": "0.12.2",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb",
+            "dependencies": [
+              "hashbrown"
+            ]
+          },
+          {
+            "name": "libsqlite3-sys",
+            "version": "0.40.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215",
+            "dependencies": [
+              "cc",
+              "pkg-config",
+              "vcpkg"
+            ]
+          },
+          {
+            "name": "rusqlite",
+            "version": "0.43.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba",
+            "dependencies": [
+              "bitflags",
+              "chrono",
+              "fallible-iterator",
+              "fallible-streaming-iterator",
+              "hashlink",
+              "libsqlite3-sys",
+              "smallvec",
+              "sqlite-wasm-rs",
+              "uuid"
+            ]
+          },
+          {
+            "name": "sqlite-wasm-rs",
+            "version": "0.6.3",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "checksum": "a6cd504cecbfe7eef649988840f9a6cb768d11085efec138f8e99f160632d867",
+            "dependencies": [
+              "cc",
+              "rsqlite-vfs"
+            ]
+          }
+        ]
+      }
+    },
+    "app_commands_and_outputs": {
+      "app_ci": {
+        "command": [
+          "bash",
+          "ci/check.sh"
+        ],
+        "target": "/home/stephen/Development/matters/target",
+        "exit_code": 0,
+        "output": "::group::clippy\n    Checking rusqlite v0.43.0\n   Compiling matters-ui v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-ui)\n    Checking matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Checking matters-gtk v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-gtk)\nwarning: matters-ui@0.1.0: In file included from /usr/include/qt6/QtCore/qstring.h:15,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qhashfunctions.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qlist.h:12,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qstringlist.h:6,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QStringList:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-f14eb89a378d79a7/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:11,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-f14eb89a378d79a7/out/cxxqtbuild/include/cxx-qt-lib/qstring.h:9,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-f14eb89a378d79a7/out/cxxqtgen/src/bridge.cxx.cpp:1:\nwarning: matters-ui@0.1.0: /usr/include/qt6/QtCore/qchar.h:48:31: warning: defining 'QChar', which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]\nwarning: matters-ui@0.1.0:    48 | class QT6_ONLY(Q_CORE_EXPORT) QChar {\nwarning: matters-ui@0.1.0:       |                               ^~~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/c++/16/unordered_map:44,\nwarning: matters-ui@0.1.0:                  from /usr/include/c++/16/functional:80,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcomparehelpers.h:29,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcompare.h:661,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qnamespace.h:14,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qbytearray.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QByteArray:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-f14eb89a378d79a7/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:10:\nwarning: matters-ui@0.1.0: /usr/include/c++/16/bits/range_access.h:325:24: note: here.  Use '-Wsfinae-incomplete=2' for a diagnostic at that point\nwarning: matters-ui@0.1.0:   325 |     -> decltype(__cont.data())\nwarning: matters-ui@0.1.0:       |                 ~~~~~~~^~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/qt6/QtTest/qtesttostring.h:15,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtestcase.h:8,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtest.h:13,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtQuickTest/quicktest.h:9,\nwarning: matters-ui@0.1.0:                  from cpp/quick_test.cpp:3:\nwarning: matters-ui@0.1.0: /usr/include/qt6/QtCore/qbitarray.h:13:21: warning: defining 'QBitArray', which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]\nwarning: matters-ui@0.1.0:    13 | class Q_CORE_EXPORT QBitArray\nwarning: matters-ui@0.1.0:       |                     ^~~~~~~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/c++/16/unordered_map:44,\nwarning: matters-ui@0.1.0:                  from /usr/include/c++/16/functional:80,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcomparehelpers.h:29,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcompare.h:661,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qabstractitemmodel.h:9,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtesttostring.h:13:\nwarning: matters-ui@0.1.0: /usr/include/c++/16/bits/range_access.h:325:24: note: here.  Use '-Wsfinae-incomplete=2' for a diagnostic at that point\nwarning: matters-ui@0.1.0:   325 |     -> decltype(__cont.data())\nwarning: matters-ui@0.1.0:       |                 ~~~~~~~^~~~\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.89s\n::endgroup::\n::group::workspace tests\n   Compiling rusqlite v0.43.0\n   Compiling matters-ui v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-ui)\n   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n   Compiling matters-gtk v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-gtk)\nwarning: matters-ui@0.1.0: In file included from /usr/include/qt6/QtCore/qstring.h:15,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qhashfunctions.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qlist.h:12,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qstringlist.h:6,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QStringList:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-38b7e25435475bd5/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:11,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-38b7e25435475bd5/out/cxxqtbuild/include/cxx-qt-lib/qstring.h:9,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-38b7e25435475bd5/out/cxxqtgen/src/bridge.cxx.cpp:1:\nwarning: matters-ui@0.1.0: /usr/include/qt6/QtCore/qchar.h:48:31: warning: defining 'QChar', which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]\nwarning: matters-ui@0.1.0:    48 | class QT6_ONLY(Q_CORE_EXPORT) QChar {\nwarning: matters-ui@0.1.0:       |                               ^~~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/c++/16/unordered_map:44,\nwarning: matters-ui@0.1.0:                  from /usr/include/c++/16/functional:80,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcomparehelpers.h:29,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcompare.h:661,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qnamespace.h:14,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qbytearray.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QByteArray:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-38b7e25435475bd5/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:10:\nwarning: matters-ui@0.1.0: /usr/include/c++/16/bits/range_access.h:325:24: note: here.  Use '-Wsfinae-incomplete=2' for a diagnostic at that point\nwarning: matters-ui@0.1.0:   325 |     -> decltype(__cont.data())\nwarning: matters-ui@0.1.0:       |                 ~~~~~~~^~~~\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.00s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/debug/deps/matters_core-035fa8812de8ede8)\n\nrunning 7 tests\ntest clock::tests::reports_only_actual_date_changes ... ok\ntest list_diff::tests::editing_one_row_only_changes_that_row ... ok\ntest list_diff::tests::removal_insertion_and_reordering ... ok\ntest list_diff::tests::identical_lists_produce_no_operations ... ok\ntest ordering::tests::renumbers_when_neighbours_are_equal ... ok\ntest ordering::tests::takes_the_midpoint_or_extends_past_an_end ... ok\ntest list_diff::tests::exhaustive_small_permutations ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n     Running tests/area_tests.rs (/home/stephen/Development/matters/target/debug/deps/area_tests-e34d887b08302bbd)\n\nrunning 5 tests\ntest a_task_captured_in_an_area_is_filed_there ... ok\ntest renaming_an_area_cleans_the_name_and_refuses_blank_ones ... ok\ntest projects_are_filed_in_live_areas_only ... ok\ntest an_area_lists_the_tasks_filed_directly_in_it ... ok\ntest area_views_have_a_key_and_are_arranged_by_hand ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n     Running tests/deadline_tests.rs (/home/stephen/Development/matters/target/debug/deps/deadline_tests-0bd72875aa6d9c24)\n\nrunning 3 tests\ntest deadline_status_on_a_given_day ... ok\ntest typed_deadlines_are_days ... ok\ntest a_deadline_due_today_brings_an_inbox_task_into_today ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/default_path_tests.rs (/home/stephen/Development/matters/target/debug/deps/default_path_tests-49b24bbbb4efd85a)\n\nrunning 1 test\ntest default_location_follows_xdg_and_open_failures_surface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/gtd_tests.rs (/home/stephen/Development/matters/target/debug/deps/gtd_tests-450e954fc83b539c)\n\nrunning 8 tests\ntest test_checklist_items_toggle ... ok\ntest test_project_progress_ring_calculation ... ok\ntest test_someday_isolation ... ok\ntest test_today_and_evening_separation ... ok\ntest test_logbook_records_completions ... ok\ntest test_upcoming_groups ... ok\ntest test_quick_find_fuzzy_search ... ok\ntest test_inbox_flow ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/order_tests.rs (/home/stephen/Development/matters/target/debug/deps/order_tests-09001fe6616d4adf)\n\nrunning 13 tests\ntest areas_are_reordered_in_the_sidebar ... ok\ntest adding_below_needs_a_listed_task_in_a_list_arranged_by_hand ... ok\ntest lists_with_their_own_order_cannot_be_rearranged ... ok\ntest saving_a_task_never_changes_its_order ... ok\ntest this_evening_is_ordered_within_itself ... ok\ntest new_tasks_and_projects_are_added_at_the_end ... ok\ntest placing_in_the_other_section_keeps_the_date ... ok\ntest a_task_added_below_another_lands_right_under_it ... ok\ntest today_keeps_its_own_order ... ok\ntest in_today_a_task_added_below_joins_that_section ... ok\ntest moving_past_the_this_evening_boundary_changes_section ... ok\ntest many_moves_between_the_same_neighbours_stay_correct ... ok\ntest any_sequence_of_moves_keeps_the_order_the_user_made_and_persists ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s\n\n     Running tests/section_tests.rs (/home/stephen/Development/matters/target/debug/deps/section_tests-1a56943502d4806e)\n\nrunning 4 tests\ntest today_marks_this_evening ... ok\ntest anytime_is_grouped_by_area_then_project ... ok\ntest upcoming_is_grouped_by_date ... ok\ntest the_logbook_is_grouped_by_the_day_tasks_were_finished ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-fe010eda04f19482)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ignored, launched by wal_crash_and_consistent_backup_preserve_committed_state\ntest file_open_rejects_memory_journal_fallback ... ok\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest explicit_in_memory_open_preserves_memory_mode ... ok\ntest linked_sqlite_matches_approved_release ... ok\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n     Running tests/title_tests.rs (/home/stephen/Development/matters/target/debug/deps/title_tests-e05021ae2ecb7935)\n\nrunning 5 tests\ntest titles_are_one_tidy_line ... ok\ntest blank_captures_create_nothing ... ok\ntest renaming_changes_only_the_title ... ok\ntest renaming_a_project_cleans_the_name_and_refuses_blank_ones ... ok\ntest a_blank_rename_is_refused_and_keeps_the_name ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n     Running tests/trash_tests.rs (/home/stephen/Development/matters/target/debug/deps/trash_tests-20fd37f4cdb0eb5a)\n\nrunning 12 tests\ntest saving_a_project_never_changes_its_trash_state ... ok\ntest saving_an_area_never_changes_its_trash_state ... ok\ntest emptying_the_trash_destroys_trashed_projects_with_their_contents ... ok\ntest saving_a_task_never_changes_its_trash_state ... ok\ntest trash_lists_most_recently_trashed_first ... ok\ntest emptying_the_trash_destroys_a_trashed_area_with_everything_in_it ... ok\ntest emptying_the_trash_destroys_only_trashed_tasks ... ok\ntest trashed_tasks_are_hidden_from_counts_progress_and_search ... ok\ntest v1_databases_are_migrated_without_losing_trashed_items ... ok\ntest a_trashed_project_takes_its_tasks_with_it_and_put_back_restores_them ... ok\ntest put_back_returns_a_task_exactly_where_it_was ... ok\ntest a_trashed_area_takes_its_projects_and_tasks_and_put_back_restores_them ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n\n     Running tests/typed_when_tests.rs (/home/stephen/Development/matters/target/debug/deps/typed_when_tests-88cda00e61fb7145)\n\nrunning 5 tests\ntest calendar_dates ... ok\ntest matters_own_words ... ok\ntest anything_unclear_is_refused ... ok\ntest numeric_dates_follow_the_locale_order ... ok\ntest relative_days ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/view_tests.rs (/home/stephen/Development/matters/target/debug/deps/view_tests-6f92fb3de444f72b)\n\nrunning 8 tests\ntest apply_schedule_writes_all_fields_together ... ok\ntest view_keys_round_trip ... ok\ntest schedule_parse_accepts_only_schedules ... ok\ntest equal_sort_order_lists_in_a_stable_order ... ok\ntest captured_task_lands_where_the_view_says ... ok\ntest counts_match_listed_tasks ... ok\ntest containing_view_lists_the_task ... ok\ntest logbook_lists_every_finished_task_its_badge_counts ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n     Running tests/visit_tests.rs (/home/stephen/Development/matters/target/debug/deps/visit_tests-2e959c82df086f09)\n\nrunning 6 tests\ntest rescheduled_or_trashed_tasks_leave_immediately ... ok\ntest reopened_task_stays_in_the_logbook_until_left ... ok\ntest first_and_consecutive_kept_tasks_keep_their_order ... ok\ntest in_the_trash_ticking_keeps_a_task_and_putting_back_removes_it ... ok\ntest a_kept_task_that_is_then_trashed_disappears ... ok\ntest completed_task_stays_in_place_until_the_view_is_left ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/debug/deps/matters_gtk-30e4ff00a698f8f9)\n\nrunning 1 test\ntest tests::gtk_ui_end_to_end ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s\n\n     Running unittests src/main.rs (/home/stephen/Development/matters/target/debug/deps/matters_gtk-1b8969d61b648e21)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/debug/deps/matters_ui-b472aea3fc881d8b)\n\nrunning 3 tests\ntest motion::tests::kde_instant_animations_mean_reduced_motion ... ok\ntest qml_lint::qml_uses_matters_icons_not_emoji ... ok\ntest qml_lint::qml_matches_the_generated_bridge_types ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s\n\n     Running unittests src/main.rs (/home/stephen/Development/matters/target/debug/deps/matters_ui-65d97d8fd3e5f02e)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests matters_core\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests matters_gtk\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests matters_ui\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n::endgroup::\n::group::Qt UI tests\n   Compiling rusqlite v0.43.0\n   Compiling matters-ui v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-ui)\n   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\nwarning: matters-ui@0.1.0: In file included from /usr/include/qt6/QtCore/qstring.h:15,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qhashfunctions.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qlist.h:12,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qstringlist.h:6,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QStringList:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:11,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtbuild/include/cxx-qt-lib/qstring.h:9,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtgen/src/bridge.cxx.cpp:1:\nwarning: matters-ui@0.1.0: /usr/include/qt6/QtCore/qchar.h:48:31: warning: defining 'QChar', which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]\nwarning: matters-ui@0.1.0:    48 | class QT6_ONLY(Q_CORE_EXPORT) QChar {\nwarning: matters-ui@0.1.0:       |                               ^~~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/c++/16/unordered_map:44,\nwarning: matters-ui@0.1.0:                  from /usr/include/c++/16/functional:80,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcomparehelpers.h:29,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcompare.h:661,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qnamespace.h:14,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qbytearray.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QByteArray:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:10:\nwarning: matters-ui@0.1.0: /usr/include/c++/16/bits/range_access.h:325:24: note: here.  Use '-Wsfinae-incomplete=2' for a diagnostic at that point\nwarning: matters-ui@0.1.0:   325 |     -> decltype(__cont.data())\nwarning: matters-ui@0.1.0:       |                 ~~~~~~~^~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/qt6/QtTest/qtesttostring.h:15,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtestcase.h:8,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtest.h:13,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtQuickTest/quicktest.h:9,\nwarning: matters-ui@0.1.0:                  from cpp/quick_test.cpp:3:\nwarning: matters-ui@0.1.0: /usr/include/qt6/QtCore/qbitarray.h:13:21: warning: defining 'QBitArray', which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]\nwarning: matters-ui@0.1.0:    13 | class Q_CORE_EXPORT QBitArray\nwarning: matters-ui@0.1.0:       |                     ^~~~~~~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/c++/16/unordered_map:44,\nwarning: matters-ui@0.1.0:                  from /usr/include/c++/16/functional:80,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcomparehelpers.h:29,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcompare.h:661,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qabstractitemmodel.h:9,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtesttostring.h:13:\nwarning: matters-ui@0.1.0: /usr/include/c++/16/bits/range_access.h:325:24: note: here.  Use '-Wsfinae-incomplete=2' for a diagnostic at that point\nwarning: matters-ui@0.1.0:   325 |     -> decltype(__cont.data())\nwarning: matters-ui@0.1.0:       |                 ~~~~~~~^~~~\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.96s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/debug/deps/matters_ui-eab2e477747cab1a)\n\nrunning 3 tests\ntest motion::tests::kde_instant_animations_mean_reduced_motion ... ok\ntest qml_lint::qml_uses_matters_icons_not_emoji ... ok\ntest qml_lint::qml_matches_the_generated_bridge_types ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s\n\n     Running unittests src/main.rs (/home/stephen/Development/matters/target/debug/deps/matters_ui-93813a4cca08c118)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/ui.rs (/home/stephen/Development/matters/target/debug/deps/ui-e7a911468d420239)\n********* Start testing of matters *********\nConfig: Using QtTest library 6.11.2, Qt 6.11.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 16.2.1 20260819 (Red Hat 16.2.1-2)), fedora 44\nPASS   : matters::MainView::initTestCase()\nPASS   : matters::MainView::test_a_deadline_due_today_is_urgent_and_shows_in_today()\nPASS   : matters::MainView::test_a_deadline_from_the_calendar_and_cleared_again()\nPASS   : matters::MainView::test_a_project_is_filed_in_an_area()\nPASS   : matters::MainView::test_a_project_is_renamed_from_its_menu()\nPASS   : matters::MainView::test_a_projects_progress_pie_fills_as_tasks_are_done()\nPASS   : matters::MainView::test_a_refused_date_keeps_the_popover_open()\nPASS   : matters::MainView::test_an_area_goes_to_the_trash_and_comes_back()\nPASS   : matters::MainView::test_an_area_is_created_from_the_sidebar_and_opened()\nPASS   : matters::MainView::test_an_area_is_renamed()\nPASS   : matters::MainView::test_an_open_task_keeps_when_and_deadline_in_its_corner()\nPASS   : matters::MainView::test_anytime_is_grouped_by_project()\nPASS   : matters::MainView::test_arrow_keys_move_the_selection()\nPASS   : matters::MainView::test_checkbox_click_completes_the_task_in_place()\nPASS   : matters::MainView::test_ctrl_d_sets_a_deadline_by_typing()\nPASS   : matters::MainView::test_ctrl_down_moves_the_last_daytime_task_into_this_evening()\nPASS   : matters::MainView::test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project()\nPASS   : matters::MainView::test_ctrl_s_opens_the_when_popover_for_the_selection()\nPASS   : matters::MainView::test_ctrl_up_and_down_reorder_the_selected_task()\nPASS   : matters::MainView::test_delete_button_moves_the_task_to_the_trash()\nPASS   : matters::MainView::test_delete_key_trashes_the_selection_and_ctrl_z_undoes()\nPASS   : matters::MainView::test_dragging_a_project_in_the_sidebar_reorders_it()\nPASS   : matters::MainView::test_dragging_a_task_by_its_grip_reorders_it()\nPASS   : matters::MainView::test_dragging_into_this_evening_moves_the_task_there()\nPASS   : matters::MainView::test_empty_trash_asks_before_deleting_for_good()\nPASS   : matters::MainView::test_enter_elsewhere_goes_to_the_quick_add_field()\nPASS   : matters::MainView::test_enter_types_new_tasks_below_the_selection()\nPASS   : matters::MainView::test_escape_closes_the_new_task_field_without_adding()\nPASS   : matters::MainView::test_escape_or_a_blank_title_keeps_the_old_name()\nPASS   : matters::MainView::test_f2_edits_the_selected_title()\nPASS   : matters::MainView::test_motion_follows_the_reduced_motion_preference()\nPASS   : matters::MainView::test_no_grip_where_the_list_has_its_own_order()\nPASS   : matters::MainView::test_no_new_tasks_in_the_logbook_or_the_trash()\nPASS   : matters::MainView::test_notes_grow_with_what_is_written()\nPASS   : matters::MainView::test_notes_keep_focus_when_other_rows_change()\nPASS   : matters::MainView::test_picking_a_day_next_month_from_the_date_button()\nPASS   : matters::MainView::test_project_moves_to_the_trash_with_its_tasks_and_back()\nPASS   : matters::MainView::test_quick_find_result_opens_the_containing_view()\nPASS   : matters::MainView::test_row_click_toggles_expansion()\nPASS   : matters::MainView::test_rows_line_up_in_every_list()\nPASS   : matters::MainView::test_rows_show_only_dates_the_list_does_not_already_say()\nPASS   : matters::MainView::test_space_expands_and_escape_collapses_then_deselects()\nPASS   : matters::MainView::test_the_calendar_works_from_the_keyboard()\nPASS   : matters::MainView::test_the_logbook_is_grouped_by_day()\nPASS   : matters::MainView::test_title_is_edited_in_place()\nPASS   : matters::MainView::test_today_shows_a_this_evening_heading()\nPASS   : matters::MainView::test_top_task_moves_down_by_dragging()\nPASS   : matters::MainView::test_top_task_moves_down_with_ctrl_down()\nPASS   : matters::MainView::test_typing_a_date_shows_what_it_means_and_schedules()\nPASS   : matters::MainView::test_typing_a_task_adds_it_to_the_current_view()\nPASS   : matters::MainView::test_typing_in_notes_does_not_trigger_list_keys()\nPASS   : matters::MainView::test_typing_notes_keeps_the_row_open_and_focused()\nPASS   : matters::MainView::test_undo_puts_a_trashed_task_back()\nPASS   : matters::MainView::test_upcoming_is_grouped_by_day()\nPASS   : matters::MainView::test_when_button_reschedules_the_task()\nPASS   : matters::MainView::cleanupTestCase()\nTotals: 56 passed, 0 failed, 0 skipped, 0 blacklisted, 28267ms\n********* Finished testing of matters *********\n   Doc-tests matters_ui\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n::endgroup::\n::group::Qt UI tests with animations\nwarning: matters-ui@0.1.0: In file included from /usr/include/qt6/QtCore/qstring.h:15,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qhashfunctions.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qlist.h:12,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qstringlist.h:6,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QStringList:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:11,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtbuild/include/cxx-qt-lib/qstring.h:9,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtgen/src/bridge.cxx.cpp:1:\nwarning: matters-ui@0.1.0: /usr/include/qt6/QtCore/qchar.h:48:31: warning: defining 'QChar', which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]\nwarning: matters-ui@0.1.0:    48 | class QT6_ONLY(Q_CORE_EXPORT) QChar {\nwarning: matters-ui@0.1.0:       |                               ^~~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/c++/16/unordered_map:44,\nwarning: matters-ui@0.1.0:                  from /usr/include/c++/16/functional:80,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcomparehelpers.h:29,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcompare.h:661,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qnamespace.h:14,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qbytearray.h:10,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/QByteArray:1,\nwarning: matters-ui@0.1.0:                  from /home/stephen/Development/matters/target/debug/build/matters-ui-6a5c0d1d44767914/out/cxxqtbuild/include/cxx-qt-lib/core/qstring.h:10:\nwarning: matters-ui@0.1.0: /usr/include/c++/16/bits/range_access.h:325:24: note: here.  Use '-Wsfinae-incomplete=2' for a diagnostic at that point\nwarning: matters-ui@0.1.0:   325 |     -> decltype(__cont.data())\nwarning: matters-ui@0.1.0:       |                 ~~~~~~~^~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/qt6/QtTest/qtesttostring.h:15,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtestcase.h:8,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtest.h:13,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtQuickTest/quicktest.h:9,\nwarning: matters-ui@0.1.0:                  from cpp/quick_test.cpp:3:\nwarning: matters-ui@0.1.0: /usr/include/qt6/QtCore/qbitarray.h:13:21: warning: defining 'QBitArray', which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]\nwarning: matters-ui@0.1.0:    13 | class Q_CORE_EXPORT QBitArray\nwarning: matters-ui@0.1.0:       |                     ^~~~~~~~~\nwarning: matters-ui@0.1.0: In file included from /usr/include/c++/16/unordered_map:44,\nwarning: matters-ui@0.1.0:                  from /usr/include/c++/16/functional:80,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcomparehelpers.h:29,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qcompare.h:661,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtCore/qabstractitemmodel.h:9,\nwarning: matters-ui@0.1.0:                  from /usr/include/qt6/QtTest/qtesttostring.h:13:\nwarning: matters-ui@0.1.0: /usr/include/c++/16/bits/range_access.h:325:24: note: here.  Use '-Wsfinae-incomplete=2' for a diagnostic at that point\nwarning: matters-ui@0.1.0:   325 |     -> decltype(__cont.data())\nwarning: matters-ui@0.1.0:       |                 ~~~~~~~^~~~\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/ui.rs (/home/stephen/Development/matters/target/debug/deps/ui-e7a911468d420239)\n********* Start testing of matters *********\nConfig: Using QtTest library 6.11.2, Qt 6.11.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 16.2.1 20260819 (Red Hat 16.2.1-2)), fedora 44\nPASS   : matters::MainView::initTestCase()\nPASS   : matters::MainView::test_a_deadline_due_today_is_urgent_and_shows_in_today()\nPASS   : matters::MainView::test_a_deadline_from_the_calendar_and_cleared_again()\nPASS   : matters::MainView::test_a_project_is_filed_in_an_area()\nPASS   : matters::MainView::test_a_project_is_renamed_from_its_menu()\nPASS   : matters::MainView::test_a_projects_progress_pie_fills_as_tasks_are_done()\nPASS   : matters::MainView::test_a_refused_date_keeps_the_popover_open()\nPASS   : matters::MainView::test_an_area_goes_to_the_trash_and_comes_back()\nPASS   : matters::MainView::test_an_area_is_created_from_the_sidebar_and_opened()\nPASS   : matters::MainView::test_an_area_is_renamed()\nPASS   : matters::MainView::test_an_open_task_keeps_when_and_deadline_in_its_corner()\nPASS   : matters::MainView::test_anytime_is_grouped_by_project()\nPASS   : matters::MainView::test_arrow_keys_move_the_selection()\nPASS   : matters::MainView::test_checkbox_click_completes_the_task_in_place()\nPASS   : matters::MainView::test_ctrl_d_sets_a_deadline_by_typing()\nPASS   : matters::MainView::test_ctrl_down_moves_the_last_daytime_task_into_this_evening()\nPASS   : matters::MainView::test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project()\nPASS   : matters::MainView::test_ctrl_s_opens_the_when_popover_for_the_selection()\nPASS   : matters::MainView::test_ctrl_up_and_down_reorder_the_selected_task()\nPASS   : matters::MainView::test_delete_button_moves_the_task_to_the_trash()\nPASS   : matters::MainView::test_delete_key_trashes_the_selection_and_ctrl_z_undoes()\nPASS   : matters::MainView::test_dragging_a_project_in_the_sidebar_reorders_it()\nPASS   : matters::MainView::test_dragging_a_task_by_its_grip_reorders_it()\nPASS   : matters::MainView::test_dragging_into_this_evening_moves_the_task_there()\nPASS   : matters::MainView::test_empty_trash_asks_before_deleting_for_good()\nPASS   : matters::MainView::test_enter_elsewhere_goes_to_the_quick_add_field()\nPASS   : matters::MainView::test_enter_types_new_tasks_below_the_selection()\nPASS   : matters::MainView::test_escape_closes_the_new_task_field_without_adding()\nPASS   : matters::MainView::test_escape_or_a_blank_title_keeps_the_old_name()\nPASS   : matters::MainView::test_f2_edits_the_selected_title()\nPASS   : matters::MainView::test_motion_follows_the_reduced_motion_preference()\nPASS   : matters::MainView::test_no_grip_where_the_list_has_its_own_order()\nPASS   : matters::MainView::test_no_new_tasks_in_the_logbook_or_the_trash()\nPASS   : matters::MainView::test_notes_grow_with_what_is_written()\nPASS   : matters::MainView::test_notes_keep_focus_when_other_rows_change()\nPASS   : matters::MainView::test_picking_a_day_next_month_from_the_date_button()\nPASS   : matters::MainView::test_project_moves_to_the_trash_with_its_tasks_and_back()\nPASS   : matters::MainView::test_quick_find_result_opens_the_containing_view()\nPASS   : matters::MainView::test_row_click_toggles_expansion()\nPASS   : matters::MainView::test_rows_line_up_in_every_list()\nPASS   : matters::MainView::test_rows_show_only_dates_the_list_does_not_already_say()\nPASS   : matters::MainView::test_space_expands_and_escape_collapses_then_deselects()\nPASS   : matters::MainView::test_the_calendar_works_from_the_keyboard()\nPASS   : matters::MainView::test_the_logbook_is_grouped_by_day()\nPASS   : matters::MainView::test_title_is_edited_in_place()\nPASS   : matters::MainView::test_today_shows_a_this_evening_heading()\nPASS   : matters::MainView::test_top_task_moves_down_by_dragging()\nPASS   : matters::MainView::test_top_task_moves_down_with_ctrl_down()\nPASS   : matters::MainView::test_typing_a_date_shows_what_it_means_and_schedules()\nPASS   : matters::MainView::test_typing_a_task_adds_it_to_the_current_view()\nPASS   : matters::MainView::test_typing_in_notes_does_not_trigger_list_keys()\nPASS   : matters::MainView::test_typing_notes_keeps_the_row_open_and_focused()\nPASS   : matters::MainView::test_undo_puts_a_trashed_task_back()\nPASS   : matters::MainView::test_upcoming_is_grouped_by_day()\nPASS   : matters::MainView::test_when_button_reschedules_the_task()\nPASS   : matters::MainView::cleanupTestCase()\nTotals: 56 passed, 0 failed, 0 skipped, 0 blacklisted, 77200ms\n********* Finished testing of matters *********\n::endgroup::\n::group::measurement baseline SQLite runtime\n   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n   Compiling matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s\n     Running unittests src/main.rs (/home/stephen/Development/matters/target/baseline/debug/deps/matters_sync_baseline-c04980cb8e636a02)\n\nrunning 1 test\nSQLite runtime: 3.54.1; source_id: 2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76\ntest linked_sqlite_matches_approved_release ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n::endgroup::\n"
+      },
+      "baseline_clippy": {
+        "command": [
+          "cargo",
+          "clippy",
+          "--manifest-path",
+          "experiments/sync-prototype/baseline/Cargo.toml",
+          "--locked",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "target": "/home/stephen/Development/matters/target/baseline",
+        "exit_code": 0,
+        "output": "    Checking serde_core v1.0.229\n    Checking libc v0.2.191\n    Checking num-traits v0.2.19\n    Checking cfg-if v1.0.5\n    Checking iana-time-zone v0.1.65\n    Checking foldhash v0.2.0\n    Checking hashbrown v0.17.1\n    Checking option-ext v0.2.0\n    Checking logos v0.15.1\n    Checking libsqlite3-sys v0.40.0\n    Checking hashlink v0.12.2\n    Checking smallvec v1.16.6\n    Checking bitflags v2.13.2\n    Checking fallible-streaming-iterator v0.1.9\n    Checking fallible-iterator v0.3.0\n    Checking thiserror v2.0.21\n    Checking getrandom v0.4.3\n    Checking dirs-sys v0.5.0\n    Checking zmij v1.0.23\n    Checking dirs v6.0.0\n    Checking itoa v1.0.19\n    Checking memchr v2.8.3\n    Checking serde v1.0.229\n    Checking uuid v1.29.3\n    Checking serde_json v1.0.154\n    Checking chrono v0.4.45\n    Checking interim v0.2.2\n    Checking rusqlite v0.43.0\n    Checking matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Checking matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.24s\n"
+      },
+      "runtime_and_wal": {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "matters-core",
+          "--test",
+          "sqlite_tests",
+          "--",
+          "--include-ignored",
+          "--nocapture"
+        ],
+        "target": "/home/stephen/Development/matters/target",
+        "exit_code": 0,
+        "output": "   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-3eacc70b7c24c710)\n\nrunning 8 tests\ntest wal::wal_crash_worker ... ok\ntest file_open_rejects_memory_journal_fallback ... ok\nSQLite runtime: 3.54.1; source_id: 2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76\ntest linked_sqlite_matches_approved_release ... ok\nbefore: 31 WAL frames, 0 commit frames before recovery\ntest wal::wal_reader_snapshot_blocks_reset_until_released ... ok\ntest explicit_in_memory_open_preserves_memory_mode ... ok\nafter: 37 WAL frames, 1 commit frames before recovery\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... ok\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n"
+      }
+    },
+    "baseline_ci_command": "CARGO_TARGET_DIR=\"${CARGO_TARGET_DIR:-target}/baseline\" cargo test --locked --manifest-path experiments/sync-prototype/baseline/Cargo.toml -- --nocapture",
+    "cache_scope": "CI explicitly maps baseline workspace to target/baseline and runs it with CARGO_TARGET_DIR under the selected root. Cache configuration is recorded; no observed cache-hit claim.",
+    "coverage": "All generations retained and checked. Positive PASSIVE frame-copy progress while writer transaction held open; eight completed checkpoints per mode after commits; readers block reset. Before-commit cache spill and after-commit WAL inspected before recovery; backup/reopen retain exactly committed generations.",
+    "upstream_references": [
+      "https://www.sqlite.org/wal.html#walresetbug",
+      "https://www.sqlite.org/releaselog/3_51_3.html",
+      "https://www.sqlite.org/releaselog/3_54_1.html",
+      "https://github.com/rusqlite/rusqlite/releases/tag/v0.42.0",
+      "https://github.com/rusqlite/rusqlite/releases/tag/v0.43.0"
+    ],
+    "journal_modes": {
+      "app": "persistent open requires WAL; explicit in-memory API retains MEMORY",
+      "replica": "persistent open requires WAL; explicit in-memory API retains MEMORY",
+      "encrypted_outbox": "DELETE/FULL retained"
+    },
+    "limits": "Selected Linux x86_64 schedules, not an internal race reproduction, exhaustive interleaving proof or power-loss/media/cross-target durability claim. All current app/baseline paths are in source_sha256, including CI and committed lockfiles."
+  },
+  "sqlite_review": {
+    "reviewed_head": "a5a6060eaa0a63fa4247cf2af1db723f63c8afcf",
+    "implementation_base": "26012daacfc90e936714d9dd0a6fdc02e3ef359e",
+    "review_record": "docs/SQLITE_REVIEW.md",
+    "findings_addressed": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "before_open_mode_witnesses": {
+      "app": {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "matters-core",
+          "--test",
+          "sqlite_tests",
+          "file_open_"
+        ],
+        "exit_code": 101,
+        "output": "   Compiling rusqlite v0.43.0\n   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.95s\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-2f999588a87e56cf)\n\nrunning 2 tests\ntest file_open_rejects_memory_journal_fallback ... FAILED\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\n\nfailures:\n\n---- file_open_rejects_memory_journal_fallback stdout ----\n\nthread 'file_open_rejects_memory_journal_fallback' (487431) panicked at crates/matters-core/tests/sqlite_tests.rs:23:5:\npersistent open must reject a memory journal\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    file_open_rejects_memory_journal_fallback\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.01s\n\nerror: test failed, to rerun pass `-p matters-core --test sqlite_tests`\n"
+      },
+      "prototype": {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "experiments/sync-prototype/Cargo.toml",
+          "--test",
+          "sqlite",
+          "file_open_"
+        ],
+        "exit_code": 101,
+        "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.79s\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-e130e17c649215dc)\n\nrunning 2 tests\ntest file_open_rejects_memory_journal_fallback ... FAILED\ntest file_open_selects_wal_and_reopen_preserves_it ... ok\n\nfailures:\n\n---- file_open_rejects_memory_journal_fallback stdout ----\n\nthread 'file_open_rejects_memory_journal_fallback' (488197) panicked at tests/sqlite.rs:20:5:\npersistent open must reject a memory journal\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    file_open_rejects_memory_journal_fallback\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.01s\n\nerror: test failed, to rerun pass `--test sqlite`\n"
+      }
+    },
+    "missing_locked_baseline_witness": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "experiments/sync-prototype/baseline/Cargo.toml",
+        "--no-run"
+      ],
+      "exit_code": 101,
+      "output": "error: cannot create the lock file /tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline/Cargo.lock because --locked was passed to prevent this\nhelp: to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.\n"
+    },
+    "manual_mutations": {
+      "source_commit": "8fa803d0852bd50e0d0687c585881664a66607de",
+      "scope": "Seven named failure injections; compiled Rust tests or Python guard assertions caught each. The replica guard and Python checker mutations were rerun after their final changes. Final positive tests run on restored source; not exhaustive mutation coverage.",
+      "results": [
+        {
+          "name": "drop intermediate committed generation",
+          "path": "ci/sqlite_wal_tests.rs",
+          "before": "    verify(&keeper, ROUNDS)?;",
+          "after": "    keeper.execute(\"DELETE FROM wal_probe WHERE generation=1\", [])?;\n    verify(&keeper, ROUNDS)?;",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "matters-core",
+            "--test",
+            "sqlite_tests",
+            "wal_commits_survive_concurrent_checkpoint_modes_and_reopen"
+          ],
+          "exit_code": 101,
+          "caught": true,
+          "output": "   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-3eacc70b7c24c710)\n\nrunning 1 test\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... FAILED\n\nfailures:\n\n---- wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen stdout ----\n\nthread 'wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen' (509117) panicked at crates/matters-core/tests/../../../ci/sqlite_wal_tests.rs:57:5:\nassertion `left == right` failed: every committed generation must remain\n  left: 256\n right: 264\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s\n\nerror: test failed, to rerun pass `-p matters-core --test sqlite_tests`\n"
+        },
+        {
+          "name": "checkpoint does not run",
+          "path": "ci/sqlite_wal_tests.rs",
+          "before": "fn checkpoint(conn: &Connection, mode: &str) -> Result<(i64, i64, i64)> {",
+          "after": "fn checkpoint(conn: &Connection, mode: &str) -> Result<(i64, i64, i64)> {\n    if mode == \"PASSIVE\" { return Ok((1, -1, -1)); }",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "matters-core",
+            "--test",
+            "sqlite_tests",
+            "wal_commits_survive_concurrent_checkpoint_modes_and_reopen"
+          ],
+          "exit_code": 101,
+          "caught": true,
+          "output": "   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-3eacc70b7c24c710)\n\nrunning 1 test\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... FAILED\n\nfailures:\n\n---- wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen stdout ----\n\nthread 'wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen' (509387) panicked at crates/matters-core/tests/../../../ci/sqlite_wal_tests.rs:84:5:\nassertion `left == right` failed: checkpoint must complete\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p matters-core --test sqlite_tests`\n"
+        },
+        {
+          "name": "checkpoint reports zero progress",
+          "path": "ci/sqlite_wal_tests.rs",
+          "before": "fn checkpoint(conn: &Connection, mode: &str) -> Result<(i64, i64, i64)> {",
+          "after": "fn checkpoint(conn: &Connection, mode: &str) -> Result<(i64, i64, i64)> {\n    if mode == \"PASSIVE\" { return Ok((0, 0, 0)); }",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "matters-core",
+            "--test",
+            "sqlite_tests",
+            "wal_commits_survive_concurrent_checkpoint_modes_and_reopen"
+          ],
+          "exit_code": 101,
+          "caught": true,
+          "output": "   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-3eacc70b7c24c710)\n\nrunning 1 test\ntest wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen ... FAILED\n\nfailures:\n\n---- wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen stdout ----\n\nthread 'wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen' (509792) panicked at crates/matters-core/tests/../../../ci/sqlite_wal_tests.rs:132:9:\ncheckpoint must copy committed frames during an open writer transaction\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    wal::wal_commits_survive_concurrent_checkpoint_modes_and_reopen\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s\n\nerror: test failed, to rerun pass `-p matters-core --test sqlite_tests`\n"
+        },
+        {
+          "name": "disable uncommitted cache spill",
+          "path": "ci/sqlite_wal_tests.rs",
+          "before": "PRAGMA cache_size=4; PRAGMA cache_spill=ON;",
+          "after": "PRAGMA cache_size=4; PRAGMA cache_spill=OFF;",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "matters-core",
+            "--test",
+            "sqlite_tests",
+            "wal_crash_and_consistent_backup_preserve_committed_state"
+          ],
+          "exit_code": 101,
+          "caught": true,
+          "output": "   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-3eacc70b7c24c710)\n\nrunning 1 test\ntest wal::wal_crash_and_consistent_backup_preserve_committed_state ... FAILED\n\nfailures:\n\n---- wal::wal_crash_and_consistent_backup_preserve_committed_state stdout ----\n\nthread 'wal::wal_crash_and_consistent_backup_preserve_committed_state' (510029) panicked at crates/matters-core/tests/../../../ci/sqlite_wal_tests.rs:219:9:\ncrash must leave actual WAL frames\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    wal::wal_crash_and_consistent_backup_preserve_committed_state\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p matters-core --test sqlite_tests`\n"
+        },
+        {
+          "name": "accept app fallback mode",
+          "path": "crates/matters-core/src/storage/db.rs",
+          "before": "if mode != \"wal\" {",
+          "after": "if false && mode != \"wal\" {",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "matters-core",
+            "--test",
+            "sqlite_tests",
+            "file_open_rejects_memory_journal_fallback"
+          ],
+          "exit_code": 101,
+          "caught": true,
+          "output": "   Compiling matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s\n     Running tests/sqlite_tests.rs (/home/stephen/Development/matters/target/debug/deps/sqlite_tests-3eacc70b7c24c710)\n\nrunning 1 test\ntest file_open_rejects_memory_journal_fallback ... FAILED\n\nfailures:\n\n---- file_open_rejects_memory_journal_fallback stdout ----\n\nthread 'file_open_rejects_memory_journal_fallback' (510677) panicked at crates/matters-core/tests/sqlite_tests.rs:21:10:\npersistent open must reject a memory journal\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    file_open_rejects_memory_journal_fallback\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p matters-core --test sqlite_tests`\n"
+        },
+        {
+          "name": "accept replica fallback mode",
+          "path": "experiments/sync-prototype/src/replica.rs",
+          "before": "if mode != expected_mode {",
+          "after": "if false && mode != expected_mode {",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--manifest-path",
+            "experiments/sync-prototype/Cargo.toml",
+            "--test",
+            "sqlite",
+            "file_open_rejects_memory_journal_fallback"
+          ],
+          "exit_code": 101,
+          "caught": true,
+          "output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.67s\n     Running tests/sqlite.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/sqlite-c87c02d93ca45127)\n\nrunning 1 test\ntest file_open_rejects_memory_journal_fallback ... FAILED\n\nfailures:\n\n---- file_open_rejects_memory_journal_fallback stdout ----\n\nthread 'file_open_rejects_memory_journal_fallback' (576558) panicked at tests/sqlite.rs:17:10:\npersistent open must reject a memory journal\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    file_open_rejects_memory_journal_fallback\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--test sqlite`\n"
+        },
+        {
+          "name": "ignore app CI script drift",
+          "path": "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py",
+          "before": "    for name, expected in evidence[\"source_sha256\"].items():",
+          "after": "    for name, expected in evidence[\"source_sha256\"].items():\n        if name == \"ci/check.sh\":\n            continue",
+          "command": [
+            "python",
+            "experiments/sync-prototype/tests/vectors/check_evidence_guards.py"
+          ],
+          "exit_code": 1,
+          "caught": true,
+          "output": "FF\n======================================================================\nFAIL: test_each_required_binding_rejects_drift_removal_and_omission (__main__.EvidenceGuards.test_each_required_binding_rejects_drift_removal_and_omission) (path='ci/check.sh', case='changed')\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/tests/vectors/check_evidence_guards.py\", line 40, in test_each_required_binding_rejects_drift_removal_and_omission\n    self.assertEqual(run(), 1)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^\nAssertionError: 0 != 1\n\n======================================================================\nFAIL: test_each_required_binding_rejects_drift_removal_and_omission (__main__.EvidenceGuards.test_each_required_binding_rejects_drift_removal_and_omission) (path='ci/check.sh', case='deleted')\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/tests/vectors/check_evidence_guards.py\", line 43, in test_each_required_binding_rejects_drift_removal_and_omission\n    self.assertEqual(run(), 1)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^\nAssertionError: 0 != 1\n\n----------------------------------------------------------------------\nRan 1 test in 0.079s\n\nFAILED (failures=2)\n"
+        }
+      ]
+    },
+    "observed_crash_frames": {
+      "before": {
+        "frames": 31,
+        "commit_frames": 0
+      },
+      "after": {
+        "frames": 37,
+        "commit_frames": 1
+      }
+    },
+    "evidence_required_bindings_tested": 48
   }
 }
