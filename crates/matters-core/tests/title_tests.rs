@@ -1,10 +1,10 @@
 //! Task titles (#27): always visible, one line, edited in place.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::{Database, MattersError, Project, Schedule, Task, View};
 
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 18).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 18)
 }
 
 #[test]

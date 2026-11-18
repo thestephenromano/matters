@@ -1,14 +1,14 @@
 //! Manual ordering (#53): lists keep the order the user arranged, Today keeps
 //! its own order, and only the ordering operations change it.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::ordering::{
     add_task_below, move_task, place_area, place_in_today, place_project, place_task,
 };
 use matters_core::{Area, Database, Project, QueryEngine, Schedule, Task, View};
 
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 17).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 17)
 }
 
 fn ids(db: &Database, view: &View) -> Vec<String> {
@@ -211,7 +211,7 @@ fn moving_past_the_this_evening_boundary_changes_section() {
 #[test]
 fn placing_in_the_other_section_keeps_the_date() {
     let db = Database::open_in_memory().unwrap();
-    let overdue = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+    let overdue = jiff::civil::date(2026, 11, 10);
     let mut late = Task::new("late", "late", 0.0);
     late.start_date = Some(overdue);
     db.create_task(&late).unwrap();

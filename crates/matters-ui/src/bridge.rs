@@ -678,7 +678,7 @@ impl qobject::AppController {
             Some(Schedule::Today { evening: true }) => "evening".into(),
             Some(Schedule::Someday) => "someday".into(),
             Some(Schedule::None) => "none".into(),
-            Some(Schedule::Date(date)) => date.format("%Y-%m-%d").to_string(),
+            Some(Schedule::Date(date)) => date.to_string(),
         })
     }
 

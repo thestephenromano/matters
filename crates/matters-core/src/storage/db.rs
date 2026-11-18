@@ -1,4 +1,3 @@
-use chrono::NaiveDate;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -77,7 +76,7 @@ impl Database {
     fn init_schema(&self) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         conn.execute_batch(SCHEMA_V1)?;
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?1)",
             params![now],
@@ -196,7 +195,7 @@ impl Database {
     /// ordering and trash operations, so a stale copy can't undo them.
     pub fn update_area(&self, area: &Area) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE areas SET title = ?1, updated_at = ?2 WHERE id = ?3",
             params![area.title, now, area.id],
@@ -211,7 +210,7 @@ impl Database {
             return Err(MattersError::Validation("an area needs a name".into()));
         };
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         let changed = conn.execute(
             "UPDATE areas SET title = ?1, updated_at = ?2 WHERE id = ?3",
             params![title, now, id],
@@ -232,7 +231,7 @@ impl Database {
             return Err(MattersError::Validation("a project needs a name".into()));
         };
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         let changed = conn.execute(
             "UPDATE projects SET title = ?1, updated_at = ?2 WHERE id = ?3",
             params![title, now, id],
@@ -261,7 +260,7 @@ impl Database {
             }
         }
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         let changed = conn.execute(
             "UPDATE projects SET area_id = ?1, updated_at = ?2 WHERE id = ?3",
             params![area_id, now, project_id],
@@ -280,7 +279,7 @@ impl Database {
     /// contents keep their own state, so Put Back restores them as they were.
     pub fn trash_area(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE areas SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
             params![now, id],
@@ -292,7 +291,7 @@ impl Database {
     /// on its own before the area stays in the Trash.
     pub fn restore_area(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE areas SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
             params![now, id],
@@ -312,8 +311,8 @@ impl Database {
 
     pub fn create_project(&self, project: &Project) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let start_date = project.start_date.map(|d| d.format("%Y-%m-%d").to_string());
-        let deadline = project.deadline.map(|d| d.format("%Y-%m-%d").to_string());
+        let start_date = project.start_date.map(|d| d.to_string());
+        let deadline = project.deadline.map(|d| d.to_string());
         let is_someday = if project.is_someday { 1 } else { 0 };
 
         conn.execute(
@@ -383,9 +382,9 @@ impl Database {
     /// its order or trash state.
     pub fn update_project(&self, project: &Project) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
-        let start_date = project.start_date.map(|d| d.format("%Y-%m-%d").to_string());
-        let deadline = project.deadline.map(|d| d.format("%Y-%m-%d").to_string());
+        let now = crate::clock::now_millis();
+        let start_date = project.start_date.map(|d| d.to_string());
+        let deadline = project.deadline.map(|d| d.to_string());
         let is_someday = if project.is_someday { 1 } else { 0 };
 
         conn.execute(
@@ -416,7 +415,7 @@ impl Database {
     /// their own state, so Put Back restores the project as it was.
     pub fn trash_project(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE projects SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
             params![now, id],
@@ -428,7 +427,7 @@ impl Database {
     /// its own before the project stays in the Trash.
     pub fn restore_project(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE projects SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
             params![now, id],
@@ -499,8 +498,8 @@ impl Database {
 
     pub fn create_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let start_date = task.start_date.map(|d| d.format("%Y-%m-%d").to_string());
-        let deadline = task.deadline.map(|d| d.format("%Y-%m-%d").to_string());
+        let start_date = task.start_date.map(|d| d.to_string());
+        let deadline = task.deadline.map(|d| d.to_string());
         let is_someday = if task.is_someday { 1 } else { 0 };
 
         conn.execute(
@@ -545,9 +544,9 @@ impl Database {
     /// so saving a stale copy can't reorder, trash or resurrect a task.
     pub fn update_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
-        let start_date = task.start_date.map(|d| d.format("%Y-%m-%d").to_string());
-        let deadline = task.deadline.map(|d| d.format("%Y-%m-%d").to_string());
+        let now = crate::clock::now_millis();
+        let start_date = task.start_date.map(|d| d.to_string());
+        let deadline = task.deadline.map(|d| d.to_string());
         let is_someday = if task.is_someday { 1 } else { 0 };
 
         conn.execute(
@@ -582,7 +581,7 @@ impl Database {
             return Err(MattersError::Validation("a task needs a title".into()));
         };
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         let changed = conn.execute(
             "UPDATE tasks SET title = ?1, updated_at = ?2 WHERE id = ?3",
             params![title, now, id],
@@ -598,7 +597,7 @@ impl Database {
 
     pub fn complete_task(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
             params![now, id],
@@ -608,7 +607,7 @@ impl Database {
 
     pub fn uncomplete_task(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?1 WHERE id = ?2",
             params![now, id],
@@ -621,7 +620,7 @@ impl Database {
     /// is already in the Trash leaves its original trash time.
     pub fn trash_task(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE tasks SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
             params![now, id],
@@ -632,7 +631,7 @@ impl Database {
     /// Put a trashed task back where it was.
     pub fn restore_task(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE tasks SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
             params![now, id],
@@ -705,7 +704,7 @@ impl Database {
 
     pub fn toggle_checklist_item(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         conn.execute(
             "UPDATE checklist_items SET is_completed = CASE WHEN is_completed = 1 THEN 0 ELSE 1 END, updated_at = ?1 WHERE id = ?2",
             params![now, id],
@@ -736,14 +735,13 @@ impl Database {
 
     pub(crate) fn map_project_row(row: &Row) -> rusqlite::Result<Project> {
         let start_date_str: Option<String> = row.get(4)?;
-        let start_date =
-            start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+        let start_date = start_date_str.and_then(|s| crate::clock::parse_iso_date(&s));
 
         let is_someday_int: i64 = row.get(6)?;
         let is_someday = is_someday_int == 1;
 
         let deadline_str: Option<String> = row.get(7)?;
-        let deadline = deadline_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+        let deadline = deadline_str.and_then(|s| crate::clock::parse_iso_date(&s));
 
         let status_str: String = row.get(8)?;
         let status = Status::from_str_loose(&status_str);
@@ -779,14 +777,13 @@ impl Database {
 
     pub(crate) fn map_task_row(row: &Row) -> rusqlite::Result<Task> {
         let start_date_str: Option<String> = row.get(6)?;
-        let start_date =
-            start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+        let start_date = start_date_str.and_then(|s| crate::clock::parse_iso_date(&s));
 
         let is_someday_int: i64 = row.get(8)?;
         let is_someday = is_someday_int == 1;
 
         let deadline_str: Option<String> = row.get(9)?;
-        let deadline = deadline_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+        let deadline = deadline_str.and_then(|s| crate::clock::parse_iso_date(&s));
 
         let status_str: String = row.get(10)?;
         let status = Status::from_str_loose(&status_str);

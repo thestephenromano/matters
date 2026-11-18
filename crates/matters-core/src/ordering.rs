@@ -17,7 +17,7 @@
 //! depends only on its own keys. Only these operations (and appending new
 //! items, `Database::add_*`) change order keys; saving an item never does.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use rusqlite::params;
 
 use crate::domain::{Task, View};
@@ -34,7 +34,7 @@ const MIN_GAP: f64 = 1e-6;
 pub fn place_task(
     db: &Database,
     view: &View,
-    today: NaiveDate,
+    today: Date,
     id: &str,
     after: Option<&str>,
 ) -> Result<()> {
@@ -57,13 +57,7 @@ pub fn place_task(
 /// stopping at the ends of the list. In Today, a task moved past the This
 /// Evening boundary goes into the other section ([`place_in_today`]): one
 /// step down from the last daytime task is the top of This Evening.
-pub fn move_task(
-    db: &Database,
-    view: &View,
-    today: NaiveDate,
-    id: &str,
-    step: isize,
-) -> Result<()> {
+pub fn move_task(db: &Database, view: &View, today: Date, id: &str, step: isize) -> Result<()> {
     if *view == View::Today {
         return move_in_today(db, today, id, step);
     }
@@ -81,7 +75,7 @@ pub fn move_task(
     place_task(db, view, today, id, after)
 }
 
-fn move_in_today(db: &Database, today: NaiveDate, id: &str, step: isize) -> Result<()> {
+fn move_in_today(db: &Database, today: Date, id: &str, step: isize) -> Result<()> {
     let list = QueryEngine::new(db).tasks_in(&View::Today, today)?;
     let Some(task) = list.iter().find(|t| t.id == id) else {
         return Err(invalid(format!("task '{id}' is not in Today")));
@@ -136,7 +130,7 @@ fn move_in_today(db: &Database, today: NaiveDate, id: &str, step: isize) -> Resu
 pub fn add_task_below(
     db: &Database,
     view: &View,
-    today: NaiveDate,
+    today: Date,
     task: &mut Task,
     below: &str,
 ) -> Result<()> {
@@ -166,7 +160,7 @@ pub fn add_task_below(
 /// start date; moving it into This Evening schedules it for `today`.
 pub fn place_in_today(
     db: &Database,
-    today: NaiveDate,
+    today: Date,
     id: &str,
     evening: bool,
     after: Option<&str>,
@@ -222,7 +216,7 @@ pub fn place_area(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
 fn section_of(
     db: &Database,
     view: &View,
-    today: NaiveDate,
+    today: Date,
     id: &str,
 ) -> Result<(&'static str, Vec<Task>)> {
     if !view.is_reorderable() {

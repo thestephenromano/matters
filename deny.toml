@@ -9,11 +9,7 @@ all-features = true
 # Every RustSec advisory that affects a dependency fails the check. An
 # exception goes in `ignore` with the advisory id, a reason, and when it can
 # be removed.
-ignore = [
-    # chrono is unmaintained, with no upgrade. Remove once matters-core,
-    # rusqlite's date mapping and interim have moved off chrono (#123).
-    { id = "RUSTSEC-2026-0543", reason = "unmaintained, no fix; migration tracked in #123" },
-]
+ignore = []
 
 [licenses]
 # Matters is MIT OR Apache-2.0; dependencies may use these licenses.

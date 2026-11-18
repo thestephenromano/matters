@@ -1,18 +1,18 @@
 //! Deadlines (#20): typed deadlines and where a task stands against one.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::{Database, DateOrder, DeadlineStatus, QueryEngine, Schedule, Task, View};
 
 /// Wednesday 18 November 2026.
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 18).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 18)
 }
 
-fn day(m: u32, d: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, m, d).unwrap()
+fn day(m: i8, d: i8) -> Date {
+    jiff::civil::date(2026, m, d)
 }
 
-fn parse(input: &str) -> Option<NaiveDate> {
+fn parse(input: &str) -> Option<Date> {
     Schedule::parse_typed_deadline(input, today(), DateOrder::MonthFirst)
 }
 

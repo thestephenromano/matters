@@ -1,12 +1,12 @@
 //! Deleting a task moves it to the Trash (SPEC §3.7): it stays recoverable,
 //! keeps its state, and is destroyed only when the Trash is emptied.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::storage::schema::SCHEMA_V1;
 use matters_core::{Area, ChecklistItem, Database, Project, QueryEngine, Status, Task, View};
 
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 17).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 17)
 }
 
 fn live_views() -> Vec<View> {

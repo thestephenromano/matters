@@ -1,4 +1,3 @@
-use chrono::NaiveDate;
 use matters_core::{Area, ChecklistItem, Database, Project, QueryEngine, Status, Task};
 
 #[test]
@@ -19,7 +18,7 @@ fn test_inbox_flow() {
     assert_eq!(inbox[1].title, "Review Q4 goals");
 
     // 2. Schedule task1 for today -> it leaves the inbox
-    task1.start_date = Some(NaiveDate::from_ymd_opt(2026, 11, 17).unwrap());
+    task1.start_date = Some(jiff::civil::date(2026, 11, 17));
     db.update_task(&task1).unwrap();
 
     let inbox = query.inbox().unwrap();
@@ -41,9 +40,9 @@ fn test_inbox_flow() {
 fn test_today_and_evening_separation() {
     let db = Database::open_in_memory().expect("open memory db");
     let query = QueryEngine::new(&db);
-    let today = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
-    let yesterday = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
-    let tomorrow = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+    let today = jiff::civil::date(2026, 11, 17);
+    let yesterday = jiff::civil::date(2026, 11, 16);
+    let tomorrow = jiff::civil::date(2026, 11, 18);
 
     // Regular daytime today task
     let mut t_day = Task::new("t-day", "Prepare slide deck", 1.0);
@@ -84,10 +83,10 @@ fn test_today_and_evening_separation() {
 fn test_upcoming_groups() {
     let db = Database::open_in_memory().expect("open memory db");
     let query = QueryEngine::new(&db);
-    let today = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+    let today = jiff::civil::date(2026, 11, 17);
 
-    let d1 = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
-    let d2 = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+    let d1 = jiff::civil::date(2026, 11, 19);
+    let d2 = jiff::civil::date(2026, 11, 20);
 
     let mut t1 = Task::new("t1", "Ship sprint release", 1.0);
     t1.start_date = Some(d1);
@@ -115,7 +114,7 @@ fn test_upcoming_groups() {
 fn test_someday_isolation() {
     let db = Database::open_in_memory().expect("open memory db");
     let query = QueryEngine::new(&db);
-    let today = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+    let today = jiff::civil::date(2026, 11, 17);
 
     let mut t_someday = Task::new("t-someday", "Learn Norwegian", 1.0);
     t_someday.is_someday = true;

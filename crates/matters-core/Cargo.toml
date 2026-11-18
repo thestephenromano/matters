@@ -8,14 +8,15 @@ authors = ["Matters Contributors"]
 description = "Core GTD engine and SQLite persistence for Matters"
 
 [dependencies]
-rusqlite = { version = "=0.43.0", features = ["bundled", "chrono", "uuid"] }
-chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "=0.43.0", features = ["bundled", "uuid"] }
+# Dates and times; chrono is unmaintained (RUSTSEC-2026-0543, #123).
+jiff = { version = "0.2", features = ["serde"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "6.0"
 # Typed dates in the When picker ("tomorrow", "fri", "in 3 days"); decided on #59.
-interim = { version = "0.2.2", features = ["chrono_0_4"] }
+interim = { version = "0.2.2", features = ["jiff_0_2"] }
 
 [dev-dependencies]
 tempfile = "3.13"

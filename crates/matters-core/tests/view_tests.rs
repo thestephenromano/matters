@@ -2,11 +2,11 @@
 //! captured in a view lands, how "When" strings are parsed and applied, and
 //! that sidebar counts match the lists they badge.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::{Database, Project, QueryEngine, Schedule, Status, Task, View};
 
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 17).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 17)
 }
 
 fn all_views(project_id: &str) -> Vec<View> {
@@ -77,9 +77,7 @@ fn schedule_parse_accepts_only_schedules() {
     assert_eq!(Schedule::parse("none"), Some(Schedule::None));
     assert_eq!(
         Schedule::parse("2026-12-01"),
-        Some(Schedule::Date(
-            NaiveDate::from_ymd_opt(2026, 12, 1).unwrap()
-        ))
+        Some(Schedule::Date(jiff::civil::date(2026, 12, 1)))
     );
     // View names and junk are not schedules.
     for not_a_schedule in [
@@ -114,7 +112,7 @@ fn apply_schedule_writes_all_fields_together() {
         "moving to daytime must clear This Evening"
     );
 
-    let date = NaiveDate::from_ymd_opt(2026, 12, 24).unwrap();
+    let date = jiff::civil::date(2026, 12, 24);
     task.apply_schedule(&Schedule::Date(date), today());
     assert_eq!(
         (
@@ -143,7 +141,7 @@ fn counts_match_listed_tasks() {
         .unwrap();
     let engine = QueryEngine::new(&db);
 
-    let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+    let d = |y, m, day| jiff::civil::date(y, m, day);
     let mut n = 0;
     let mut add = |f: &dyn Fn(&mut Task)| {
         n += 1;
@@ -231,7 +229,7 @@ fn containing_view_lists_the_task() {
         .unwrap();
     let engine = QueryEngine::new(&db);
 
-    let d = |m, day| NaiveDate::from_ymd_opt(2026, m, day).unwrap();
+    let d = |m, day| jiff::civil::date(2026, m, day);
     type Setup<'a> = Box<dyn Fn(&mut Task) + 'a>;
     let setups: Vec<(&str, Setup<'_>)> = vec![
         ("inbox", Box::new(|_| {})),

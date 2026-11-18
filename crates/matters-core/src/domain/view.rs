@@ -1,4 +1,4 @@
-use chrono::{Days, NaiveDate};
+use jiff::civil::Date;
 
 use super::status::Status;
 use super::task::Task;
@@ -127,7 +127,7 @@ impl View {
     /// whether it is filed in an area (that area) or not (Inbox). An undated
     /// task with a due deadline is shown in Today even when it is also listed
     /// in the Inbox.
-    pub fn containing(task: &Task, today: NaiveDate) -> View {
+    pub fn containing(task: &Task, today: Date) -> View {
         if task.is_trashed() {
             return View::Trash;
         }
@@ -169,12 +169,12 @@ impl View {
     /// tasks that belong to an area or project, so captures there go to the
     /// Inbox (SPEC §3.1: a task created without an explicit project or date
     /// defaults to the Inbox).
-    pub fn new_task(&self, id: impl Into<String>, title: &str, today: NaiveDate) -> Option<Task> {
+    pub fn new_task(&self, id: impl Into<String>, title: &str, today: Date) -> Option<Task> {
         let title = Task::clean_title(title)?;
         let schedule = match self {
             View::Logbook | View::Trash => return None,
             View::Today => Schedule::Today { evening: false },
-            View::Upcoming => Schedule::Date(today.checked_add_days(Days::new(1)).unwrap_or(today)),
+            View::Upcoming => Schedule::Date(today.tomorrow().unwrap_or(today)),
             View::Someday => Schedule::Someday,
             View::Inbox | View::Anytime | View::Project(_) | View::Area(_) => Schedule::None,
         };
