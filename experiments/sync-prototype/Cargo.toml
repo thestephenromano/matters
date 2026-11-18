@@ -1,0 +1,26 @@
+[package]
+name = "matters-sync-prototype"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# An independent evaluation, deliberately outside the application's build graph.
+[workspace]
+
+[dependencies]
+loro = "=1.18.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+hpke-rs = { version = "=0.8.0", default-features = false, features = ["std", "libcrux", "draft-ietf-hpke-pq"], optional = true }
+hpke-rs-crypto = { version = "=0.8.0", optional = true }
+hpke-rs-libcrux = { version = "=0.8.0", default-features = false, features = ["std", "sys-rng", "draft-ietf-hpke-pq"], optional = true }
+libcrux-ml-dsa = { version = "=0.0.11", default-features = false, features = ["std", "mldsa65"], optional = true }
+
+[features]
+crypto-probe = ["dep:hpke-rs", "dep:hpke-rs-crypto", "dep:hpke-rs-libcrux", "dep:libcrux-ml-dsa"]
+
+[dev-dependencies]
+tempfile = "3"
+matters-core = { path = "../../crates/matters-core" }
