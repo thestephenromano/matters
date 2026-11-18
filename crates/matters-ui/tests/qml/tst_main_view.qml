@@ -342,6 +342,103 @@ Item {
             compare(controller.errorMessage, "", "and shows no error");
         }
 
+        // ---- Drag and drop (#53) ------------------------------------------
+
+        // Drag `grip` with the mouse to `to` (a point in `view`), in steps, as
+        // a user would; `during` runs while the button is still held.
+        function dragGripTo(grip, to, during) {
+            const from = grip.mapToItem(view, grip.width / 2, grip.height / 2);
+            mousePress(view, from.x, from.y);
+            const steps = 12;
+            for (let i = 1; i <= steps; ++i)
+                mouseMove(view, from.x, from.y + (to.y - from.y) * i / steps, 10, Qt.LeftButton);
+            if (during)
+                during();
+            mouseRelease(view, from.x, to.y);
+        }
+
+        function test_dragging_a_task_by_its_grip_reorders_it() {
+            addToToday("drag-1");
+            addToToday("drag-2");
+            const row = addToToday("drag-3");
+            settle();
+            const grip = findChild(row, "dragGrip");
+            verify(grip.visible, "Today is arranged by hand");
+
+            // Drop onto the upper half of drag-1: drag-3 goes before it.
+            const target = rowFor("drag-1");
+            const to = target.mapToItem(view, target.width / 2, 10);
+            const indicator = findChild(view, "dropIndicator");
+            dragGripTo(grip, to, () => verify(indicator.visible, "a line shows where it will land"));
+            tryVerify(() => indexOf("drag-3") === indexOf("drag-1") - 1, 2000, "drag-3 moved above drag-1");
+            verify(!indicator.visible);
+            compare(rowFor("drag-3"), row, "the row was moved, not recreated");
+            compare(list.selectedTaskId, row.taskId, "the dragged task is selected");
+
+            // A drag that ends where it started changes nothing.
+            settle();
+            const order = [];
+            for (let i = 0; i < list.count; ++i)
+                order.push(list.model.idAt(i));
+            const here = row.mapToItem(view, row.width / 2, row.height / 2 + 4);
+            dragGripTo(findChild(row, "dragGrip"), here);
+            wait(100);
+            for (let i = 0; i < list.count; ++i)
+                compare(list.model.idAt(i), order[i], "unchanged");
+        }
+
+        function test_dragging_keeps_this_evening_apart() {
+            const day = addToToday("day-task");
+            controller.selectView("today");
+            view.captureTask("eve-task");
+            waitForRow("eve-task");
+            controller.scheduleTask(rowFor("eve-task").taskId, "evening");
+            tryVerify(() => indexOf("eve-task") > indexOf("day-task"), 2000);
+            settle();
+
+            // Drag the daytime task onto the middle of the evening one.
+            const eve = rowFor("eve-task");
+            const to = eve.mapToItem(view, eve.width / 2, eve.height - 6);
+            const before = indexOf("day-task");
+            dragGripTo(findChild(day, "dragGrip"), to,
+                       () => verify(!findChild(view, "dropIndicator").visible, "no slot among evening tasks"));
+            wait(100);
+            compare(indexOf("day-task"), before, "the daytime task stays among daytime tasks");
+            compare(controller.errorMessage, "");
+
+            // Leave Today without an evening task: later tests select its last row.
+            controller.scheduleTask(rowFor("eve-task").taskId, "someday");
+            waitForNoRow("eve-task");
+        }
+
+        function test_no_grip_where_the_list_has_its_own_order() {
+            controller.selectView("someday");
+            view.captureTask("sd-grip");
+            const row = waitForRow("sd-grip");
+            verify(!findChild(row, "dragGrip").visible, "Someday is not arranged by hand");
+        }
+
+        function test_dragging_a_project_in_the_sidebar_reorders_it() {
+            controller.createProject("proj-a");
+            controller.createProject("proj-b");
+            const ids = () => JSON.parse(controller.projectsJson).map(p => p.title);
+            tryVerify(() => ids().indexOf("proj-b") === ids().indexOf("proj-a") + 1, 2000, "new projects go last");
+
+            const projects = findChild(view, "projectsList");
+            let a = null, b = null;
+            tryVerify(() => {
+                for (let i = 0; i < projects.count; ++i) {
+                    const item = projects.itemAtIndex(i);
+                    if (item && item.modelData.title === "proj-a") a = item;
+                    if (item && item.modelData.title === "proj-b") b = item;
+                }
+                return a !== null && b !== null;
+            }, 2000);
+            const to = a.mapToItem(view, a.width / 2, 4);
+            dragGripTo(findChild(b, "projectGrip"), to);
+            tryVerify(() => ids().indexOf("proj-b") === ids().indexOf("proj-a") - 1, 2000, "proj-b moved above proj-a");
+        }
+
         function test_ctrl_s_opens_the_when_menu_for_the_selection() {
             addToToday("menu-me");
             settle();
