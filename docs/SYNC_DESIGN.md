@@ -14,7 +14,7 @@ The recommended evaluation starts with Loro for CRDT state, SQLite for local per
 
 - [ADR 0001: CRDT adoption](decisions/0001-crdt-adoption.md) proposes Loro 1.18.0, collection boundaries, task merge rules, the SQL write migration and reproducible prototype gates for [#32](https://github.com/thestephenromano/matters/issues/32).
 - [ADR 0002: post-quantum protocol](decisions/0002-post-quantum-sync.md) proposes exact recipient-envelope/signature choices, authenticated messages, authority, recovery and adversarial checks for [#33](https://github.com/thestephenromano/matters/issues/33).
-- [Dependency evidence](evidence/README.md) records the inspected versions, checksums and source limitations. The isolated prototype and its measurements are recorded in the [review evidence](../experiments/sync-prototype/REVIEW.md); independent security review remains open.
+- [Dependency evidence](evidence/README.md) records the inspected versions, checksums and source limitations. The [prototype review record](../experiments/sync-prototype/REVIEW.md) maps semantic checks to their tests. [Refreshed measurement samples](../experiments/sync-prototype/evidence/review-2026-11-18.json) cover Loro/SQLite revision `49e969c` on `betelgeuse`; independent security review remains open.
 
 - [Encrypted content-record contract](SYNC_RECORD_CONTRACT.md) defines the experimental canonical bytes, bounded codec, conformance fixtures and remaining admission/service obligations for #33/#34/#36.
 
@@ -131,7 +131,7 @@ An upload acknowledgement must distinguish transient receipt from a durable comm
 
 Recommend adopting a CRDT engine and established transport/crypto components, then building only missing application and service integration. Document an applicability failure before replacing an existing protocol, codec, queue or storage implementation. Use the local SQLite transaction for the outgoing queue; no separate message broker is justified by the initial workload.
 
-Before dependency selection, record exact versions/revisions, licenses, supported targets, release status and relevant security evidence. The bounded Loro prototype has [recorded same-host measurements](../experiments/sync-prototype/REVIEW.md). The alternatives and larger acceptance workloads remain unmeasured.
+Before dependency selection, record exact versions/revisions, licenses, supported targets, release status and relevant security evidence. The [Loro/SQLite measurement artifact](../experiments/sync-prototype/evidence/review-2026-11-18.json) records three 1,000-task comparisons at revision `49e969c` on `betelgeuse` (Intel i9-10920X, NVMe/Btrfs). Those samples cover that persistence prototype revision, not the encrypted-record codec or later heads. The alternatives and larger acceptance workloads remain unmeasured.
 
 ## Matters semantics and migration
 

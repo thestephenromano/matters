@@ -8,9 +8,26 @@ pub const SUITE: &str = "matters-sync-pq-v0";
 pub const SIGNATURE_BYTES: usize = 3309;
 pub const MAX_PLAINTEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_CIPHERTEXT_BYTES: usize = MAX_PLAINTEXT_BYTES + 16;
-// Maximum deterministic-CBOR overhead, checked against an independent fixture.
-// Includes B/H, repeated contexts, 64-bit epoch, previous hash, and ML-DSA-65 signature.
-pub const MAX_WIRE_BYTES: usize = MAX_CIPHERTEXT_BYTES + 3859;
+// Field-by-field size derivation from sync-record-v0.cddl. Text/byte strings
+// share the same length-prefix size. Golden length AND hash are independent checks.
+const MAX_HEADER_BYTES: usize = preferred_width(14) // H array
+    + preferred_width(0) + string_size(SUITE.len())
+    + 4 * string_size(16) // application, tenant, collection, document
+    + string_size("snapshot".len()) + preferred_width(u64::MAX)
+    + 2 * string_size(48) // manifest, author
+    + 3 * string_size(32) // incarnation, record, batch
+    + string_size(48); // present predecessor is larger than null
+const MAX_SIGNED_BYTES: usize = preferred_width(8) // B array
+    + preferred_width(0) + string_size(SUITE.len()) + string_size("snapshot".len())
+    + 3 * string_size(16) + string_size(48) // route, signer
+    + preferred_width(3) + MAX_HEADER_BYTES + string_size(MAX_CIPHERTEXT_BYTES)
+    + string_size(48); // body author
+pub const MAX_WIRE_BYTES: usize =
+    preferred_width(2) + MAX_SIGNED_BYTES + string_size(SIGNATURE_BYTES);
+
+const fn string_size(length: usize) -> usize {
+    preferred_width(length as u64) + length
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -89,14 +106,27 @@ pub struct Header<'a> {
 #[derive(Debug)]
 pub struct ParsedRecord<'a> {
     pub header: Header<'a>,
-    pub header_bytes: &'a [u8],
+    header_bytes: &'a [u8],
     pub signed_bytes: &'a [u8],
     pub ciphertext: &'a [u8],
     pub signature: &'a [u8; SIGNATURE_BYTES],
 }
+impl<'a> ParsedRecord<'a> {
+    pub fn header_bytes(&self) -> &'a [u8] {
+        self.header_bytes
+    }
+
+    /// Receiver transcript: append the already validated original H item.
+    /// No header normalization or re-encoding is involved.
+    pub fn record_key_info(&self) -> Result<Vec<u8>> {
+        let mut info = record_key_info_prefix()?;
+        info.extend_from_slice(self.header_bytes);
+        Ok(info)
+    }
+}
 
 // This checks RFC 8949 shortest argument widths; minicbor owns binary decoding.
-fn preferred_width(value: u64) -> usize {
+const fn preferred_width(value: u64) -> usize {
     match value {
         0..=23 => 1,
         24..=0xff => 2,
@@ -178,11 +208,7 @@ impl<'a> Reader<'a> {
             record_id: self.fixed()?,
             logical_batch: self.fixed()?,
             previous: if self.0.datatype()? == minicbor::data::Type::Null {
-                let start = self.0.position();
                 self.0.null()?;
-                if self.0.position() != start + 1 {
-                    return Err(Error::NonCanonical);
-                }
                 None
             } else {
                 Some(self.fixed()?)
@@ -292,9 +318,14 @@ pub fn header_bytes(header: Header<'_>) -> Result<Vec<u8>> {
     write_header(&mut e, header)?;
     Ok(e.into_writer())
 }
-pub fn record_key_info(header: Header<'_>) -> Result<Vec<u8>> {
+fn record_key_info_prefix() -> Result<Vec<u8>> {
     let mut e = Encoder::new(Vec::new());
     e.array(2)?.str("matters-sync/v0/record-key")?;
+    Ok(e.into_writer())
+}
+/// Sender transcript: a new typed header has no received wire bytes yet.
+pub fn record_key_info(header: Header<'_>) -> Result<Vec<u8>> {
+    let mut e = Encoder::new(record_key_info_prefix()?);
     write_header(&mut e, header)?;
     Ok(e.into_writer())
 }

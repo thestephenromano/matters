@@ -25,4 +25,5 @@ record-contract = ["dep:minicbor"]
 
 [dev-dependencies]
 cddl-cat = { version = "=0.7.1", default-features = false, features = ["ciborium"] }
+sha2 = "=0.11.1"
 tempfile = "3"

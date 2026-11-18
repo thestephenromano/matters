@@ -34,6 +34,17 @@ jobs:
         working-directory: experiments/sync-prototype
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: experiments/sync-prototype/tests/vectors/record-contract/requirements.txt
+      - name: Check execution evidence against the checkout
+        run: python tests/vectors/record-contract/check_evidence.py
+      - name: Install independent fixture oracle
+        run: python -m pip install --only-binary=:all: -r tests/vectors/record-contract/requirements.txt
+      - name: Check independent fixture regeneration
+        run: python tests/vectors/record-contract/generate.py --check
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

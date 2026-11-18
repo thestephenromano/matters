@@ -2,6 +2,7 @@
 
 use matters_sync_prototype::wire::{self, Context, Error, Header, Kind};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn fixtures() -> Value {
     serde_json::from_str(include_str!("vectors/record-contract/golden.json")).unwrap()
@@ -53,10 +54,11 @@ fn independent_golden_bytes_and_original_transcript_slices() {
         let wire = bytes(v, "structural_wire_hex");
         let parsed = wire::parse(&wire, context()).unwrap();
         assert_eq!(parsed.header, h);
-        assert_eq!(parsed.header_bytes, bytes(v, "header_hex"));
+        assert_eq!(parsed.header_bytes(), bytes(v, "header_hex"));
         assert_eq!(parsed.signed_bytes, bytes(v, "signed_hex"));
         assert_eq!(wire::header_bytes(h).unwrap(), bytes(v, "header_hex"));
         assert_eq!(wire::record_key_info(h).unwrap(), bytes(v, "info_hex"));
+        assert_eq!(parsed.record_key_info().unwrap(), bytes(v, "info_hex"));
         assert_eq!(
             wire::signing_bytes(h, parsed.ciphertext).unwrap(),
             parsed.signed_bytes
@@ -65,9 +67,27 @@ fn independent_golden_bytes_and_original_transcript_slices() {
             wire::encode(h, parsed.ciphertext, parsed.signature).unwrap(),
             wire
         );
-        // Ciphertext and signed input borrow the exact caller buffer, without copies.
-        assert!(parsed.ciphertext.as_ptr() >= wire.as_ptr());
-        assert!(parsed.ciphertext.as_ptr() < wire.as_ptr().wrapping_add(wire.len()));
+        // B begins directly after the one-byte outer array head. Compare pointer
+        // and slice length, not just equal content, to prove original-buffer use.
+        assert!(std::ptr::eq(
+            parsed.signed_bytes,
+            &wire[1..1 + parsed.signed_bytes.len()]
+        ));
+        let header_offset = wire
+            .windows(parsed.header_bytes().len())
+            .position(|part| part == parsed.header_bytes())
+            .unwrap();
+        assert!(std::ptr::eq(
+            parsed.header_bytes(),
+            &wire[header_offset..header_offset + parsed.header_bytes().len()]
+        ));
+        let cipher_offset = (parsed.ciphertext.as_ptr() as usize)
+            .checked_sub(wire.as_ptr() as usize)
+            .unwrap();
+        assert!(std::ptr::eq(
+            parsed.ciphertext,
+            &wire[cipher_offset..cipher_offset + parsed.ciphertext.len()]
+        ));
     }
 }
 
@@ -149,6 +169,7 @@ fn exact_wire_budget_and_payload_bounds() {
     let h = header(Kind::Snapshot, u64::MAX);
     let cipher = vec![0; wire::MAX_CIPHERTEXT_BYTES];
     let encoded = wire::encode(h, &cipher, &[0; wire::SIGNATURE_BYTES]).unwrap();
+    assert_eq!(&Sha256::digest(&encoded)[..], bytes(&f, "max_wire_sha256"));
     assert_eq!(
         encoded.len(),
         f["max_wire_bytes"].as_u64().unwrap() as usize
@@ -261,7 +282,13 @@ mod crypto {
             )
             .unwrap();
             assert_eq!(prk, bytes(v, "prk_hex"));
-            let key = record_key(parsed.header, &cek);
+            let key = Provider::kdf_expand(
+                TwoStageKdfAlgorithm::HkdfSha256,
+                &prk,
+                &parsed.record_key_info().unwrap(),
+                32,
+            )
+            .unwrap();
             assert_eq!(key, bytes(v, "key_hex"));
             let plain = bytes(v, "plaintext_hex");
             assert_eq!(
@@ -269,7 +296,7 @@ mod crypto {
                     AeadAlgorithm::Aes256Gcm,
                     &key,
                     &[0; 12],
-                    parsed.header_bytes,
+                    parsed.header_bytes(),
                     &plain
                 )
                 .unwrap(),
@@ -280,7 +307,7 @@ mod crypto {
                     AeadAlgorithm::Aes256Gcm,
                     &key,
                     &[0; 12],
-                    parsed.header_bytes,
+                    parsed.header_bytes(),
                     parsed.ciphertext
                 )
                 .unwrap(),
@@ -292,7 +319,7 @@ mod crypto {
                 AeadAlgorithm::Aes256Gcm,
                 &key,
                 &[0; 12],
-                parsed.header_bytes,
+                parsed.header_bytes(),
                 &bad
             )
             .is_err());
@@ -300,7 +327,7 @@ mod crypto {
                 AeadAlgorithm::Aes256Gcm,
                 &[99; 32],
                 &[0; 12],
-                parsed.header_bytes,
+                parsed.header_bytes(),
                 parsed.ciphertext
             )
             .is_err());
@@ -421,7 +448,12 @@ mod crypto {
                     ..h
                 },
             ];
-            for changed in mutations {
+            // The snapshot fixture also exercises removing an existing predecessor.
+            // The data fixture above already covers null -> present.
+            for changed in mutations.into_iter().chain(h.previous.map(|_| Header {
+                previous: None,
+                ..h
+            })) {
                 let b = wire::signing_bytes(changed, parsed.ciphertext).unwrap();
                 assert!(ml_dsa_65::verify(
                     &keys.verification_key,

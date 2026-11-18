@@ -9,16 +9,20 @@ These public synthetic fixtures bind the [content-record contract](../../../../.
 Reproduce from the repository root (the Python dependencies are oracle tools only):
 
 ```sh
-uv run --python 3.13 --with cbor2==5.6.5 --with cryptography==46.0.3 \
+uv run --python 3.13 --with-requirements experiments/sync-prototype/tests/vectors/record-contract/requirements.txt \
   experiments/sync-prototype/tests/vectors/record-contract/generate.py --check
 CARGO_TARGET_DIR=target/sync-prototype cargo test \
   --manifest-path experiments/sync-prototype/Cargo.toml --locked \
   --features crypto-probe,record-contract --test record_contract
 ```
 
+CI installs the pinned versions in `requirements.txt` and runs this same regeneration check. It also runs `check_evidence.py` to compare the active execution record with the checkout; a stale document hash fails the job.
+
 Omit `--check` only when intentionally changing the contract and reviewing the new bytes. Negative fixtures are byte splices against the data record, with an explicit expected parser error. The generator, committed bytes, CDDL and Rust tests must agree; do not regenerate expectations merely to satisfy a failing implementation.
 
-The maximum fixture has a 1,048,592-byte ciphertext (1 MiB plaintext plus the 16-byte tag), the longer `snapshot` label, u64-max epoch, and a 48-byte predecessor. Its complete length is **1,052,451 bytes**, giving **3,859 bytes** of maximum framing/signature overhead. The maximum ciphertext's CBOR length prefix is five bytes. This independent serialization derives the Rust input cap; the test accepts that boundary and rejects the next byte. The full maximum vector is represented by length and SHA-256 to avoid committing a megabyte of zeros; its construction is in the generator.
+The maximum fixture has a 1,048,592-byte ciphertext (1 MiB plaintext plus the 16-byte tag), the longer `snapshot` label, u64-max epoch, and a 48-byte predecessor. Its complete length is **1,052,451 bytes**, giving **3,859 bytes** of maximum framing/signature overhead. The maximum ciphertext's CBOR length prefix is five bytes. This independent serialization derives the Rust input cap; the Rust test compares the complete maximum record SHA-256 as well as its length, accepts that boundary and rejects the next byte. The full maximum vector is represented by length and SHA-256 to avoid committing a megabyte of zeros; its construction is in the generator.
+
+Slice pointer/length assertions cover B, H and ciphertext in the original input. Predecessor authentication cases cover absent-to-present, present-to-different-present and present-to-absent. The receiver KDF transcript uses the validated original header; the sender transcript encodes a new header.
 
 The provider tests check the independent PRK/key/ciphertext values and reject changes to every variable header field, ciphertext, author key and signature context. Version/suite changes reject at the codec boundary. Every proper prefix of both complete golden records is rejected. Tests also cover nonminimal widths, indefinite items, forbidden types, lengths/arity, repeated context disagreement, and consistently substituted route context.
 
