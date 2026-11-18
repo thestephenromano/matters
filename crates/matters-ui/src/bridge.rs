@@ -79,6 +79,11 @@ pub mod qobject {
         /// Capture a task in the current view; returns its id, or an empty
         /// string when nothing was created.
         fn add_task(self: Pin<&mut AppController>, title: &QString) -> QString;
+        /// Capture a task right below `below_id` in the current view (Enter on
+        /// a selected task); returns its id, or an empty string when nothing
+        /// was created (a blank title, or a list not arranged by hand).
+        #[qinvokable]
+        fn add_task_below(self: Pin<&mut AppController>, title: &QString, below_id: &QString) -> QString;
         #[qinvokable]
         fn toggle_task(self: Pin<&mut AppController>, task_id: &QString);
         /// Move a task to the Trash (recoverable until the Trash is emptied).
@@ -318,6 +323,23 @@ impl qobject::AppController {
     }
 
     /// Capture a task in the current view (placement rules: `View::new_task`).
+    pub fn add_task_below(self: Pin<&mut Self>, title: &QString, below_id: &QString) -> QString {
+        let title = String::from(title);
+        let Some(mut task) = self.view.new_task(Uuid::new_v4().to_string(), &title, local_today()) else {
+            return QString::default();
+        };
+        let result = matters_core::ordering::add_task_below(
+            &self.db,
+            &self.view,
+            self.day.day(),
+            &mut task,
+            &String::from(below_id),
+        );
+        let id = if result.is_ok() { QString::from(task.id.as_str()) } else { QString::default() };
+        self.finish(result);
+        id
+    }
+
     pub fn add_task(self: Pin<&mut Self>, title: &QString) -> QString {
         let title = String::from(title);
         let Some(mut task) = self.view.new_task(Uuid::new_v4().to_string(), &title, local_today()) else {

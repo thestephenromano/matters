@@ -92,6 +92,7 @@ Item {
         if (controller.visit !== loadedVisit) {
             loadedVisit = controller.visit;
             taskListView.selectedTaskId = "";
+            newBelowId = "";
         }
         taskModel.load(controller.currentView, controller.currentProjectId, controller.visit);
         if (pendingRevealId !== "") {
@@ -213,6 +214,39 @@ Item {
         const anchor = list.itemAtIndex(r);
         const y = before ? anchor.y - spacing : anchor.y + anchor.height + spacing;
         return { afterId: afterId, section: section, y: y };
+    }
+
+    // ---- New task below the selection (Enter, SPEC §4) ------------------
+    // A field opens under the selected task; nothing is created until a title
+    // is typed. Enter saves the task right below and moves the field under it,
+    // so a list can be typed in one go; Escape or an empty Enter closes it.
+
+    property string newBelowId: ""
+
+    function startNewBelow() {
+        const id = taskListView.selectedTaskId;
+        if (taskModel.rowOf(id) < 0)
+            return;
+        newBelowId = id;
+        Qt.callLater(root.scrollToTask, id);
+    }
+
+    function closeNewBelow() {
+        newBelowId = "";
+        taskListView.forceActiveFocus();
+    }
+
+    function commitNewBelow(belowId, input) {
+        const title = input.text;
+        input.text = "";
+        const id = title.trim() === "" ? "" : controller.addTaskBelow(title, belowId);
+        if (id === "") {
+            closeNewBelow();
+            return;
+        }
+        taskListView.selectedTaskId = id;
+        newBelowId = id; // the field moves under the new task once it is listed
+        Qt.callLater(root.scrollToTask, id);
     }
 
     // The task whose title should take keyboard focus once it is open (F2).
@@ -929,6 +963,16 @@ Item {
                             case Qt.Key_F2:
                                 root.editSelectedTitle();
                                 break;
+                            case Qt.Key_Return:
+                            case Qt.Key_Enter:
+                                // Below the selection where the list is arranged by
+                                // hand; elsewhere into the quick-add field.
+                                if (controller.reorderable && controller.acceptsNewTasks
+                                        && taskModel.rowOf(taskListView.selectedTaskId) >= 0)
+                                    root.startNewBelow();
+                                else if (controller.acceptsNewTasks)
+                                    newTaskInput.forceActiveFocus();
+                                break;
                             case Qt.Key_Delete:
                             case Qt.Key_Backspace:
                                 root.trashSelected();
@@ -987,6 +1031,15 @@ Item {
                             readonly property bool isSelected: taskListView.selectedTaskId === taskId
 
                             // F2 asked to edit this task's title: focus it once open.
+                            // The new-task field is open under this row (Enter).
+                            readonly property bool newBelowHere: root.newBelowId === taskId
+                            onNewBelowHereChanged: if (newBelowHere) Qt.callLater(taskRow.focusNewBelow)
+                            Component.onCompleted: if (newBelowHere) Qt.callLater(taskRow.focusNewBelow)
+                            function focusNewBelow() {
+                                if (newBelowHere)
+                                    newBelowInput.forceActiveFocus();
+                            }
+
                             readonly property bool titleEditRequested: root.titleEditId === taskId
                             onTitleEditRequestedChanged: if (titleEditRequested) Qt.callLater(taskRow.beginTitleEdit)
                             function beginTitleEdit() {
@@ -998,7 +1051,7 @@ Item {
                             // The content keeps its natural height, pinned to the top;
                             // the row grows to reveal it and clips the rest, so the
                             // header stays put while the height animates.
-                            readonly property real targetHeight: isExpanded ? rowContent.implicitHeight + 16 : 48
+                            readonly property real targetHeight: isExpanded || newBelowHere ? rowContent.implicitHeight + 16 : 48
                             width: taskListView.width
                             height: targetHeight
                             clip: true
@@ -1232,6 +1285,55 @@ Item {
                                         visible: controller.currentView === "trash"
                                         font.pixelSize: 11
                                         onClicked: controller.restoreTask(taskRow.taskId)
+                                    }
+                                }
+
+                                // New task below this one (Enter on the selection).
+                                Rectangle {
+                                    visible: taskRow.newBelowHere
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 34
+                                    Layout.leftMargin: 36
+                                    radius: 6
+                                    color: root.isDark ? "#1A1B1E" : "#FFFFFF"
+                                    border.color: root.colAccent
+
+                                    TextInput {
+                                        id: newBelowInput
+                                        objectName: "newBelowInput"
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 8
+                                        anchors.rightMargin: 8
+                                        verticalAlignment: TextInput.AlignVCenter
+                                        font.pixelSize: 14
+                                        color: root.colTextPrimary
+                                        clip: true
+
+                                        Text {
+                                            anchors.fill: parent
+                                            verticalAlignment: Text.AlignVCenter
+                                            text: "New to-do"
+                                            color: root.colTextSecondary
+                                            font.pixelSize: 14
+                                            visible: !newBelowInput.text
+                                        }
+
+                                        Keys.onReturnPressed: root.commitNewBelow(taskRow.taskId, newBelowInput)
+                                        Keys.onEnterPressed: root.commitNewBelow(taskRow.taskId, newBelowInput)
+                                        Keys.onEscapePressed: {
+                                            text = "";
+                                            root.closeNewBelow();
+                                        }
+                                        // Clicking elsewhere keeps what was typed.
+                                        onActiveFocusChanged: {
+                                            if (activeFocus || root.newBelowId !== taskRow.taskId)
+                                                return;
+                                            const title = text;
+                                            text = "";
+                                            root.newBelowId = "";
+                                            if (title.trim() !== "")
+                                                controller.addTaskBelow(title, taskRow.taskId);
+                                        }
                                     }
                                 }
 

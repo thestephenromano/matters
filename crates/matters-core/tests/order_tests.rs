@@ -2,7 +2,7 @@
 //! its own order, and only the ordering operations change it.
 
 use chrono::NaiveDate;
-use matters_core::ordering::{move_task, place_area, place_in_today, place_project, place_task};
+use matters_core::ordering::{add_task_below, move_task, place_area, place_in_today, place_project, place_task};
 use matters_core::{Area, Database, Project, QueryEngine, Schedule, Task, View};
 
 fn today() -> NaiveDate {
@@ -249,4 +249,41 @@ fn areas_are_reordered_in_the_sidebar() {
     let order: Vec<_> = db.list_areas().unwrap().into_iter().map(|a| a.id).collect();
     assert_eq!(order, ["health", "work", "home"]);
     assert!(place_area(&db, "home", Some("gone")).is_err());
+}
+
+#[test]
+fn a_task_added_below_another_lands_right_under_it() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a", "b", "c"]);
+    let view = project("p1");
+    let mut new = view.new_task("n1", "n1", today()).unwrap();
+    add_task_below(&db, &view, today(), &mut new, "a").unwrap();
+    assert_eq!(ids(&db, &view), ["a", "n1", "b", "c"]);
+    let mut next = view.new_task("n2", "n2", today()).unwrap();
+    add_task_below(&db, &view, today(), &mut next, "n1").unwrap();
+    assert_eq!(ids(&db, &view), ["a", "n1", "n2", "b", "c"], "typing a list keeps going down");
+}
+
+#[test]
+fn in_today_a_task_added_below_joins_that_section() {
+    let db = Database::open_in_memory().unwrap();
+    today_with(&db, &[("d1", false), ("e1", true), ("e2", true)]);
+    let mut day = View::Today.new_task("nd", "nd", today()).unwrap();
+    add_task_below(&db, &View::Today, today(), &mut day, "d1").unwrap();
+    let mut eve = View::Today.new_task("ne", "ne", today()).unwrap();
+    add_task_below(&db, &View::Today, today(), &mut eve, "e1").unwrap();
+    assert_eq!(ids(&db, &View::Today), ["d1", "nd", "e1", "ne", "e2"]);
+    assert!(!evening_of(&db, "nd"));
+    assert!(evening_of(&db, "ne"), "added below an evening task: This Evening");
+}
+
+#[test]
+fn adding_below_needs_a_listed_task_in_a_list_arranged_by_hand() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a"]);
+    let mut task = project("p1").new_task("x", "x", today()).unwrap();
+    assert!(add_task_below(&db, &project("p1"), today(), &mut task, "missing").is_err());
+    let mut someday = View::Someday.new_task("y", "y", today()).unwrap();
+    assert!(add_task_below(&db, &View::Someday, today(), &mut someday, "a").is_err());
+    assert!(db.get_task("x").unwrap().is_none() && db.get_task("y").unwrap().is_none(), "nothing created");
 }
