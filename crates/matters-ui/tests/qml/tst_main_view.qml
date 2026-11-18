@@ -503,7 +503,7 @@ Item {
             controller.selectView("someday");
             view.captureTask("sd-grip");
             const row = waitForRow("sd-grip");
-            verify(!findChild(row, "dragGrip").visible, "Someday is not arranged by hand");
+            verify(!findChild(row, "dragGrip").enabled, "Someday is not arranged by hand");
         }
 
         function test_dragging_a_project_in_the_sidebar_reorders_it() {
@@ -1065,6 +1065,44 @@ Item {
             tryVerify(() => !dialog.visible, 2000);
             compare(controller.currentTitle, "New Name");
             compare(controller.errorMessage, "");
+        }
+
+        // ---- Calmer rows -----------------------------------------------------
+
+        function test_rows_show_only_dates_the_list_does_not_already_say() {
+            const day = addToToday("plain-today");
+            const eve = addToToday("evening-today");
+            controller.scheduleTask(eve.taskId, "evening");
+            settle();
+            verify(!findChild(day, "startBadge").visible, "Today doesn't repeat today's date");
+            tryVerify(() => eve.evening, 2000);
+            verify(!findChild(eve, "eveningBadge").visible, "nor mark tasks under This Evening");
+            // Leave Today without an evening task: later tests select its last row.
+            controller.scheduleTask(eve.taskId, "someday");
+            waitForNoRow("evening-today");
+
+            // In a project, the same information is shown, for people.
+            openFreshProject("badges-proj", ["b-tomorrow", "b-evening"]);
+            controller.scheduleTaskTyped(rowFor("b-tomorrow").taskId, "tomorrow", true);
+            controller.scheduleTask(rowFor("b-evening").taskId, "evening");
+            tryCompare(findChild(rowFor("b-tomorrow"), "startLabel"), "text", "Tomorrow", 2000);
+            tryVerify(() => findChild(rowFor("b-evening"), "eveningBadge").visible, 2000);
+            compare(findChild(rowFor("b-evening"), "startLabel").text, "Today");
+            // It is in Today's This Evening too; clear it so later tests that
+            // select Today's last row aren't affected.
+            controller.scheduleTask(rowFor("b-evening").taskId, "none");
+        }
+
+        function test_rows_line_up_in_every_list() {
+            const today = addToToday("align-today");
+            settle();
+            const x = (row) => findChild(row, "checkCircle").mapToItem(list, 0, 0).x;
+            const todayX = x(today);
+            controller.selectView("someday");
+            view.captureTask("align-someday");
+            const someday = waitForRow("align-someday");
+            settle();
+            compare(x(someday), todayX, "the checkbox column doesn't move between lists");
         }
 
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {
