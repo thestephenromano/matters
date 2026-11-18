@@ -1,0 +1,23 @@
+; Bounded key-distribution experiment. Canonical CBOR and all authorization
+; rules are additional requirements; zero signature fixtures are structural only.
+control = [genesis / membership / writer-start / key-envelope, signature: bstr .size 3309]
+prefix = (version: 0, suite: "matters-sync-pq-v0")
+route = (application: id16, tenant: id16, collection: id16)
+genesis = [prefix, "genesis", route, signer: hash48,
+  [root-key: sig-key, recovery-key: kem-key, generation: 0, roster, admin: hash48, epoch: 0, null]]
+membership = [prefix, "membership", route, signer: hash48,
+  [generation: 0, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key, []]]
+writer-start = [prefix, "writer_start", route, signer: hash48,
+  [manifest: hash48, document: id16, device: hash48, incarnation: id32, actor: u64, previous: id32 / null]]
+key-envelope = [prefix, "key_envelope", route, signer: hash48,
+  [manifest: hash48, epoch: u64, recipient: hash48, recipient-key-fingerprint: hash48,
+   "content-key", encapsulation: bstr .size 1153, ciphertext: bstr .size (16..77), authority: hash48]]
+key-plaintext = [epoch: u64, key: bstr .size 32, "whole-collection"]
+roster = [1*16 member]
+member = [device: hash48, sig-key, kem-key, role: 0 / 1]
+sig-key = bstr .size 1952
+kem-key = bstr .size 1249
+hash48 = bstr .size 48
+id16 = bstr .size 16
+id32 = bstr .size 32
+u64 = uint .size 8

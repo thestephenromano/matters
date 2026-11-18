@@ -5,6 +5,7 @@ on:
     paths:
       - experiments/sync-prototype/**
       - docs/SYNC_RECORD_CONTRACT.md
+      - docs/SYNC_KEY_DISTRIBUTION.md
       - docs/protocol/**
       - .github/workflows/sync-prototype.yml
   push:
@@ -12,6 +13,7 @@ on:
     paths:
       - experiments/sync-prototype/**
       - docs/SYNC_RECORD_CONTRACT.md
+      - docs/SYNC_KEY_DISTRIBUTION.md
       - docs/protocol/**
       - .github/workflows/sync-prototype.yml
 
@@ -46,6 +48,8 @@ jobs:
           python -m pip install --only-binary=:all: -r tests/vectors/record-contract/requirements.txt
       - name: Check independent fixture regeneration
         run: python tests/vectors/record-contract/generate.py --check
+      - name: Check independent key-distribution fixtures
+        run: python tests/vectors/key-distribution/generate.py --check
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
