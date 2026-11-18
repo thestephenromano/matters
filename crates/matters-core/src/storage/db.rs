@@ -465,6 +465,24 @@ impl Database {
         Ok(())
     }
 
+    /// Rename a task. The title is cleaned ([`Task::clean_title`]); a blank
+    /// title is refused and the task keeps its name.
+    pub fn rename_task(&self, id: &str, title: &str) -> Result<()> {
+        let Some(title) = Task::clean_title(title) else {
+            return Err(MattersError::Validation("a task needs a title".into()));
+        };
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let changed = conn.execute(
+            "UPDATE tasks SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now, id],
+        )?;
+        if changed == 0 {
+            return Err(MattersError::NotFound { entity: "task", id: id.to_string() });
+        }
+        Ok(())
+    }
+
     pub fn complete_task(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();

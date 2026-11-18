@@ -80,8 +80,10 @@ Item {
         }
 
         // Click on the row's title area, which has no control of its own.
+        // Click the row's empty space, beside the title (which is a text field
+        // while the row is open).
         function clickRowBody(row) {
-            mouseClick(row, row.width / 2, 24);
+            mouseClick(row, row.width * 0.75, 24);
         }
 
         // Expand a row the way a user does, and wait until it has finished
@@ -567,6 +569,69 @@ Item {
             const to2 = mid.mapToItem(view, mid.width / 2, mid.height - 6);
             dragGripTo(findChild(nowTop, "dragGrip"), to2);
             tryVerify(() => titlesInOrder() === "d3,d2,d1", 2000, "d2 moved below d3: " + titlesInOrder());
+        }
+
+        // ---- Titles (#27) ---------------------------------------------------
+
+        function typeText(text) {
+            for (const c of text)
+                keyClick(c);
+        }
+
+        function test_title_is_edited_in_place() {
+            const row = addToToday("old-title");
+            expandRow(row);
+            const input = findChild(row, "titleInput");
+            verify(input.visible, "an open task's title is a field");
+            mouseClick(input);
+            verify(input.activeFocus);
+            compare(list.selectedTaskId, row.taskId, "editing the title selects the task");
+            keyClick(Qt.Key_A, Qt.ControlModifier);
+            typeText("new title");
+            keyClick(Qt.Key_Return);
+            verify(findChild(row, "notesInput").activeFocus, "Enter goes on to the notes");
+            tryVerify(() => row.title === "new title", 2000, "saved");
+            compare(rowFor("new title"), row, "the same row, updated in place");
+            verify(row.isExpanded, "and still open");
+        }
+
+        function test_escape_or_a_blank_title_keeps_the_old_name() {
+            const row = addToToday("keep-me");
+            expandRow(row);
+            const input = findChild(row, "titleInput");
+
+            mouseClick(input);
+            keyClick(Qt.Key_A, Qt.ControlModifier);
+            typeText("oops");
+            keyClick(Qt.Key_Escape);
+            compare(input.text, "keep-me", "Escape abandons the edit");
+            verify(list.activeFocus, "focus is back on the list");
+            verify(row.isExpanded, "the row stays open");
+
+            mouseClick(input);
+            keyClick(Qt.Key_A, Qt.ControlModifier);
+            keyClick(Qt.Key_Delete);
+            keyClick(Qt.Key_Return);
+            compare(input.text, "keep-me", "a blank title snaps back");
+            wait(100);
+            compare(row.title, "keep-me", "and nothing was saved");
+            compare(controller.errorMessage, "");
+        }
+
+        function test_f2_edits_the_selected_title() {
+            const row = addToToday("f2-me");
+            settle();
+            focusList();
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "f2-me");
+            keyClick(Qt.Key_F2);
+            const input = findChild(row, "titleInput");
+            tryVerify(() => input.activeFocus, 2000, "F2 opens the task with its title focused");
+            verify(row.isExpanded);
+            compare(input.selectedText, "f2-me", "the whole title is selected");
+            typeText("renamed");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => row.title === "renamed", 2000);
         }
 
         function test_ctrl_s_opens_the_when_menu_for_the_selection() {

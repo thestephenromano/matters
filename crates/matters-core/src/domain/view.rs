@@ -134,7 +134,8 @@ impl View {
 
     /// Build a new open task as if it was captured while looking at this view
     /// (SPEC §3, "Capturing into a view"), or `None` where tasks can't be
-    /// captured ([`View::accepts_new_tasks`]).
+    /// captured ([`View::accepts_new_tasks`]) or the title is blank
+    /// ([`Task::clean_title`]).
     ///
     /// The task lands in the view it was typed into wherever the model allows:
     /// Today and Someday schedule it accordingly, Upcoming schedules it for
@@ -142,7 +143,8 @@ impl View {
     /// tasks that belong to an area or project, so captures there go to the
     /// Inbox (SPEC §3.1: a task created without an explicit project or date
     /// defaults to the Inbox).
-    pub fn new_task(&self, id: impl Into<String>, title: impl Into<String>, today: NaiveDate) -> Option<Task> {
+    pub fn new_task(&self, id: impl Into<String>, title: &str, today: NaiveDate) -> Option<Task> {
+        let title = Task::clean_title(title)?;
         let schedule = match self {
             View::Logbook | View::Trash => return None,
             View::Today => Schedule::Today { evening: false },

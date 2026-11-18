@@ -215,6 +215,17 @@ Item {
         return { afterId: afterId, section: section, y: y };
     }
 
+    // The task whose title should take keyboard focus once it is open (F2).
+    property string titleEditId: ""
+
+    function editSelectedTitle() {
+        const id = taskListView.selectedTaskId;
+        if (taskModel.rowOf(id) < 0)
+            return;
+        taskListView.expandedTaskId = id;
+        titleEditId = id;
+    }
+
     property string dragTaskId: ""
     property var taskDrop: null
     property point taskDragPos
@@ -915,6 +926,9 @@ Item {
                             case Qt.Key_Space:
                                 root.toggleSelectedExpansion();
                                 break;
+                            case Qt.Key_F2:
+                                root.editSelectedTitle();
+                                break;
                             case Qt.Key_Delete:
                             case Qt.Key_Backspace:
                                 root.trashSelected();
@@ -971,6 +985,15 @@ Item {
 
                             readonly property bool isExpanded: taskListView.expandedTaskId === taskId
                             readonly property bool isSelected: taskListView.selectedTaskId === taskId
+
+                            // F2 asked to edit this task's title: focus it once open.
+                            readonly property bool titleEditRequested: root.titleEditId === taskId
+                            onTitleEditRequestedChanged: if (titleEditRequested) Qt.callLater(taskRow.beginTitleEdit)
+                            function beginTitleEdit() {
+                                root.titleEditId = "";
+                                titleInput.forceActiveFocus();
+                                titleInput.selectAll();
+                            }
 
                             // The content keeps its natural height, pinned to the top;
                             // the row grows to reveal it and clips the rest, so the
@@ -1090,14 +1113,64 @@ Item {
                                         }
                                     }
 
-                                    // Title
+                                    // Title: plain text while the task is closed, an
+                                    // editable field while it is open (#27).
                                     Text {
+                                        visible: !taskRow.isExpanded
                                         text: taskRow.title
                                         font.pixelSize: 14
                                         font.strikeout: taskRow.done
                                         color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
                                         Layout.fillWidth: true
                                         elide: Text.ElideRight
+                                    }
+
+                                    TextInput {
+                                        id: titleInput
+                                        objectName: "titleInput"
+                                        visible: taskRow.isExpanded
+                                        text: taskRow.title
+                                        font.pixelSize: 14
+                                        font.strikeout: taskRow.done
+                                        color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
+                                        selectByMouse: true
+                                        clip: true
+                                        // Only as wide as the text, so a click on the
+                                        // empty space beside it still closes the row.
+                                        Layout.preferredWidth: Math.max(contentWidth + 8, 60)
+                                        Layout.minimumWidth: 40
+
+                                        // Saved when editing ends (Enter, focus leaves).
+                                        // A blank title is refused and the old one shown.
+                                        onEditingFinished: {
+                                            if (text !== taskRow.title && !controller.renameTask(taskRow.taskId, text))
+                                                text = taskRow.title;
+                                        }
+                                        onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
+                                        // Enter goes on to the notes.
+                                        Keys.onReturnPressed: notesInput.forceActiveFocus()
+                                        Keys.onEnterPressed: notesInput.forceActiveFocus()
+                                        // Escape abandons the edit; the row stays open.
+                                        Keys.onEscapePressed: {
+                                            text = taskRow.title;
+                                            taskListView.forceActiveFocus();
+                                        }
+
+                                        // Show changes made elsewhere, but never while
+                                        // the user is typing.
+                                        Connections {
+                                            target: taskRow
+                                            function onTitleChanged() {
+                                                if (!titleInput.activeFocus)
+                                                    titleInput.text = taskRow.title;
+                                            }
+                                        }
+                                    }
+
+                                    // Fills the space beside the title field.
+                                    Item {
+                                        visible: taskRow.isExpanded
+                                        Layout.fillWidth: true
                                     }
 
                                     // "This Evening" Badge

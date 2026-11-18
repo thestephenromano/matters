@@ -217,13 +217,10 @@ impl Ui {
         {
             let ui = ui.clone();
             new_task_entry.connect_activate(move |entry| {
-                let title = entry.text().trim().to_string();
-                if title.is_empty() {
-                    return;
-                }
-                let Some(mut task) = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, local_today())
+                let title = entry.text();
+                let Some(mut task) = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), &title, local_today())
                 else {
-                    return; // the entry is hidden where tasks can't be captured
+                    return; // a blank title (the entry is hidden where tasks can't be captured)
                 };
                 if ui.check(ui.db.add_task(&mut task)) {
                     entry.set_text("");
