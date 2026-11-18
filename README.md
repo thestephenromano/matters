@@ -32,6 +32,8 @@ matters/
 
 For full architectural, data model, and interaction specifications, see [docs/SPEC.md](docs/SPEC.md).
 
+Planned synchronization requirements and evaluation gates are recorded in the [encrypted sync design](docs/SYNC_DESIGN.md), including post-quantum end-to-end encryption and an independently usable sync service.
+
 ---
 
 ## Building and Testing
