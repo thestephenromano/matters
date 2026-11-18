@@ -72,9 +72,10 @@ Item {
             tryVerify(() => rowFor(title) === null, 2000, "row '" + title + "' should not be listed");
         }
 
+        // Capture a task the way the quick-add field does.
         function addToToday(title) {
             controller.selectView("today");
-            controller.addTask(title);
+            view.captureTask(title);
             return waitForRow(title);
         }
 
@@ -102,8 +103,16 @@ Item {
             for (const ch of "typedtask")
                 keyClick(ch);
             keyClick(Qt.Key_Return);
-            waitForRow("typedtask");
+            const row = waitForRow("typedtask");
             compare(input.text, "");
+
+            // By now Today holds more tasks than fit; the new one is shown
+            // and selected, not left below the fold.
+            verify(list.contentHeight > list.height, "the list overflows");
+            compare(list.selectedTaskId, row.taskId, "the new task is selected");
+            tryVerify(() => row.y >= list.contentY && row.y + row.height <= list.contentY + list.height,
+                      1000, "the new task is scrolled into view");
+            verify(input.activeFocus, "typing can go on");
         }
 
         function test_checkbox_click_completes_the_task_in_place() {
@@ -202,6 +211,131 @@ Item {
             tryVerify(() => projectIds(controller.projectsJson).indexOf(id) >= 0, 1000, "back in the sidebar");
             controller.selectProject(id);
             waitForRow("paint the shed");
+        }
+
+        // ---- Keyboard (SPEC §4) --------------------------------------------
+
+        function selectedTitle() {
+            return list.model.titleAt(list.model.rowOf(list.selectedTaskId));
+        }
+
+        // Give the task list keyboard focus with nothing selected.
+        function focusList() {
+            list.selectedTaskId = "";
+            list.forceActiveFocus();
+            verify(list.activeFocus);
+        }
+
+        function test_arrow_keys_move_the_selection() {
+            addToToday("key-1");
+            addToToday("key-2");
+            addToToday("key-3");
+            settle();
+            focusList();
+
+            keyClick(Qt.Key_Down);
+            compare(list.selectedTaskId, list.model.idAt(0), "Down selects the first task");
+            focusList();
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "key-3", "Up selects the last task");
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "key-2");
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Down);
+            compare(selectedTitle(), "key-3", "the selection stops at the end");
+        }
+
+        function test_space_expands_and_escape_collapses_then_deselects() {
+            const row = addToToday("space-me");
+            settle();
+            focusList();
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "space-me");
+
+            keyClick(Qt.Key_Space);
+            verify(row.isExpanded);
+            keyClick(Qt.Key_Escape);
+            verify(!row.isExpanded);
+            compare(selectedTitle(), "space-me", "Escape first closes the row");
+            keyClick(Qt.Key_Escape);
+            compare(list.selectedTaskId, "", "then clears the selection");
+        }
+
+        function test_delete_key_trashes_the_selection_and_ctrl_z_undoes() {
+            addToToday("del-a");
+            addToToday("del-b");
+            settle();
+            focusList();
+            keyClick(Qt.Key_Up);
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "del-a");
+
+            keyClick(Qt.Key_Delete);
+            waitForNoRow("del-a");
+            compare(selectedTitle(), "del-b", "the next task is selected");
+            verify(findChild(view, "undoToast").visible);
+
+            keyClick(Qt.Key_Z, Qt.ControlModifier);
+            waitForRow("del-a");
+        }
+
+        function test_typing_in_notes_does_not_trigger_list_keys() {
+            const row = addToToday("typing");
+            expandRow(row);
+            const notes = findChild(row, "notesInput");
+            mouseClick(notes);
+            verify(notes.activeFocus);
+            compare(list.selectedTaskId, row.taskId, "editing notes selects the task");
+
+            keyClick("a");
+            keyClick(Qt.Key_Space);
+            keyClick(Qt.Key_Backspace);
+            keyClick(Qt.Key_Down);
+            compare(notes.text, "a", "the keys edited the notes");
+            verify(rowFor("typing") !== null, "Backspace did not trash the task");
+            verify(row.isExpanded, "Space did not close the row");
+
+            // Escape leaves the editor and closes the row.
+            keyClick(Qt.Key_Escape);
+            verify(!row.isExpanded);
+            verify(list.activeFocus, "focus is back on the list");
+        }
+
+        function test_ctrl_s_opens_the_when_menu_for_the_selection() {
+            addToToday("menu-me");
+            settle();
+            focusList();
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "menu-me");
+
+            const menu = findChild(view, "whenMenu");
+            keyClick(Qt.Key_S, Qt.ControlModifier);
+            tryVerify(() => menu.opened, 1000, "Ctrl+S opens the When menu");
+            mouseClick(findChild(menu, "when-someday"));
+            waitForNoRow("menu-me");
+            tryVerify(() => !menu.visible, 1000);
+            tryVerify(() => list.activeFocus, 1000, "focus returns to the list");
+            controller.selectView("someday");
+            waitForRow("menu-me");
+        }
+
+        function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {
+            focusList();
+            keyClick(Qt.Key_N, Qt.ControlModifier);
+            const input = findChild(view, "newTaskInput");
+            verify(input.activeFocus, "Ctrl+N focuses the quick-add field");
+            for (const c of "via-keys")
+                keyClick(c);
+            keyClick(Qt.Key_Return);
+            waitForRow("via-keys");
+            keyClick(Qt.Key_Escape);
+            verify(list.activeFocus, "Escape returns to the list");
+
+            const dialog = findChild(view, "newProjectDialog");
+            keyClick(Qt.Key_N, Qt.ControlModifier | Qt.ShiftModifier);
+            tryVerify(() => dialog.opened, 1000, "Ctrl+Shift+N opens New Project");
+            dialog.reject();
+            tryVerify(() => !dialog.visible, 1000);
         }
 
         function test_empty_trash_asks_before_deleting_for_good() {
