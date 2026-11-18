@@ -1,0 +1,20 @@
+; Content-record slice of matters-sync-pq-v0, experiment dated 2026-11-18.
+; RFC 8610 structural schema. RFC 8949 core deterministic encoding is ALSO required.
+; Equality, authorization, freshness and cryptography are specified in the contract.
+record = [signed-body, signature: bstr .size 3309]
+signed-body = [
+  version: 0, suite: "matters-sync-pq-v0", kind: record-kind,
+  application-id: id16, tenant-id: id16, collection-id: id16,
+  signer-id: hash48, body: [header, ciphertext: bstr .size (16..1048592), author-id: hash48]
+]
+header = [
+  version: 0, suite: "matters-sync-pq-v0",
+  application-id: id16, tenant-id: id16, collection-id: id16, document-id: id16,
+  kind: record-kind, epoch: uint .size 8, manifest-hash: hash48,
+  author-id: hash48, incarnation-id: id32, record-id: id32,
+  logical-batch-id: id32, previous-record-hash: hash48 / null
+]
+record-kind = "data" / "snapshot"
+id16 = bstr .size 16
+id32 = bstr .size 32
+hash48 = bstr .size 48

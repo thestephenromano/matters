@@ -14,7 +14,9 @@ The recommended evaluation starts with Loro for CRDT state, SQLite for local per
 
 - [ADR 0001: CRDT adoption](decisions/0001-crdt-adoption.md) proposes Loro 1.18.0, collection boundaries, task merge rules, the SQL write migration and reproducible prototype gates for [#32](https://github.com/thestephenromano/matters/issues/32).
 - [ADR 0002: post-quantum protocol](decisions/0002-post-quantum-sync.md) proposes exact recipient-envelope/signature choices, authenticated messages, authority, recovery and adversarial checks for [#33](https://github.com/thestephenromano/matters/issues/33).
-- [Dependency evidence](evidence/README.md) records the inspected versions, checksums and source limitations. No prototype, benchmark or independent security review has run.
+- [Dependency evidence](evidence/README.md) records the inspected versions, checksums and source limitations. The isolated prototype and its measurements are recorded in the [review evidence](../experiments/sync-prototype/REVIEW.md); independent security review remains open.
+
+- [Encrypted content-record contract](SYNC_RECORD_CONTRACT.md) defines the experimental canonical bytes, bounded codec, conformance fixtures and remaining admission/service obligations for #33/#34/#36.
 
 Both ADRs were approved for bounded prototype evaluation on 2026-11-18. They refine the options below; approval does not turn planned security properties into demonstrated behavior.
 
@@ -129,7 +131,7 @@ An upload acknowledgement must distinguish transient receipt from a durable comm
 
 Recommend adopting a CRDT engine and established transport/crypto components, then building only missing application and service integration. Document an applicability failure before replacing an existing protocol, codec, queue or storage implementation. Use the local SQLite transaction for the outgoing queue; no separate message broker is justified by the initial workload.
 
-Before dependency selection, record exact versions/revisions, licenses, supported targets, release status and relevant security evidence. None of these candidates has been benchmarked against Matters yet.
+Before dependency selection, record exact versions/revisions, licenses, supported targets, release status and relevant security evidence. The bounded Loro prototype has [recorded same-host measurements](../experiments/sync-prototype/REVIEW.md). The alternatives and larger acceptance workloads remain unmeasured.
 
 ## Matters semantics and migration
 

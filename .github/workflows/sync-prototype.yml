@@ -4,11 +4,15 @@ on:
   pull_request:
     paths:
       - experiments/sync-prototype/**
+      - docs/SYNC_RECORD_CONTRACT.md
+      - docs/protocol/**
       - .github/workflows/sync-prototype.yml
   push:
     branches: [main]
     paths:
       - experiments/sync-prototype/**
+      - docs/SYNC_RECORD_CONTRACT.md
+      - docs/protocol/**
       - .github/workflows/sync-prototype.yml
 
 permissions:
@@ -37,5 +41,5 @@ jobs:
         with:
           workspaces: experiments/sync-prototype -> ../../target/sync-prototype
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets --features crypto-probe -- -D warnings
-      - run: cargo test --locked --features crypto-probe
+      - run: cargo clippy --locked --all-targets --features crypto-probe,record-contract -- -D warnings
+      - run: cargo test --locked --features crypto-probe,record-contract
