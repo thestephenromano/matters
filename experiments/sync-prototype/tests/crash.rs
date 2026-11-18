@@ -8,6 +8,16 @@ fn id() -> String {
 #[test]
 #[ignore = "invoked only as a child by abrupt_exit_recovers_sqlite"]
 fn process_crash_worker() -> Result<()> {
+    if [
+        "MATTERS_CRASH_DB",
+        "MATTERS_CRASH_POINT",
+        "MATTERS_CRASH_REQUEST",
+    ]
+    .iter()
+    .all(|key| std::env::var_os(key).is_none())
+    {
+        return Ok(());
+    }
     let path = std::env::var("MATTERS_CRASH_DB")?;
     let fault = match std::env::var("MATTERS_CRASH_POINT")?.as_str() {
         "before" => Fault::ExitBeforeCommit,
@@ -103,18 +113,25 @@ fn actual_sql_write_failure_leaves_memory_and_disk_unchanged() -> Result<()> {
 
 #[test]
 fn refuses_an_existing_application_database() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("app.db");
-    let connection = rusqlite::Connection::open(&path)?;
-    connection.execute_batch(
-        "CREATE TABLE tasks(id TEXT PRIMARY KEY); INSERT INTO tasks VALUES ('keep');",
-    )?;
-    assert!(Replica::open(&path).is_err());
-    let tables: usize = connection.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table'",
-        [],
-        |r| r.get(0),
-    )?;
-    assert_eq!(tables, 1);
+    for name in ["tasks", "SQLiteCache", "sqliteXmeta"] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("app.db");
+        let connection = rusqlite::Connection::open(&path)?;
+        connection.execute_batch(&format!(
+            "CREATE TABLE {name}(id TEXT PRIMARY KEY); INSERT INTO {name} VALUES ('keep');"
+        ))?;
+        assert!(Replica::open(&path).is_err());
+        let tables: usize = connection.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(tables, 1);
+        assert_eq!(
+            connection.query_row(&format!("SELECT id FROM {name}"), [], |r| r
+                .get::<_, String>(0))?,
+            "keep"
+        );
+    }
     Ok(())
 }

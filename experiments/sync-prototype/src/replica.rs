@@ -427,7 +427,7 @@ fn write_projection(tx: &Transaction<'_>, projection: &Projection) -> Result<()>
 }
 fn initialize(conn: &mut Connection) -> Result<()> {
     let tables: usize = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'",
         [],
         |r| r.get(0),
     )?;

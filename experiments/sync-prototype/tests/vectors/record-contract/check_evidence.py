@@ -12,6 +12,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "experiments/sync-prototype/evidence/record-contract-2026-11-18.json"
 REQUIRED = {
+    "experiments/sync-prototype/src/replica.rs",
+    "experiments/sync-prototype/tests/crash.rs",
+    "experiments/sync-prototype/tests/support/record_chain.rs",
+    "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md",
     "docs/SYNC_ENCRYPTED_OUTBOX.md",
     "experiments/sync-prototype/tests/support/encrypted_outbox.rs",
     "experiments/sync-prototype/tests/cases/encrypted_outbox.rs",

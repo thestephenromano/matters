@@ -1,5 +1,5 @@
 use super::{
-    encrypted_outbox::{Binding, Outbox, Point},
+    encrypted_outbox::{Binding, Delivery, Outbox, Point, RecoveryRequired},
     *,
 };
 use matters_sync_prototype::Result as TestResult;
@@ -166,6 +166,7 @@ fn fifo_and_hash_chain_advance_only_with_committed_ciphertext() -> TestResult<()
     let second = doc.export(ExportMode::updates(&vv))?;
     queue.enqueue([1; 32], &first, okay)?;
     queue.enqueue([2; 32], &second, okay)?;
+    assert_eq!(queue.next_batch()?, Some([1; 32]));
     assert!(queue
         .seal([2; 32], rng, |_, _| panic!("out of order"), okay)
         .is_err());
@@ -180,6 +181,7 @@ fn fifo_and_hash_chain_advance_only_with_committed_ciphertext() -> TestResult<()
         .is_err());
     assert_eq!(queue.pending()?, vec![one.clone()]);
     let two = queue.seal([2; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    assert_eq!(queue.next_batch()?, None);
     assert_eq!(
         wire::parse(&two.bytes, bind.context())?.header.previous,
         Some(&hash(&one.bytes))
@@ -419,8 +421,20 @@ fn reopening_fences_old_handles_even_during_a_seal() -> TestResult<()> {
         )
         .is_err());
     let mut new = replacement.unwrap();
-    new.seal([1; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
-    assert!(old.acknowledge(new.pending()?[0].id, okay).is_err());
+    assert!(new
+        .seal(
+            [1; 32],
+            || panic!("retired RNG"),
+            |_, _| panic!("retired seal"),
+            okay
+        )
+        .unwrap_err()
+        .is::<RecoveryRequired>());
+    assert_eq!(new.recovery_required()?.len(), 1);
+    new.enqueue([2; 32], &update(new.writer().actor), okay)?;
+    new.seal([2; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    // Delivery bookkeeping is independent of authority to sign new records.
+    old.acknowledge(new.pending()?[0].id, okay)?;
     Ok(())
 }
 
@@ -485,14 +499,27 @@ fn clone_preserves_bytes_and_pending_intent_but_allocates_a_new_writer() -> Test
     assert_eq!(restored.record([1; 32])?, Some(first));
     assert_eq!(plaintext(&clone, [2; 32]), plaintext(&path, [2; 32]));
     let a = original.seal([2; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
-    let b = restored.seal([2; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
-    assert_ne!(a.id, b.id);
+    assert!(restored
+        .seal(
+            [2; 32],
+            || panic!("retired RNG"),
+            |_, _| panic!("retired seal"),
+            okay
+        )
+        .unwrap_err()
+        .is::<RecoveryRequired>());
     assert_ne!(a.id.as_slice(), consumed);
-    assert_ne!(b.id.as_slice(), consumed);
+    assert_eq!(restored.next_batch()?, None);
+    let recovery = restored.recovery_required()?;
+    assert_eq!(recovery.len(), 1);
+    assert_eq!(recovery[0].batch, [2; 32]);
+    assert_eq!(recovery[0].writer, old_writer);
+    assert_eq!(recovery[0].plaintext, b"retained pending intent");
     for q in [&mut original, &mut restored] {
         let writer = q.writer();
         let plain = update(writer.actor);
         q.enqueue([3; 32], &plain, okay)?;
+        assert_eq!(q.next_batch()?, Some([3; 32]));
         let r = q.seal([3; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
         assert_eq!(
             *wire::parse(&r.bytes, bind.context())?.header.incarnation,
@@ -527,33 +554,15 @@ fn bad_sealer_output_consumes_reservation_and_capacity_limits_preserve_history()
         )
         .is_err());
     assert!(q.pending()?.is_empty());
-    for _ in 1..64 {
-        assert!(q
-            .seal(
-                [0; 32],
-                rng,
-                |_, _| panic!("stop before encryption"),
-                at(Point::AfterReservationCommit)
-            )
-            .is_err());
-    }
-    assert_eq!(attempts(&path).len(), 64);
-    assert!(q
-        .seal(
-            [0; 32],
-            rng,
-            |_, _| panic!("capacity must precede encryption"),
-            okay
-        )
-        .is_err());
+    // A malformed callback consumes its reservation, but must not prevent retry.
+    q.seal([0; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    assert_eq!(attempts(&path)[0].1, "abandoned");
     for i in 1..16 {
         q.enqueue([i; 32], b"retained", okay)?;
     }
     assert!(q.enqueue([16; 32], b"over budget", okay).is_err());
-    for _ in 1..16 {
-        q = Outbox::open(&path, bind.clone(), rng)?;
-    }
-    assert!(Outbox::open(&path, bind, rng).is_err());
+    q = Outbox::open(&path, bind, rng)?;
+    assert_eq!(q.pending()?.len(), 1);
     q.enqueue([0; 32], b"intent", okay)?;
     assert_eq!(plaintext(&path, [0; 32]), Some(b"intent".to_vec()));
     Ok(())
@@ -603,6 +612,12 @@ const POINTS: [Point; 9] = [
 #[test]
 #[ignore = "invoked as a child by abrupt_exit_covers_every_outbox_boundary"]
 fn outbox_crash_worker() -> TestResult<()> {
+    if ["MATTERS_OUTBOX_CRASH_DB", "MATTERS_OUTBOX_CRASH_POINT"]
+        .iter()
+        .all(|key| std::env::var_os(key).is_none())
+    {
+        return Ok(());
+    }
     let path = std::env::var("MATTERS_OUTBOX_CRASH_DB")?;
     let target: usize = std::env::var("MATTERS_OUTBOX_CRASH_POINT")?.parse()?;
     let hook = |p| {
@@ -657,6 +672,35 @@ fn abrupt_exit_covers_every_outbox_boundary() -> TestResult<()> {
             q.enqueue([1; 32], &update(q.writer().actor), okay)?;
         }
         let durable = index >= 6;
+        if let Some(retained_plaintext) = retained.as_ref().filter(|_| !durable) {
+            assert!(q
+                .seal(
+                    [1; 32],
+                    || panic!("retired RNG"),
+                    |_, _| panic!("retired seal"),
+                    okay
+                )
+                .unwrap_err()
+                .is::<RecoveryRequired>());
+            let recovery = q.recovery_required()?;
+            assert_eq!(recovery.len(), 1);
+            assert_eq!(&recovery[0].plaintext, retained_plaintext);
+            assert_eq!(q.next_batch()?, None);
+            assert!(q.pending()?.is_empty());
+            assert!(attempts(&path)
+                .iter()
+                .all(|(_, status)| status == "abandoned"));
+            // Fresh actor edits can proceed without signing old actor changes.
+            q.enqueue([2; 32], &update(q.writer().actor), okay)?;
+            assert_eq!(q.next_batch()?, Some([2; 32]));
+            let r = q.seal([2; 32], rng, |h, p| seal(h, &CRASH_CEK, p, &device), okay)?;
+            assert_eq!(
+                open_record(&r.bytes, &bind, &CRASH_CEK, &device),
+                plaintext(&path, [2; 32]).unwrap()
+            );
+            continue;
+        }
+
         let mut calls = 0;
         let r = q.seal(
             [1; 32],
@@ -734,5 +778,161 @@ fn sqlite_busy_at_commit_abandons_ciphertext_and_preserves_the_reservation() -> 
         .header
         .previous
         .is_none());
+    Ok(())
+}
+
+#[test]
+fn review_restore_must_not_seal_retired_incarnation() -> TestResult<()> {
+    let s = setup();
+    let dir = tempfile::tempdir()?;
+    let live = dir.path().join("live.db");
+    let backup = dir.path().join("backup.db");
+    let bind = binding(&s);
+    let cek = rng()?;
+    let mut original = Outbox::open(&live, bind.clone(), rng)?;
+    original.enqueue([1; 32], b"first", okay)?;
+    original.seal([1; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    original.enqueue([2; 32], b"waiting at backup time", okay)?;
+    Connection::open(&live)?.execute("VACUUM INTO ?1", [backup.to_str().unwrap()])?;
+    original.seal([2; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    let mut restored = Outbox::open(&backup, bind, rng)?;
+    let mut called = false;
+    let result = restored.seal(
+        [2; 32],
+        rng,
+        |h, p| {
+            called = true;
+            seal(h, &cek, p, &s.a)
+        },
+        okay,
+    );
+    assert!(
+        result.is_err(),
+        "restored old head must not create another signed successor"
+    );
+    assert!(!called, "retired intent must fail before crypto");
+    assert_eq!(
+        plaintext(&backup, [2; 32]),
+        Some(b"waiting at backup time".to_vec())
+    );
+    Ok(())
+}
+#[test]
+fn review_restarts_do_not_exhaust_delivery_access() -> TestResult<()> {
+    let s = setup();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("restart.db");
+    let bind = binding(&s);
+    let cek = rng()?;
+    let mut q = Outbox::open(&path, bind.clone(), rng)?;
+    q.enqueue([1; 32], b"waiting for ACK", okay)?;
+    let record = q.seal([1; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    for _ in 0..20 {
+        drop(q);
+        q = Outbox::open(&path, bind.clone(), rng)?;
+        assert_eq!(q.record([1; 32])?, Some(record.clone()));
+    }
+    q.acknowledge(record.id, okay)?;
+    assert!(q.pending()?.is_empty());
+    Ok(())
+}
+#[test]
+fn review_retry_history_does_not_exhaust_sealing() -> TestResult<()> {
+    let s = setup();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("retry.db");
+    let cek = rng()?;
+    let mut q = Outbox::open(&path, binding(&s), rng)?;
+    q.enqueue([1; 32], b"intent", okay)?;
+    for _ in 0..70 {
+        let mut lock = None;
+        let error = q
+            .seal(
+                [1; 32],
+                rng,
+                |h, p| {
+                    let bytes = seal(h, &cek, p, &s.a)?;
+                    let reader = Connection::open(&path)?;
+                    reader.execute_batch("BEGIN; SELECT * FROM outbox_meta;")?;
+                    lock = Some(reader);
+                    Ok(bytes)
+                },
+                okay,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<rusqlite::Error>()
+                .and_then(|e| e.sqlite_error_code()),
+            Some(rusqlite::ErrorCode::DatabaseBusy)
+        );
+        lock.unwrap().execute_batch("ROLLBACK;")?;
+        assert!(q.pending()?.is_empty());
+    }
+    q.seal([1; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    assert_eq!(attempts(&path).len(), 71);
+    Ok(())
+}
+#[test]
+fn review_foreign_database_names_are_all_counted() -> TestResult<()> {
+    let s = setup();
+    for name in ["SQLiteCache", "sqliteXmeta", "tasks"] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("foreign.db");
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(&format!(
+            "CREATE TABLE \"{name}\"(value TEXT); INSERT INTO \"{name}\" VALUES ('keep');"
+        ))?;
+        assert!(
+            Outbox::open(&path, binding(&s), rng).is_err(),
+            "foreign table {name}"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn delivery_access_never_allocates_or_fences_a_writer() -> TestResult<()> {
+    let s = setup();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("delivery.db");
+    let bind = binding(&s);
+    let cek = rng()?;
+    assert!(Delivery::open(&path, &bind, false).is_err());
+    assert!(!path.exists());
+    let mut q = Outbox::open(&path, bind.clone(), rng)?;
+    q.enqueue([1; 32], b"stored", okay)?;
+    let record = q.seal([1; 32], rng, |h, p| seal(h, &cek, p, &s.a), okay)?;
+    for _ in 0..20 {
+        let mut reader = Delivery::open(&path, &bind, true)?;
+        assert_eq!(reader.pending()?, vec![record.clone()]);
+        assert_eq!(reader.record([1; 32])?, Some(record.clone()));
+        assert!(reader.acknowledge(record.id, okay).is_err());
+    }
+    let mut delivery = Delivery::open(&path, &bind, false)?;
+    q.enqueue([2; 32], b"still owns writer", okay)?;
+    assert_eq!(
+        Connection::open(&path)?
+            .query_row("SELECT count(*) FROM writers", [], |r| r.get::<_, i64>(0))?,
+        1
+    );
+    assert_eq!(q.next_batch()?, Some([2; 32]));
+    assert!(q.recovery_required()?.is_empty());
+    delivery.acknowledge(record.id, okay)?;
+    delivery.acknowledge(record.id, okay)?;
+    assert!(delivery.pending()?.is_empty());
+    assert_eq!(delivery.record([1; 32])?, Some(record));
+    let mut wrong = bind;
+    wrong.epoch += 1;
+    assert!(Delivery::open(&path, &wrong, false).is_err());
+    assert!(Delivery::open(&path, &wrong, true).is_err());
     Ok(())
 }

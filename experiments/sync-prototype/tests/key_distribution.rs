@@ -1011,3 +1011,6 @@ fn schema_and_parser_agree_on_structural_bootstrap_and_generation_values() {
 mod encrypted_outbox;
 #[path = "cases/encrypted_outbox.rs"]
 mod outbox_cases;
+
+#[path = "support/record_chain.rs"]
+mod record_chain;

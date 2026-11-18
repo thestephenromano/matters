@@ -1,19 +1,16 @@
 //! Test-only transactional outbox. The synchronous FnOnce sealer is trusted and
 //! receives a durably reserved header exactly once. No keys or network code here.
+use crate::record_chain::{hash, Hash, Id};
 use matters_sync_prototype::{wire, Result};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha384};
 use std::path::Path;
 
-pub type Id = [u8; 32];
-pub type Hash = [u8; 48];
 const FORMAT: &str = "matters-encrypted-outbox/0";
 // Small retained-history experiment: at most 16 MiB each of intent plaintext and
-// ciphertext payload, 64 consumed reservation IDs, and 16 writable opens.
+// ciphertext payload. Writer and reservation history is retained without a
+// lifetime cap: transient contention/restarts must not exhaust recovery access.
 const MAX_INTENTS: i64 = 16;
-const MAX_ATTEMPTS: i64 = 64;
-const MAX_WRITERS: i64 = 16;
 
 fn error(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
     std::io::Error::other(message).into()
@@ -75,7 +72,7 @@ pub struct Outbox {
 }
 fn validate_database(conn: &Connection) -> Result<bool> {
     let count: i64 = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'",
         [],
         |r| r.get(0),
     )?;
@@ -109,18 +106,107 @@ fn count_limit(conn: &Connection, query: &str, limit: i64) -> Result<()> {
     }
     Ok(())
 }
-fn stored(conn: &Connection, batch: &Id) -> Result<Option<Stored>> {
-    let row = conn.query_row("SELECT record_id,bytes FROM sealed JOIN intents ON intents.seq=sealed.intent WHERE batch=?1", [batch.as_slice()], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))).optional()?;
-    row.map(|(id, bytes)| {
-        Ok(Stored {
-            id: id
-                .try_into()
-                .map_err(|_| error("invalid stored record ID"))?,
-            bytes,
-        })
+fn blob<const N: usize>(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<[u8; N]> {
+    let bytes: Vec<u8> = row.get(index)?;
+    bytes.try_into().map_err(|_| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Blob,
+            error("invalid stored blob length"),
+        )
     })
-    .transpose()
 }
+fn stored_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
+    Ok(Stored {
+        id: blob(row, 0)?,
+        bytes: row.get(1)?,
+    })
+}
+fn stored(conn: &Connection, batch: &Id) -> Result<Option<Stored>> {
+    Ok(conn.query_row("SELECT record_id,bytes FROM sealed JOIN intents ON intents.seq=sealed.intent WHERE batch=?1", [batch.as_slice()], stored_row).optional()?)
+}
+fn pending(conn: &Connection) -> Result<Vec<Stored>> {
+    let mut query =
+        conn.prepare("SELECT record_id,bytes FROM sealed WHERE acked=0 ORDER BY intent")?;
+    let rows = query.query_map([], stored_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+fn acknowledge(
+    conn: &mut Connection,
+    id: Id,
+    mut hook: impl FnMut(Point) -> Result<()>,
+) -> Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if tx.execute(
+        "UPDATE sealed SET acked=1 WHERE record_id=?1",
+        [id.as_slice()],
+    )? != 1
+    {
+        return Err(error("unknown acknowledged record"));
+    }
+    hook(Point::BeforeAckCommit)?;
+    tx.commit()?;
+    hook(Point::AfterAckCommit)
+}
+fn check_binding(conn: &Connection, binding: &Binding) -> Result<()> {
+    binding.validate()?;
+    if !validate_database(conn)? {
+        return Err(error("outbox database missing"));
+    }
+    let old: Vec<u8> = conn.query_row(
+        "SELECT binding FROM outbox_meta WHERE singleton=1",
+        [],
+        |r| r.get(0),
+    )?;
+    if old != serde_json::to_vec(binding)? {
+        return Err(error("outbox route/authority binding mismatch"));
+    }
+    Ok(())
+}
+/// Delivery never allocates or retires a writer, requests entropy, or seals.
+/// Read-only handles additionally refuse ACK writes at SQLite's open boundary.
+pub struct Delivery {
+    conn: Connection,
+}
+impl Delivery {
+    pub fn open(path: impl AsRef<Path>, binding: &Binding, read_only: bool) -> Result<Self> {
+        let flags = if read_only {
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+        } else {
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        };
+        let conn = Connection::open_with_flags(path, flags)?;
+        check_binding(&conn, binding)?;
+        conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+        conn.busy_timeout(std::time::Duration::ZERO)?;
+        Ok(Self { conn })
+    }
+    pub fn record(&self, batch: Id) -> Result<Option<Stored>> {
+        stored(&self.conn, &batch)
+    }
+    pub fn pending(&self) -> Result<Vec<Stored>> {
+        pending(&self.conn)
+    }
+    pub fn acknowledge(&mut self, id: Id, hook: impl FnMut(Point) -> Result<()>) -> Result<()> {
+        acknowledge(&mut self.conn, id, hook)
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecoveryIntent {
+    pub batch: Id,
+    pub writer: Writer,
+    pub plaintext: Vec<u8>,
+}
+/// An old writer's local head may have rolled back. Retain its intent for
+/// domain-level reconciliation, but never invoke crypto for it after reopen.
+#[derive(Debug)]
+pub struct RecoveryRequired;
+impl std::fmt::Display for RecoveryRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("retired writer intent requires recovery")
+    }
+}
+impl std::error::Error for RecoveryRequired {}
 impl Outbox {
     /// Every writable open fences older handles and allocates a fresh local
     /// writer. RNG comes from the approved OS-seeded provider in the harness.
@@ -144,15 +230,7 @@ impl Outbox {
         let exists = validate_database(&tx)?;
         let encoded = serde_json::to_vec(&binding)?;
         if exists {
-            let old: Vec<u8> = tx.query_row(
-                "SELECT binding FROM outbox_meta WHERE singleton=1",
-                [],
-                |r| r.get(0),
-            )?;
-            if old != encoded {
-                return Err(error("outbox route/authority binding mismatch"));
-            }
-            count_limit(&tx, "SELECT count(*) FROM writers", MAX_WRITERS)?;
+            check_binding(&tx, &binding)?;
         }
         let incarnation = random()?;
         let actor = u64::from_le_bytes(random()?[..8].try_into()?);
@@ -239,11 +317,13 @@ impl Outbox {
             return Ok(record);
         }
         let (intent, incarnation, plaintext, previous): (i64, Vec<u8>, Vec<u8>, Option<Vec<u8>>) = tx.query_row("SELECT intents.seq,writer,plaintext,head FROM intents JOIN writers ON writer=incarnation WHERE batch=?1", [batch.as_slice()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-        let earlier: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM intents WHERE seq<?1 AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq))", [intent], |r| r.get(0))?;
+        if incarnation != self.writer.incarnation {
+            return Err(RecoveryRequired.into());
+        }
+        let earlier: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM intents WHERE seq<?1 AND writer=?2 AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq))", params![intent, incarnation], |r| r.get(0))?;
         if earlier {
             return Err(error("earlier intent must be sealed first"));
         }
-        count_limit(&tx, "SELECT count(*) FROM attempts", MAX_ATTEMPTS)?;
         let record_id = random()?;
         let incarnation: Id = incarnation
             .try_into()
@@ -285,7 +365,7 @@ impl Outbox {
         if parsed.header_bytes() != header_bytes {
             return Err(error("sealer changed reserved header"));
         }
-        let digest: Hash = Sha384::digest(&bytes).into();
+        let digest = hash(&bytes);
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -317,37 +397,34 @@ impl Outbox {
         stored(&self.conn, &batch)
     }
     pub fn pending(&self) -> Result<Vec<Stored>> {
-        let mut query = self
-            .conn
-            .prepare("SELECT record_id,bytes FROM sealed WHERE acked=0 ORDER BY intent")?;
-        let rows = query.query_map([], |r| {
-            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
-        })?;
-        rows.map(|row| {
-            let (id, bytes) = row?;
-            Ok(Stored {
-                id: id.try_into().map_err(|_| error("invalid record ID"))?,
-                bytes,
-            })
-        })
-        .collect()
+        pending(&self.conn)
     }
-    /// Local receipt bookkeeping only: caller is responsible for authenticating
-    /// a durable transport acknowledgement. Retain bytes even after ACK.
-    pub fn acknowledge(&mut self, id: Id, mut hook: impl FnMut(Point) -> Result<()>) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        active(&tx, self.writer)?;
-        if tx.execute(
-            "UPDATE sealed SET acked=1 WHERE record_id=?1",
-            [id.as_slice()],
-        )? != 1
-        {
-            return Err(error("unknown acknowledged record"));
-        }
-        hook(Point::BeforeAckCommit)?;
-        tx.commit()?;
-        hook(Point::AfterAckCommit)
+    /// Oldest unsealed intent eligible for this active writer. A sealed batch
+    /// remains retrievable separately; retired intents never block fresh work.
+    pub fn next_batch(&self) -> Result<Option<Id>> {
+        active(&self.conn, self.writer)?;
+        Ok(self.conn.query_row("SELECT batch FROM intents WHERE writer=?1 AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq) ORDER BY seq LIMIT 1", [self.writer.incarnation.as_slice()], |r| blob(r, 0)).optional()?)
+    }
+    /// Observable retained work requiring domain replay/reconciliation. These
+    /// bytes must not be rebound to a new Loro actor or automatically resealed.
+    pub fn recovery_required(&self) -> Result<Vec<RecoveryIntent>> {
+        active(&self.conn, self.writer)?;
+        let mut query = self.conn.prepare("SELECT batch,writer,actor,plaintext FROM intents JOIN writers ON writer=incarnation WHERE writer!=?1 AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq) ORDER BY intents.seq")?;
+        let rows = query.query_map([self.writer.incarnation.as_slice()], |r| {
+            Ok(RecoveryIntent {
+                batch: blob(r, 0)?,
+                writer: Writer {
+                    incarnation: blob(r, 1)?,
+                    actor: u64::from_le_bytes(blob(r, 2)?),
+                },
+                plaintext: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+    /// Local receipt bookkeeping only: caller authenticates durable transport
+    /// acknowledgements. This never signs or deletes; writer ownership is irrelevant.
+    pub fn acknowledge(&mut self, id: Id, hook: impl FnMut(Point) -> Result<()>) -> Result<()> {
+        acknowledge(&mut self.conn, id, hook)
     }
 }
