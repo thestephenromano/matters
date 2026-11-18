@@ -2375,7 +2375,10 @@ Item {
 
         x: (parent.width - width) / 2
         y: 120
-        width: 320
+        // As wide as its contents need, at least 320: the quick buttons keep
+        // their natural width, which depends on the style and the language,
+        // and a narrower popover would push its contents past its edge.
+        width: Math.min(parent.width - 32, Math.max(320, implicitContentWidth + leftPadding + rightPadding))
         modal: true
         dim: false
         focus: true
@@ -2493,20 +2496,35 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
+                // The calendar's labels take Matters' colours, not the
+                // style's palette, which follows the desktop and can differ
+                // from Matters' own light or dark scheme.
                 ToolButton {
                     objectName: "whenPrevMonth"
-                    text: "‹"
+                    Accessible.name: "Previous month"
+                    contentItem: Icon {
+                        name: "chevron-left"
+                        size: 16
+                        color: root.colTextSecondary
+                    }
                     onClicked: whenPopup.showMonth(-1)
                 }
                 Label {
+                    objectName: "whenMonth"
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignHCenter
                     text: Qt.formatDate(new Date(calendar.year, calendar.month, 1), "MMMM yyyy")
                     font.weight: Font.DemiBold
+                    color: root.colTextPrimary
                 }
                 ToolButton {
                     objectName: "whenNextMonth"
-                    text: "›"
+                    Accessible.name: "Next month"
+                    contentItem: Icon {
+                        name: "chevron-right"
+                        size: 16
+                        color: root.colTextSecondary
+                    }
                     onClicked: whenPopup.showMonth(1)
                 }
             }
@@ -2514,6 +2532,15 @@ Item {
             DayOfWeekRow {
                 Layout.fillWidth: true
                 locale: calendar.locale
+                delegate: Text {
+                    required property string shortName
+                    text: shortName
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    color: root.colTextSecondary
+                }
             }
 
             MonthGrid {

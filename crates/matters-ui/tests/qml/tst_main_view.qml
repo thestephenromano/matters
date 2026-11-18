@@ -803,6 +803,31 @@ Item {
             compare(waitForRow("cal-keys").startDate, isoInDays(2));
         }
 
+        // Every part of the popover stays inside it, whatever the style's
+        // button sizes (native styles pad buttons more than Basic does).
+        function test_the_when_popover_holds_all_its_controls() {
+            const row = addToToday("fit-task");
+            expandRow(row);
+            for (const mode of ["when", "deadline"]) {
+                mouseClick(findChild(row, mode === "when" ? "schedule-date" : "schedule-deadline"));
+                const popup = findChild(view, "whenPopup");
+                tryVerify(() => popup.opened, 1000);
+                waitForRendering(popup.contentItem);
+                const names = ["whenInput", "whenNextMonth", "whenCalendar", mode + "-today", mode + "-none"];
+                if (mode === "when")
+                    names.push("when-evening", "when-someday");
+                for (const name of names) {
+                    const item = findChild(popup.contentItem, name);
+                    verify(item !== null && item.visible, name + " shown");
+                    const right = item.mapToItem(popup.background, item.width, 0).x;
+                    verify(right <= popup.background.width + 0.5,
+                        mode + ": " + name + " ends at " + right + ", past the popover's " + popup.background.width);
+                }
+                keyClick(Qt.Key_Escape);
+                tryVerify(() => !popup.visible, 2000);
+            }
+        }
+
         function test_picking_a_day_next_month_from_the_date_button() {
             const row = addToToday("cal-mouse");
             expandRow(row);
