@@ -1,7 +1,7 @@
 {
   "schema": "matters-sync-pq-v0/content-record/2026-11-18",
   "provenance": {
-    "cbor2": "5.6.5",
+    "cbor2": "5.9.0",
     "cryptography": "50.0.0",
     "signature": "all-zero structural placeholder; never an authenticated vector"
   },
