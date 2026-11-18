@@ -15,6 +15,30 @@ Item {
     readonly property alias appController: controller
     readonly property alias taskList: taskListView
 
+    readonly property var projects: {
+        try {
+            return JSON.parse(controller.projectsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
+    readonly property var areas: {
+        try {
+            return JSON.parse(controller.areasJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
+    readonly property var trashedAreas: {
+        try {
+            return JSON.parse(controller.trashedAreasJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
     readonly property var trashedProjects: {
         try {
             return JSON.parse(controller.trashedProjectsJson);
@@ -47,6 +71,9 @@ Item {
         } else if (undoKind === "project") {
             controller.restoreProject(undoId);
             controller.selectProject(undoId);
+        } else if (undoKind === "area") {
+            controller.restoreArea(undoId);
+            controller.selectArea(undoId);
         }
         hideUndo();
     }
@@ -94,7 +121,9 @@ Item {
             taskListView.selectedTaskId = "";
             newBelowId = "";
         }
-        taskModel.load(controller.currentView, controller.currentProjectId, controller.visit);
+        // A project or area view loads the tasks of that project or area.
+        const container = controller.currentView === "area" ? controller.currentAreaId : controller.currentProjectId;
+        taskModel.load(controller.currentView, container, controller.visit);
         if (pendingRevealId !== "") {
             if (taskModel.rowOf(pendingRevealId) >= 0) {
                 taskListView.selectedTaskId = pendingRevealId;
@@ -405,6 +434,74 @@ Item {
         whenPopup.close();
     }
 
+    // The heading for a section key (`QueryEngine::section_keys`, #25).
+    function describeSection(key) {
+        if (key === "")
+            return "";
+        if (key === "evening")
+            return "🌙 This Evening";
+        const colon = key.indexOf(":");
+        const kind = key.slice(0, colon);
+        const rest = key.slice(colon + 1);
+        if (kind === "project" || kind === "area") {
+            // <id>:<title>; the title may itself contain colons.
+            const title = rest.slice(rest.indexOf(":") + 1);
+            return (kind === "project" ? "📁 " : "") + title;
+        }
+        if (kind === "done" && rest === "")
+            return "Earlier";
+        const parts = rest.split("-");
+        const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const days = Math.round((date - today) / 86400000);
+        if (kind === "date" && days === 1)
+            return "Tomorrow";
+        if (kind === "done" && days === 0)
+            return "Today";
+        if (kind === "done" && days === -1)
+            return "Yesterday";
+        return Qt.formatDate(date, "dddd, MMMM d");
+    }
+
+    // A start date as shown on a row, or "" where the list already says it:
+    // Today and Upcoming (grouped by day) imply the date, and the Logbook is
+    // about when tasks were finished. Elsewhere: Today, Tomorrow, a weekday
+    // within the coming week, or the date (with the year when it differs).
+    function describeStart(iso) {
+        const view = controller.currentView;
+        if (iso === "" || view === "today" || view === "upcoming" || view === "logbook")
+            return "";
+        return describeDay(iso);
+    }
+
+    // A task's When for its open card: Someday, This Evening, a day, or
+    // just "When" when it has none.
+    function describeWhenOf(iso, evening, someday) {
+        if (someday)
+            return "Someday";
+        if (evening)
+            return "This Evening";
+        return iso === "" ? "When" : describeDay(iso);
+    }
+
+    // A day for people: Today, Tomorrow, a weekday within the coming week, or
+    // the date (with the year when it differs).
+    function describeDay(iso) {
+        const parts = iso.split("-");
+        const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const days = Math.round((date - today) / 86400000);
+        if (days === 0)
+            return "Today";
+        if (days === 1)
+            return "Tomorrow";
+        if (days > 1 && days < 7)
+            return Qt.formatDate(date, "ddd");
+        return Qt.formatDate(date, date.getFullYear() === today.getFullYear() ? "MMM d" : "MMM d, yyyy");
+    }
+
     // A deadline as shown on a row: "Due today", "Overdue: Nov 10" or the date.
     function describeDeadline(iso, status) {
         if (iso === "")
@@ -591,9 +688,24 @@ Item {
                     }
 
                     ToolButton {
+                        objectName: "newContainerButton"
                         text: "+"
                         font.pixelSize: 14
-                        onClicked: newProjectDialog.open()
+                        onClicked: newContainerMenu.popup()
+
+                        Menu {
+                            id: newContainerMenu
+                            MenuItem {
+                                objectName: "newProjectItem"
+                                text: "New Project"
+                                onTriggered: newProjectDialog.open()
+                            }
+                            MenuItem {
+                                objectName: "newAreaItem"
+                                text: "New Area"
+                                onTriggered: newAreaDialog.open()
+                            }
+                        }
                     }
                 }
 
@@ -608,6 +720,101 @@ Item {
                         objectName: "projectsList"
                         spacing: 2
 
+                        // Areas, each with its projects (#15), below the projects
+                        // that have no area; they scroll with the list.
+                        footer: Column {
+                            width: projectsList.width
+                            spacing: 2
+                            topPadding: 8
+
+                            Repeater {
+                                model: root.areas
+
+                                delegate: Column {
+                                    id: areaBlock
+                                    required property var modelData
+                                    width: projectsList.width
+                                    spacing: 2
+
+                                    Rectangle {
+                                        id: areaRow
+                                        objectName: "areaItem"
+                                        readonly property string areaTitle: areaBlock.modelData.title
+                                        readonly property bool isSelected: controller.currentView === "area"
+                                            && controller.currentAreaId === areaBlock.modelData.id
+                                        width: parent.width
+                                        height: 30
+                                        radius: 6
+                                        color: isSelected ? root.colSidebarActive : (areaMouse.containsMouse ? root.colSidebarHover : "transparent")
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 8
+                                            anchors.rightMargin: 8
+                                            spacing: 8
+
+                                            Text {
+                                                text: "🗂"
+                                                font.pixelSize: 12
+                                            }
+                                            Text {
+                                                text: areaBlock.modelData.title
+                                                color: areaRow.isSelected ? root.colAccent : root.colTextPrimary
+                                                font.pixelSize: 13
+                                                font.weight: Font.DemiBold
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: areaMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: controller.selectArea(areaBlock.modelData.id)
+                                        }
+                                    }
+
+                                    Repeater {
+                                        model: root.projects.filter(p => p.area_id === areaBlock.modelData.id)
+
+                                        delegate: Rectangle {
+                                            id: areaProject
+                                            objectName: "areaProjectItem"
+                                            required property var modelData
+                                            readonly property string projectTitle: modelData.title
+                                            readonly property bool isSelected: controller.currentView === "project"
+                                                && controller.currentProjectId === modelData.id
+                                            width: areaBlock.width
+                                            height: 28
+                                            radius: 6
+                                            color: isSelected ? root.colSidebarActive : (areaProjectMouse.containsMouse ? root.colSidebarHover : "transparent")
+
+                                            Text {
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 30
+                                                anchors.right: parent.right
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: areaProject.modelData.title
+                                                color: areaProject.isSelected ? root.colAccent : root.colTextPrimary
+                                                font.pixelSize: 13
+                                                elide: Text.ElideRight
+                                            }
+
+                                            MouseArea {
+                                                id: areaProjectMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: controller.selectProject(areaProject.modelData.id)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Where a dragged project will land.
                         Rectangle {
                             objectName: "projectDropIndicator"
@@ -620,13 +827,9 @@ Item {
                             y: root.projectDrop ? root.projectDrop.y - 1 : 0
                             color: root.colAccent
                         }
-                        model: {
-                            try {
-                                return JSON.parse(controller.projectsJson);
-                            } catch (e) {
-                                return [];
-                            }
-                        }
+                        // Projects with no area; area projects are listed under
+                        // their area (footer).
+                        model: root.projects.filter(p => !p.area_id)
 
                         delegate: Rectangle {
                             id: projItem
@@ -740,7 +943,7 @@ Item {
                         objectName: "emptyTrashButton"
                         text: "Empty Trash"
                         visible: controller.currentView === "trash"
-                            && (taskListView.count > 0 || root.trashedProjects.length > 0)
+                            && (taskListView.count > 0 || root.trashedProjects.length > 0 || root.trashedAreas.length > 0)
                         onClicked: emptyTrashDialog.open()
                         // Once the Trash is empty this button hides; it must not
                         // keep the keyboard focus the dialog hands back to it.
@@ -748,6 +951,47 @@ Item {
                         // before or after the list empties, so both orders are
                         // handled: here, and in the dialog's onClosed.
                         onVisibleChanged: if (!visible && activeFocus) taskListView.forceActiveFocus()
+                    }
+
+                    // Area header: file projects under it from their header;
+                    // rename or trash it here (#15).
+                    ToolButton {
+                        objectName: "renameAreaButton"
+                        text: "Rename…"
+                        visible: controller.currentView === "area"
+                        onClicked: {
+                            renameAreaInput.text = controller.currentTitle;
+                            renameAreaDialog.open();
+                        }
+                    }
+
+                    ToolButton {
+                        objectName: "trashAreaButton"
+                        text: "Move to Trash"
+                        visible: controller.currentView === "area"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Move this area, its projects and its tasks to the Trash"
+                        onClicked: {
+                            const id = controller.currentAreaId;
+                            root.showUndo("area", id, controller.currentTitle);
+                            controller.trashArea(id);
+                        }
+                    }
+
+                    // Project header: which area the project is filed in.
+                    ComboBox {
+                        id: projectAreaPicker
+                        objectName: "projectAreaPicker"
+                        visible: controller.currentView === "project"
+                        readonly property var choices: [{ id: "", title: "No Area" }].concat(root.areas)
+                        readonly property var project: root.projects.find(p => p.id === controller.currentProjectId)
+                        model: choices
+                        textRole: "title"
+                        currentIndex: {
+                            const area = project ? (project.area_id || "") : "";
+                            return Math.max(0, choices.findIndex(a => a.id === area));
+                        }
+                        onActivated: (index) => controller.setProjectArea(controller.currentProjectId, choices[index].id)
                     }
 
                     ToolButton {
@@ -861,7 +1105,7 @@ Item {
 
                             Text {
                                 anchors.fill: parent
-                                text: "New to-do... (Press Enter to add)"
+                                text: "Add a task"
                                 color: root.colTextSecondary
                                 font.pixelSize: 14
                                 visible: !newTaskInput.text && !newTaskInput.activeFocus
@@ -876,6 +1120,51 @@ Item {
                             Keys.onEscapePressed: {
                                 text = "";
                                 taskListView.forceActiveFocus();
+                            }
+                        }
+                    }
+                }
+
+                // Trashed areas, each standing for its projects and tasks.
+                ColumnLayout {
+                    visible: controller.currentView === "trash" && root.trashedAreas.length > 0
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    Repeater {
+                        model: root.trashedAreas
+
+                        delegate: Rectangle {
+                            id: trashedArea
+                            objectName: "trashedArea"
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 40
+                            radius: 8
+                            color: "transparent"
+                            border.color: root.colBorder
+                            border.width: 1
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 8
+                                spacing: 8
+
+                                Text {
+                                    text: "🗂 " + trashedArea.modelData.title
+                                    color: root.colTextPrimary
+                                    font.pixelSize: 14
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+
+                                ToolButton {
+                                    objectName: "restoreAreaButton"
+                                    text: "Put Back"
+                                    font.pixelSize: 11
+                                    onClicked: controller.restoreArea(trashedArea.modelData.id)
+                                }
                             }
                         }
                     }
@@ -959,18 +1248,22 @@ Item {
                                 Qt.callLater(root.scrollToTask, selectedTaskId);
                         }
 
-                        // Today lists This Evening under its own heading. The
-                        // section property stays the same in every view (changing
-                        // it re-lays out the whole list after a view switch, which
-                        // undid scrolling a task into view); only the heading
-                        // decides whether it shows.
-                        section.property: "evening"
+                        // Sections (#25): This Evening in Today, days in Upcoming,
+                        // areas and projects in Anytime, finishing days in the
+                        // Logbook. The core gives each row a key
+                        // (`QueryEngine::section_keys`); an empty key has no
+                        // heading. The section property is the same in every view
+                        // (changing it re-lays out the whole list after a view
+                        // switch, which undid scrolling a task into view).
+                        section.property: "section"
                         section.criteria: ViewSection.FullString
                         section.delegate: Item {
                             id: sectionHeading
                             required property string section
-                            readonly property bool shown: section === "true" && controller.currentView === "today"
-                            objectName: shown ? "eveningHeading" : ""
+                            readonly property string kind: section.split(":")[0]
+                            readonly property bool shown: section !== ""
+                            objectName: kind === "evening" ? "eveningHeading" : (shown ? "sectionHeading" : "")
+                            readonly property string title: root.describeSection(section)
                             width: taskListView.width
                             height: shown ? 40 : 0
                             visible: shown
@@ -980,7 +1273,7 @@ Item {
                                 anchors.leftMargin: 8
                                 anchors.bottom: parent.bottom
                                 anchors.bottomMargin: 8
-                                text: "🌙 This Evening"
+                                text: sectionHeading.title
                                 font.pixelSize: 15
                                 font.weight: Font.DemiBold
                                 color: root.colTextPrimary
@@ -1084,6 +1377,7 @@ Item {
                             required property bool evening
                             required property string deadline
                             required property string deadlineStatus
+                            required property bool someday
                             required property int index
 
                             readonly property bool isExpanded: taskListView.expandedTaskId === taskId
@@ -1127,11 +1421,14 @@ Item {
 
                             Rectangle {
                                 anchors.fill: parent
-                                radius: 8
-                                color: taskRow.isSelected
-                                    ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
-                                    : rowHover.hovered || taskRow.isExpanded ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
-                                border.color: taskRow.isExpanded ? root.colBorder : "transparent"
+                                // An open task is a card, like a page; a closed one is
+                                // tinted when selected or hovered.
+                                radius: taskRow.isExpanded ? 10 : 8
+                                color: taskRow.isExpanded ? root.colCardBg
+                                    : taskRow.isSelected ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
+                                    : rowHover.hovered ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                border.color: !taskRow.isExpanded ? "transparent"
+                                    : taskRow.isSelected ? (root.isDark ? "#2F5F8F" : "#A5C8EC") : root.colBorder
                                 border.width: 1
                             }
 
@@ -1173,13 +1470,14 @@ Item {
 
                                     // Drag grip: reorders the task (lists arranged by
                                     // hand only). Dragging takes over from the row's
-                                    // click once the pointer moves.
+                                    // click once the pointer moves. It keeps its space
+                                    // in every list, so rows line up the same everywhere.
                                     Item {
                                         objectName: "dragGrip"
-                                        visible: controller.reorderable
+                                        enabled: controller.reorderable
                                         Layout.preferredWidth: 12
                                         Layout.preferredHeight: 24
-                                        opacity: rowHover.hovered || gripDrag.active ? 1 : 0
+                                        opacity: enabled && (rowHover.hovered || gripDrag.active) ? 1 : 0
 
                                         Text {
                                             anchors.centerIn: parent
@@ -1285,9 +1583,11 @@ Item {
                                         Layout.fillWidth: true
                                     }
 
-                                    // "This Evening" Badge
+                                    // "This Evening" badge; Today has a This Evening
+                                    // heading instead.
                                     Rectangle {
-                                        visible: taskRow.evening
+                                        objectName: "eveningBadge"
+                                        visible: taskRow.evening && controller.currentView !== "today"
                                         Layout.preferredHeight: 20
                                         Layout.preferredWidth: eveningLabel.contentWidth + 12
                                         radius: 4
@@ -1303,9 +1603,11 @@ Item {
                                         }
                                     }
 
-                                    // Schedule Date Badge
+                                    // Start date badge, where the list doesn't already
+                                    // say it (root.describeStart).
                                     Rectangle {
-                                        visible: taskRow.startDate !== ""
+                                        objectName: "startBadge"
+                                        visible: dateLabel.text !== ""
                                         Layout.preferredHeight: 20
                                         Layout.preferredWidth: dateLabel.contentWidth + 12
                                         radius: 4
@@ -1313,8 +1615,9 @@ Item {
 
                                         Text {
                                             id: dateLabel
+                                            objectName: "startLabel"
                                             anchors.centerIn: parent
-                                            text: taskRow.startDate
+                                            text: root.describeStart(taskRow.startDate)
                                             font.pixelSize: 11
                                             color: root.colTextSecondary
                                         }
@@ -1374,7 +1677,7 @@ Item {
                                     visible: taskRow.newBelowHere
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 34
-                                    Layout.leftMargin: 36
+                                    Layout.leftMargin: 56 // in line with the title
                                     radius: 6
                                     color: root.isDark ? "#1A1B1E" : "#FFFFFF"
                                     border.color: root.colAccent
@@ -1423,7 +1726,9 @@ Item {
                                     id: expandedContent
                                     visible: taskRow.isExpanded
                                     Layout.fillWidth: true
-                                    Layout.leftMargin: 32
+                                    // In line with the title: past the grip (12),
+                                    // the checkbox (20) and their spacing (2 × 12).
+                                    Layout.leftMargin: 56
                                     spacing: 10
 
                                     // Notes Editor. Saves after a pause in typing and
@@ -1434,16 +1739,14 @@ Item {
                                         // Editing a task's notes selects that task.
                                         onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 60
-                                        placeholderText: "Notes (Markdown supported)..."
+                                        // Grows with what is written.
+                                        Layout.preferredHeight: Math.max(44, contentHeight + topPadding + bottomPadding)
+                                        placeholderText: "Notes"
                                         font.pixelSize: 13
                                         color: root.colTextPrimary
                                         wrapMode: TextArea.Wrap
-                                        background: Rectangle {
-                                            color: root.isDark ? "#1A1B1E" : "#FFFFFF"
-                                            border.color: root.colBorder
-                                            radius: 6
-                                        }
+                                        leftPadding: 0
+                                        background: null
 
                                         function save() {
                                             saveTimer.stop();
@@ -1473,47 +1776,34 @@ Item {
                                         }
                                     }
 
-                                    // Quick Schedule Buttons
+                                    // When and Deadline, tucked into the corner; each
+                                    // shows its current value and opens its popover.
                                     RowLayout {
-                                        spacing: 8
+                                        Layout.fillWidth: true
+                                        spacing: 4
 
-                                        Text {
-                                            text: "When:"
-                                            color: root.colTextSecondary
-                                            font.pixelSize: 12
-                                        }
+                                        Item { Layout.fillWidth: true }
 
-                                        Repeater {
-                                            model: [
-                                                { label: "Today", when: "today" },
-                                                { label: "This Evening", when: "evening" },
-                                                { label: "Someday", when: "someday" }
-                                            ]
-                                            delegate: Button {
-                                                required property var modelData
-                                                objectName: "schedule-" + modelData.when
-                                                focusPolicy: Qt.NoFocus
-                                                text: modelData.label
-                                                font.pixelSize: 11
-                                                onClicked: controller.scheduleTask(taskRow.taskId, modelData.when)
-                                            }
-                                        }
-
-                                        // Any date: the When popover.
-                                        Button {
+                                        ToolButton {
                                             objectName: "schedule-date"
                                             focusPolicy: Qt.NoFocus
-                                            text: "Date…"
-                                            font.pixelSize: 11
+                                            flat: true
+                                            font.pixelSize: 12
+                                            text: "📅 " + root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: "When (Ctrl+S)"
                                             onClicked: root.openWhenFor(taskRow.taskId)
                                         }
 
-                                        // The deadline: the same popover in deadline mode.
-                                        Button {
+                                        ToolButton {
                                             objectName: "schedule-deadline"
                                             focusPolicy: Qt.NoFocus
-                                            text: "Deadline…"
-                                            font.pixelSize: 11
+                                            flat: true
+                                            font.pixelSize: 12
+                                            text: "⚑ " + (taskRow.deadline === "" ? "Deadline"
+                                                : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus))
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: "Deadline (Ctrl+D)"
                                             onClicked: root.openDeadlineFor(taskRow.taskId)
                                         }
                                     }
@@ -1553,7 +1843,8 @@ Item {
             spacing: 12
 
             Text {
-                text: (root.undoKind === "project" ? "Project" : "Task") + " “" + root.undoTitle + "” moved to Trash"
+                text: (root.undoKind === "project" ? "Project" : root.undoKind === "area" ? "Area" : "Task")
+                    + " “" + root.undoTitle + "” moved to Trash"
                 color: root.isDark ? "#212529" : "#F8F9FA"
                 font.pixelSize: 13
                 elide: Text.ElideMiddle
@@ -1699,6 +1990,49 @@ Item {
         // Focus returns to the button that opened the dialog, which hides once
         // the Trash is empty; give it to the task list instead.
         onClosed: if (!emptyTrashButton.visible) taskListView.forceActiveFocus()
+    }
+
+    Dialog {
+        id: newAreaDialog
+        objectName: "newAreaDialog"
+        title: "Create New Area"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 360
+
+        TextField {
+            id: areaTitleInput
+            objectName: "areaTitleInput"
+            width: parent.width
+            placeholderText: "Area name, e.g. Home or Work"
+            focus: true
+        }
+
+        onAccepted: {
+            controller.createArea(areaTitleInput.text);
+            areaTitleInput.text = "";
+        }
+    }
+
+    Dialog {
+        id: renameAreaDialog
+        objectName: "renameAreaDialog"
+        title: "Rename Area"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 360
+
+        TextField {
+            id: renameAreaInput
+            objectName: "renameAreaInput"
+            width: parent.width
+            focus: true
+        }
+
+        // A blank name is refused and the old one kept.
+        onAccepted: controller.renameArea(controller.currentAreaId, renameAreaInput.text)
     }
 
     Dialog {
