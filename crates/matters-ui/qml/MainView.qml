@@ -147,6 +147,16 @@ Item {
         selectRow(row);
     }
 
+    function moveSelected(step) {
+        const id = taskListView.selectedTaskId;
+        if (taskModel.rowOf(id) < 0 || !controller.canReorder())
+            return;
+        controller.moveTask(id, step);
+        // The list reloads on the next turn of the event loop; keep the
+        // moved task in view once it has.
+        Qt.callLater(root.scrollToTask, id);
+    }
+
     function toggleSelectedExpansion() {
         const id = taskListView.selectedTaskId;
         if (taskModel.rowOf(id) < 0)
@@ -656,6 +666,14 @@ Item {
                         // Keys typed into a row's editors (notes) are handled there
                         // and never reach this handler, except Escape.
                         Keys.onPressed: (event) => {
+                            // Ctrl+Up/Down reorders the selected task (lists
+                            // arranged by hand only; elsewhere it does nothing).
+                            if (event.modifiers === Qt.ControlModifier
+                                    && (event.key === Qt.Key_Up || event.key === Qt.Key_Down)) {
+                                root.moveSelected(event.key === Qt.Key_Up ? -1 : 1);
+                                event.accepted = true;
+                                return;
+                            }
                             if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
                                 return;
                             switch (event.key) {

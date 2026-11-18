@@ -301,6 +301,47 @@ Item {
             verify(list.activeFocus, "focus is back on the list");
         }
 
+        function test_ctrl_up_and_down_reorder_the_selected_task() {
+            addToToday("ord-1");
+            addToToday("ord-2");
+            const row = addToToday("ord-3");
+            settle();
+            focusList();
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "ord-3");
+            list.expandedTaskId = row.taskId;
+            settle();
+
+            keyClick(Qt.Key_Up, Qt.ControlModifier);
+            tryVerify(() => indexOf("ord-3") === indexOf("ord-2") - 1, 2000, "moved above ord-2");
+            keyClick(Qt.Key_Up, Qt.ControlModifier);
+            tryVerify(() => indexOf("ord-3") === indexOf("ord-1") - 1, 2000, "moved above ord-1");
+            compare(rowFor("ord-3"), row, "the row was moved, not recreated");
+            verify(row.isExpanded, "and stays open");
+            compare(list.selectedTaskId, row.taskId, "and selected");
+
+            keyClick(Qt.Key_Down, Qt.ControlModifier);
+            tryVerify(() => indexOf("ord-1") === indexOf("ord-3") - 1 && indexOf("ord-3") === indexOf("ord-2") - 1,
+                      2000, "Ctrl+Down moves it back down");
+
+            // Someday mixes areas and projects: not arranged by hand.
+            controller.selectView("someday");
+            view.captureTask("sd-1");
+            view.captureTask("sd-2");
+            waitForRow("sd-2");
+            settle();
+            focusList();
+            keyClick(Qt.Key_Down);
+            const before = [];
+            for (let i = 0; i < list.count; ++i)
+                before.push(list.model.idAt(i));
+            keyClick(Qt.Key_Down, Qt.ControlModifier);
+            wait(100);
+            for (let i = 0; i < list.count; ++i)
+                compare(list.model.idAt(i), before[i], "Someday keeps its order");
+            compare(controller.errorMessage, "", "and shows no error");
+        }
+
         function test_ctrl_s_opens_the_when_menu_for_the_selection() {
             addToToday("menu-me");
             settle();

@@ -116,3 +116,9 @@ pub const MIGRATION_V4: &str = r#"
 ALTER TABLE areas ADD COLUMN trashed_at INTEGER;
 CREATE INDEX IF NOT EXISTS idx_areas_trashed ON areas(trashed_at);
 "#;
+
+/// v5: Today keeps its own manual order, separate from a task's order in its
+/// Inbox, area or project (`sort_order`).
+pub const MIGRATION_V5: &str = r#"
+ALTER TABLE tasks ADD COLUMN today_order REAL NOT NULL DEFAULT 0;
+"#;

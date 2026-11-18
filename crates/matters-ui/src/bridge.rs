@@ -81,6 +81,13 @@ pub mod qobject {
         /// Put a trashed task back where it was.
         #[qinvokable]
         fn restore_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Move a task `step` places up (negative) or down in the current
+        /// view, if the view is arranged by hand (`View::is_reorderable`).
+        #[qinvokable]
+        fn move_task(self: Pin<&mut AppController>, task_id: &QString, step: i32);
+        /// Whether the current view is arranged by hand.
+        #[qinvokable]
+        fn can_reorder(self: &AppController) -> bool;
         /// Permanently delete everything in the Trash.
         #[qinvokable]
         fn empty_trash(self: Pin<&mut AppController>);
@@ -289,11 +296,29 @@ impl qobject::AppController {
         if title.is_empty() {
             return QString::default();
         }
-        let task = self.view.new_task(Uuid::new_v4().to_string(), title, local_today());
-        let result = self.db.create_task(&task);
+        let mut task = self.view.new_task(Uuid::new_v4().to_string(), title, local_today());
+        let result = self.db.add_task(&mut task);
         let id = if result.is_ok() { QString::from(task.id.as_str()) } else { QString::default() };
         self.finish(result);
         id
+    }
+
+    pub fn move_task(self: Pin<&mut Self>, task_id: &QString, step: i32) {
+        if !self.view.is_reorderable() {
+            return;
+        }
+        let result = matters_core::ordering::move_task(
+            &self.db,
+            &self.view,
+            self.day.day(),
+            &String::from(task_id),
+            step as isize,
+        );
+        self.finish(result);
+    }
+
+    pub fn can_reorder(&self) -> bool {
+        self.view.is_reorderable()
     }
 
     pub fn toggle_task(self: Pin<&mut Self>, task_id: &QString) {
@@ -359,8 +384,8 @@ impl qobject::AppController {
         if title.is_empty() {
             return;
         }
-        let project = Project::new(Uuid::new_v4().to_string(), title, 0.0);
-        let result = self.db.create_project(&project);
+        let mut project = Project::new(Uuid::new_v4().to_string(), title, 0.0);
+        let result = self.db.add_project(&mut project);
         self.finish(result);
     }
 

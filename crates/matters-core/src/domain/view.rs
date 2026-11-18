@@ -80,6 +80,14 @@ impl View {
         }
     }
 
+    /// Whether the user arranges this list by hand (`crate::ordering`).
+    /// Upcoming is ordered by date, the Logbook and Trash by when items were
+    /// finished or trashed. Anytime and Someday mix tasks from several areas
+    /// and projects, so they wait for grouped sections (#25).
+    pub fn is_reorderable(&self) -> bool {
+        matches!(self, View::Inbox | View::Today | View::Project(_))
+    }
+
     pub fn project_id(&self) -> Option<&str> {
         match self {
             View::Project(id) => Some(id),

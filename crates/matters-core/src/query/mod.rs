@@ -84,6 +84,9 @@ const PROJECT_WHERE: &str = "project_id = ?1 AND status IN ('open', 'completed')
 /// Stable order for manually sorted lists; `id` breaks exact ties.
 const MANUAL_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
 
+/// Today's own manual order (`crate::ordering`), then the home order.
+const TODAY_ORDER: &str = "today_order ASC, sort_order ASC, created_at ASC, id ASC";
+
 /// Logbook order: most recently finished first.
 const LOGBOOK_ORDER: &str = "completed_at DESC, updated_at DESC, id ASC";
 
@@ -175,7 +178,7 @@ impl<'a> QueryEngine<'a> {
     pub fn today(&self, reference_date: NaiveDate) -> Result<TodayView> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
         let (evening, daytime) = self
-            .select_live(TODAY_WHERE, MANUAL_ORDER, params![ref_str])?
+            .select_live(TODAY_WHERE, TODAY_ORDER, params![ref_str])?
             .into_iter()
             .partition(Task::is_evening);
         Ok(TodayView { daytime, evening })
