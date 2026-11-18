@@ -433,12 +433,7 @@ fn write_projection(tx: &Transaction<'_>, projection: &Projection) -> Result<()>
     Ok(())
 }
 fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
-    let tables: i64 = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'",
-        [],
-        |r| r.get(0),
-    )?;
-    if tables > 0 {
+    if crate::has_user_schema(conn)? {
         let marker = conn.query_row(
             "SELECT value FROM prototype_meta WHERE key='format'",
             [],

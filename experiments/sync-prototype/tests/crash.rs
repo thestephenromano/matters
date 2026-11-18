@@ -135,3 +135,16 @@ fn refuses_an_existing_application_database() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn refuses_a_database_with_only_a_view() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("app.db");
+    let connection = rusqlite::Connection::open(&path)?;
+    connection.execute_batch("CREATE VIEW v AS SELECT 1")?;
+    assert!(Replica::open(&path).is_err());
+    let objects: i64 =
+        connection.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
+    assert_eq!(objects, 1);
+    Ok(())
+}

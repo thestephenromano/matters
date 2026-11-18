@@ -941,3 +941,16 @@ fn delivery_access_never_allocates_or_fences_a_writer() -> TestResult<()> {
     assert!(Delivery::open(&path, &wrong, true).is_err());
     Ok(())
 }
+
+#[test]
+fn review_foreign_database_with_only_a_view_is_refused() -> TestResult<()> {
+    let s = setup();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("foreign.db");
+    let conn = Connection::open(&path)?;
+    conn.execute_batch("CREATE VIEW v AS SELECT 1")?;
+    assert!(Outbox::open(&path, binding(&s), rng).is_err());
+    let objects: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
+    assert_eq!(objects, 1);
+    Ok(())
+}

@@ -889,6 +889,36 @@ fn replacement_retires_old_writer_and_replay_does_not_reactivate_it() {
 }
 
 #[test]
+fn first_record_gate_rejects_chained_records_before_signature_and_context_checks() {
+    let mut s = setup();
+    let cek = random32().unwrap();
+    let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
+    let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
+    let author = s.a.id().unwrap();
+    let manifest = s.authority.manifest();
+    let incarnation = random32().unwrap();
+    let start = writer(&s.authority, &s.a, incarnation, 71, None);
+    s.authority
+        .admit_writer(&sign(&start, &s.a).unwrap(), DOC)
+        .unwrap();
+    for variant in 0..2 {
+        let record = random32().unwrap();
+        let mut h = header(&s.authority, &author, &incarnation, &record, &manifest);
+        h.previous = Some(&[99; 48]);
+        if variant == 0 {
+            h.epoch = 1;
+        }
+        let signer = if variant == 1 { &s.b } else { &s.a };
+        let bytes = seal_fixture(h, &cek, &update(71), signer).unwrap();
+        assert_eq!(
+            s.authority.open_first_data(&bytes, &key, &DOC),
+            Err(Error::Unsupported),
+            "variant {variant}"
+        );
+    }
+}
+
+#[test]
 fn competing_writer_successors_freeze_the_lineage_in_both_orders() {
     for root_conflict in [false, true] {
         for reversed in [false, true] {
