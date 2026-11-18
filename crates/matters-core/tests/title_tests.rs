@@ -1,7 +1,7 @@
 //! Task titles (#27): always visible, one line, edited in place.
 
 use chrono::NaiveDate;
-use matters_core::{Database, MattersError, Schedule, Task, View};
+use matters_core::{Database, MattersError, Project, Schedule, Task, View};
 
 fn today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 11, 18).unwrap()
@@ -49,4 +49,15 @@ fn a_blank_rename_is_refused_and_keeps_the_name() {
     assert!(matches!(db.rename_task("t", " \n "), Err(MattersError::Validation(_))));
     assert_eq!(db.get_task("t").unwrap().unwrap().title, "Draft");
     assert!(matches!(db.rename_task("missing", "x"), Err(MattersError::NotFound { .. })));
+}
+
+#[test]
+fn renaming_a_project_cleans_the_name_and_refuses_blank_ones() {
+    let db = Database::open_in_memory().unwrap();
+    db.create_project(&Project::new("p", "Draft", 0.0)).unwrap();
+    db.rename_project("p", "  Kitchen\n renovation ").unwrap();
+    assert_eq!(db.get_project("p").unwrap().unwrap().title, "Kitchen renovation");
+    assert!(matches!(db.rename_project("p", " "), Err(MattersError::Validation(_))));
+    assert_eq!(db.get_project("p").unwrap().unwrap().title, "Kitchen renovation");
+    assert!(matches!(db.rename_project("missing", "x"), Err(MattersError::NotFound { .. })));
 }

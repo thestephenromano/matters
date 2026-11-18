@@ -464,6 +464,12 @@ Item {
         return Qt.formatDate(date, "dddd, MMMM d");
     }
 
+    function openRename(kind) {
+        renameDialog.kind = kind;
+        renameInput.text = controller.currentTitle;
+        renameDialog.open();
+    }
+
     // A start date as shown on a row, or "" where the list already says it:
     // Today and Upcoming (grouped by day) imply the date, and the Logbook is
     // about when tasks were finished. Elsewhere: Today, Tomorrow, a weekday
@@ -791,15 +797,30 @@ Item {
                                             radius: 6
                                             color: isSelected ? root.colSidebarActive : (areaProjectMouse.containsMouse ? root.colSidebarHover : "transparent")
 
-                                            Text {
-                                                anchors.left: parent.left
+                                            // The same circle as projects without an area,
+                                            // indented under the area.
+                                            RowLayout {
+                                                anchors.fill: parent
                                                 anchors.leftMargin: 30
-                                                anchors.right: parent.right
-                                                anchors.verticalCenter: parent.verticalCenter
-                                                text: areaProject.modelData.title
-                                                color: areaProject.isSelected ? root.colAccent : root.colTextPrimary
-                                                font.pixelSize: 13
-                                                elide: Text.ElideRight
+                                                anchors.rightMargin: 8
+                                                spacing: 8
+
+                                                Rectangle {
+                                                    Layout.preferredWidth: 12
+                                                    Layout.preferredHeight: 12
+                                                    radius: 6
+                                                    color: "transparent"
+                                                    border.color: areaProject.isSelected ? root.colAccent : root.colTextSecondary
+                                                    border.width: 1.5
+                                                }
+
+                                                Text {
+                                                    text: areaProject.modelData.title
+                                                    color: areaProject.isSelected ? root.colAccent : root.colTextPrimary
+                                                    font.pixelSize: 13
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
                                             }
 
                                             MouseArea {
@@ -930,6 +951,45 @@ Item {
                     Layout.fillWidth: true
                     spacing: 12
 
+                    // A project's progress, as a pie that fills as its tasks are
+                    // done (#28).
+                    Canvas {
+                        id: progressPie
+                        objectName: "progressPie"
+                        readonly property real progress: controller.currentProjectProgress
+                        visible: controller.currentView === "project"
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                        Layout.alignment: Qt.AlignVCenter
+                        onProgressChanged: requestPaint()
+                        onVisibleChanged: requestPaint()
+
+                        onPaint: {
+                            const ctx = getContext("2d");
+                            ctx.reset();
+                            const cx = width / 2;
+                            const cy = height / 2;
+                            const r = Math.min(width, height) / 2 - 1.5;
+                            ctx.lineWidth = 2;
+                            ctx.strokeStyle = root.colAccent;
+                            ctx.beginPath();
+                            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+                            ctx.stroke();
+                            if (progress > 0) {
+                                ctx.fillStyle = root.colAccent;
+                                ctx.beginPath();
+                                ctx.moveTo(cx, cy);
+                                ctx.arc(cx, cy, r - 3, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * progress);
+                                ctx.closePath();
+                                ctx.fill();
+                            }
+                        }
+
+                        HoverHandler { id: pieHover }
+                        ToolTip.visible: pieHover.hovered
+                        ToolTip.text: Math.round(progress * 100) + "% done"
+                    }
+
                     Text {
                         text: controller.currentTitle
                         font.pixelSize: 28
@@ -953,89 +1013,85 @@ Item {
                         onVisibleChanged: if (!visible && activeFocus) taskListView.forceActiveFocus()
                     }
 
-                    // Area header: file projects under it from their header;
-                    // rename or trash it here (#15).
+                    // Project and area actions, in a menu beside the title.
                     ToolButton {
-                        objectName: "renameAreaButton"
-                        text: "Rename…"
-                        visible: controller.currentView === "area"
-                        onClicked: {
-                            renameAreaInput.text = controller.currentTitle;
-                            renameAreaDialog.open();
-                        }
-                    }
-
-                    ToolButton {
-                        objectName: "trashAreaButton"
-                        text: "Move to Trash"
-                        visible: controller.currentView === "area"
+                        id: containerMenuButton
+                        objectName: "containerMenuButton"
+                        text: "⋯"
+                        font.pixelSize: 18
+                        visible: controller.currentView === "project" || controller.currentView === "area"
                         ToolTip.visible: hovered
-                        ToolTip.text: "Move this area, its projects and its tasks to the Trash"
-                        onClicked: {
-                            const id = controller.currentAreaId;
-                            root.showUndo("area", id, controller.currentTitle);
-                            controller.trashArea(id);
-                        }
-                    }
+                        ToolTip.text: controller.currentView === "area" ? "Area actions" : "Project actions"
+                        onClicked: (controller.currentView === "area" ? areaMenu : projectMenu).popup(containerMenuButton, 0, height)
 
-                    // Project header: which area the project is filed in.
-                    ComboBox {
-                        id: projectAreaPicker
-                        objectName: "projectAreaPicker"
-                        visible: controller.currentView === "project"
-                        readonly property var choices: [{ id: "", title: "No Area" }].concat(root.areas)
-                        readonly property var project: root.projects.find(p => p.id === controller.currentProjectId)
-                        model: choices
-                        textRole: "title"
-                        currentIndex: {
-                            const area = project ? (project.area_id || "") : "";
-                            return Math.max(0, choices.findIndex(a => a.id === area));
-                        }
-                        onActivated: (index) => controller.setProjectArea(controller.currentProjectId, choices[index].id)
-                    }
+                        Menu {
+                            id: projectMenu
+                            objectName: "projectMenu"
 
-                    ToolButton {
-                        objectName: "trashProjectButton"
-                        text: "Move to Trash"
-                        visible: controller.currentView === "project"
-                        ToolTip.visible: hovered
-                        ToolTip.text: "Move this project and its tasks to the Trash"
-                        onClicked: {
-                            const id = controller.currentProjectId;
-                            root.showUndo("project", id, controller.currentTitle);
-                            controller.trashProject(id);
-                        }
-                    }
+                            // Which area the project is filed in.
+                            Menu {
+                                id: projectAreaMenu
+                                objectName: "projectAreaMenu"
+                                title: "Area"
 
-                    // Circular Progress Display for Projects
-                    RowLayout {
-                        visible: controller.currentView === "project"
-                        spacing: 8
+                                Instantiator {
+                                    model: [{ id: "", title: "No Area" }].concat(root.areas)
+                                    delegate: MenuItem {
+                                        required property var modelData
+                                        objectName: "areaChoice-" + (modelData.id === "" ? "none" : modelData.id)
+                                        text: modelData.title
+                                        checkable: true
+                                        checked: {
+                                            const project = root.projects.find(p => p.id === controller.currentProjectId);
+                                            return (project ? (project.area_id || "") : "") === modelData.id;
+                                        }
+                                        onTriggered: controller.setProjectArea(controller.currentProjectId, modelData.id)
+                                    }
+                                    onObjectAdded: (index, object) => projectAreaMenu.insertItem(index, object)
+                                    onObjectRemoved: (index, object) => projectAreaMenu.removeItem(object)
+                                }
+                            }
 
-                        Rectangle {
-                            Layout.preferredWidth: 24
-                            Layout.preferredHeight: 24
-                            radius: 12
-                            color: "transparent"
-                            border.color: root.colAccent
-                            border.width: 2
+                            MenuItem {
+                                objectName: "renameProjectItem"
+                                text: "Rename…"
+                                onTriggered: root.openRename("project")
+                            }
 
-                            Rectangle {
-                                anchors.centerIn: parent
-                                width: parent.width * controller.currentProjectProgress
-                                height: parent.height * controller.currentProjectProgress
-                                radius: width / 2
-                                color: root.colAccent
-                                Behavior on width { NumberAnimation { duration: 200 } }
-                                Behavior on height { NumberAnimation { duration: 200 } }
+                            MenuSeparator {}
+
+                            MenuItem {
+                                objectName: "trashProjectItem"
+                                text: "Move to Trash"
+                                onTriggered: {
+                                    const id = controller.currentProjectId;
+                                    root.showUndo("project", id, controller.currentTitle);
+                                    controller.trashProject(id);
+                                }
                             }
                         }
 
-                        Text {
-                            text: Math.round(controller.currentProjectProgress * 100) + "%"
-                            color: root.colTextSecondary
-                            font.pixelSize: 13
-                            font.weight: Font.DemiBold
+                        Menu {
+                            id: areaMenu
+                            objectName: "areaMenu"
+
+                            MenuItem {
+                                objectName: "renameAreaItem"
+                                text: "Rename…"
+                                onTriggered: root.openRename("area")
+                            }
+
+                            MenuSeparator {}
+
+                            MenuItem {
+                                objectName: "trashAreaItem"
+                                text: "Move to Trash"
+                                onTriggered: {
+                                    const id = controller.currentAreaId;
+                                    root.showUndo("area", id, controller.currentTitle);
+                                    controller.trashArea(id);
+                                }
+                            }
                         }
                     }
                 }
@@ -2016,23 +2072,30 @@ Item {
     }
 
     Dialog {
-        id: renameAreaDialog
-        objectName: "renameAreaDialog"
-        title: "Rename Area"
+        id: renameDialog
+        objectName: "renameDialog"
+        // "project" or "area": what is being renamed.
+        property string kind: "area"
+        title: kind === "project" ? "Rename Project" : "Rename Area"
         standardButtons: Dialog.Ok | Dialog.Cancel
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
         width: 360
 
         TextField {
-            id: renameAreaInput
-            objectName: "renameAreaInput"
+            id: renameInput
+            objectName: "renameInput"
             width: parent.width
             focus: true
         }
 
         // A blank name is refused and the old one kept.
-        onAccepted: controller.renameArea(controller.currentAreaId, renameAreaInput.text)
+        onAccepted: {
+            if (kind === "project")
+                controller.renameProject(controller.currentProjectId, renameInput.text);
+            else
+                controller.renameArea(controller.currentAreaId, renameInput.text);
+        }
     }
 
     Dialog {
