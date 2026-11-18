@@ -130,7 +130,10 @@ mod tests {
     }
 
     fn run(from: &[Item], to: &[Item]) -> Vec<String> {
-        let mut rec = Recorder { rows: from.to_vec(), ..Default::default() };
+        let mut rec = Recorder {
+            rows: from.to_vec(),
+            ..Default::default()
+        };
         reconcile(&mut rec, to.to_vec(), |i| i.0);
         assert_eq!(rec.rows, to, "rows must equal the target");
         assert!(rec.open.is_none());

@@ -55,7 +55,9 @@ impl Schedule {
             "evening" => Some(Schedule::Today { evening: true }),
             "someday" => Some(Schedule::Someday),
             "none" => Some(Schedule::None),
-            other => NaiveDate::parse_from_str(other, "%Y-%m-%d").ok().map(Schedule::Date),
+            other => NaiveDate::parse_from_str(other, "%Y-%m-%d")
+                .ok()
+                .map(Schedule::Date),
         }
     }
 
@@ -74,11 +76,17 @@ impl Schedule {
     /// day without a year (`jan 5`, `1/5`) that has passed this year means
     /// next year. A weekday names the coming one, or today on that weekday.
     pub fn parse_typed(input: &str, today: NaiveDate, order: DateOrder) -> Option<Schedule> {
-        let text = input.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        let text = input
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
         match text.as_str() {
             "" => return None,
             "today" => return Some(Schedule::Today { evening: false }),
-            "tonight" | "evening" | "this evening" => return Some(Schedule::Today { evening: true }),
+            "tonight" | "evening" | "this evening" => {
+                return Some(Schedule::Today { evening: true })
+            }
             "someday" => return Some(Schedule::Someday),
             _ => {}
         }
@@ -111,7 +119,11 @@ impl Schedule {
     /// [`Schedule::parse_typed`], but only actual days. `today` and date
     /// phrases are accepted; This Evening and Someday aren't deadlines, and
     /// past days, times and anything unclear are refused.
-    pub fn parse_typed_deadline(input: &str, today: NaiveDate, order: DateOrder) -> Option<NaiveDate> {
+    pub fn parse_typed_deadline(
+        input: &str,
+        today: NaiveDate,
+        order: DateOrder,
+    ) -> Option<NaiveDate> {
         match Schedule::parse_typed(input, today, order)? {
             Schedule::Today { evening: false } => Some(today),
             Schedule::Date(date) => Some(date),
@@ -123,7 +135,10 @@ impl Schedule {
         matches!(self, Schedule::Someday)
     }
 
-    pub fn to_db_fields(&self, today: NaiveDate) -> (Option<NaiveDate>, Option<&'static str>, bool) {
+    pub fn to_db_fields(
+        &self,
+        today: NaiveDate,
+    ) -> (Option<NaiveDate>, Option<&'static str>, bool) {
         match self {
             Schedule::Today { evening } => (
                 Some(today),
@@ -143,8 +158,18 @@ impl Schedule {
 /// `last friday`), which keep their meaning.
 fn names_a_day_of_the_year(text: &str) -> bool {
     const MONTHS: [&str; 12] = [
-        "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
-        "november", "december",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
     ];
     let tokens: Vec<&str> = text.split_whitespace().collect();
     let month_name = tokens.iter().any(|t| {
@@ -153,7 +178,10 @@ fn names_a_day_of_the_year(text: &str) -> bool {
     });
     let numeric_pair = tokens.len() == 1 && {
         let parts: Vec<&str> = tokens[0].split(['/', '.', '-']).collect();
-        parts.len() == 2 && parts.iter().all(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
+        parts.len() == 2
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
     };
     month_name || numeric_pair
 }

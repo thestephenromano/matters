@@ -30,7 +30,11 @@ macro_rules! hidden_projects {
 /// The row's area, if any, is not trashed.
 macro_rules! area_present {
     () => {
-        concat!("(area_id IS NULL OR area_id NOT IN (", trashed_areas!(), "))")
+        concat!(
+            "(area_id IS NULL OR area_id NOT IN (",
+            trashed_areas!(),
+            "))"
+        )
     };
 }
 

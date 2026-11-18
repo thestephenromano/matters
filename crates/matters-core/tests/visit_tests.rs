@@ -22,14 +22,21 @@ impl Fixture {
             t.start_date = Some(today());
             db.create_task(&t).unwrap();
         }
-        Self { db, visit: Visit::new(), shown: Vec::new() }
+        Self {
+            db,
+            visit: Visit::new(),
+            shown: Vec::new(),
+        }
     }
 
     /// Reload `view` the way a frontend does and return the displayed ids.
     fn show(&mut self, view: View) -> Vec<String> {
         let members = QueryEngine::new(&self.db).tasks_in(&view, today()).unwrap();
         let db = &self.db;
-        self.shown = self.visit.rows(&view, members, &self.shown, |id| db.get_task(id)).unwrap();
+        self.shown = self
+            .visit
+            .rows(&view, members, &self.shown, |id| db.get_task(id))
+            .unwrap();
         self.shown.iter().map(|t| t.id.clone()).collect()
     }
 
@@ -46,7 +53,11 @@ fn completed_task_stays_in_place_until_the_view_is_left() {
     f.db.complete_task("b").unwrap();
     assert_eq!(f.show(View::Today), ["a", "b", "c"], "b keeps its place");
     assert_eq!(f.status("b"), Status::Completed, "shown as done");
-    assert_eq!(f.show(View::Today), ["a", "b", "c"], "still kept on later reloads");
+    assert_eq!(
+        f.show(View::Today),
+        ["a", "b", "c"],
+        "still kept on later reloads"
+    );
 
     f.db.uncomplete_task("b").unwrap();
     assert_eq!(f.show(View::Today), ["a", "b", "c"]);
@@ -55,12 +66,20 @@ fn completed_task_stays_in_place_until_the_view_is_left() {
     f.db.complete_task("b").unwrap();
     f.show(View::Today);
     f.show(View::Inbox); // leave
-    assert_eq!(f.show(View::Today), ["a", "c"], "gone after leaving and returning");
+    assert_eq!(
+        f.show(View::Today),
+        ["a", "c"],
+        "gone after leaving and returning"
+    );
 
     f.db.complete_task("a").unwrap();
     assert_eq!(f.show(View::Today), ["a", "c"]);
     f.visit.restart(); // navigated to Today again
-    assert_eq!(f.show(View::Today), ["c"], "re-entering the same view also starts a new visit");
+    assert_eq!(
+        f.show(View::Today),
+        ["c"],
+        "re-entering the same view also starts a new visit"
+    );
 }
 
 #[test]

@@ -11,7 +11,12 @@ pub struct Heading {
 }
 
 impl Heading {
-    pub fn new(id: impl Into<String>, project_id: impl Into<String>, title: impl Into<String>, sort_order: f64) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        project_id: impl Into<String>,
+        title: impl Into<String>,
+        sort_order: f64,
+    ) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         Self {
             id: id.into(),

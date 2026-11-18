@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
 use chrono::{NaiveDate, TimeZone};
 use rusqlite::params;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::domain::{Area, Project, ProjectProgress, Task, View};
 use crate::error::Result;
@@ -107,11 +107,21 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// Live tasks matching a view rule.
-    fn select_live(&self, rule: &str, order: &str, params: impl rusqlite::Params) -> Result<Vec<Task>> {
+    fn select_live(
+        &self,
+        rule: &str,
+        order: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<Task>> {
         self.select_tasks(&format!("{LIVE} AND ({rule})"), order, params)
     }
 
-    fn select_tasks(&self, where_clause: &str, order: &str, params: impl rusqlite::Params) -> Result<Vec<Task>> {
+    fn select_tasks(
+        &self,
+        where_clause: &str,
+        order: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<Task>> {
         let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE {where_clause} ORDER BY {order}");
         self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(&sql)?;
@@ -216,13 +226,24 @@ impl<'a> QueryEngine<'a> {
     pub fn anytime(&self, reference_date: NaiveDate) -> Result<Vec<Task>> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
         let mut tasks = self.select_live(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])?;
-        let areas: HashMap<String, Area> = self.db.list_areas()?.into_iter().map(|a| (a.id.clone(), a)).collect();
-        let projects: HashMap<String, Project> =
-            self.db.list_projects()?.into_iter().map(|p| (p.id.clone(), p)).collect();
+        let areas: HashMap<String, Area> = self
+            .db
+            .list_areas()?
+            .into_iter()
+            .map(|a| (a.id.clone(), a))
+            .collect();
+        let projects: HashMap<String, Project> = self
+            .db
+            .list_projects()?
+            .into_iter()
+            .map(|p| (p.id.clone(), p))
+            .collect();
         // (no area?, area order, area id, in a project?, project order, project id)
         let group = |task: &Task| {
             let project = task.project_id.as_ref().and_then(|id| projects.get(id));
-            let area_id = project.and_then(|p| p.area_id.clone()).or_else(|| task.area_id.clone());
+            let area_id = project
+                .and_then(|p| p.area_id.clone())
+                .or_else(|| task.area_id.clone());
             let area = area_id.as_ref().and_then(|id| areas.get(id));
             (
                 area.is_none(),
@@ -259,21 +280,42 @@ impl<'a> QueryEngine<'a> {
     /// Dates are left for the frontend to format in the user's locale.
     pub fn section_keys(&self, view: &View, tasks: &[Task]) -> Result<Vec<String>> {
         Ok(match view {
-            View::Today => tasks.iter().map(|t| if t.is_evening() { "evening".into() } else { String::new() }).collect(),
+            View::Today => tasks
+                .iter()
+                .map(|t| {
+                    if t.is_evening() {
+                        "evening".into()
+                    } else {
+                        String::new()
+                    }
+                })
+                .collect(),
             View::Upcoming => tasks
                 .iter()
                 .map(|t| t.start_date.map_or(String::new(), |d| format!("date:{d}")))
                 .collect(),
             View::Anytime => {
-                let areas: HashMap<String, String> =
-                    self.db.list_areas()?.into_iter().map(|a| (a.id, a.title)).collect();
-                let projects: HashMap<String, String> =
-                    self.db.list_projects()?.into_iter().map(|p| (p.id, p.title)).collect();
+                let areas: HashMap<String, String> = self
+                    .db
+                    .list_areas()?
+                    .into_iter()
+                    .map(|a| (a.id, a.title))
+                    .collect();
+                let projects: HashMap<String, String> = self
+                    .db
+                    .list_projects()?
+                    .into_iter()
+                    .map(|p| (p.id, p.title))
+                    .collect();
                 tasks
                     .iter()
                     .map(|t| match (&t.project_id, &t.area_id) {
-                        (Some(id), _) => projects.get(id).map_or(String::new(), |title| format!("project:{id}:{title}")),
-                        (None, Some(id)) => areas.get(id).map_or(String::new(), |title| format!("area:{id}:{title}")),
+                        (Some(id), _) => projects
+                            .get(id)
+                            .map_or(String::new(), |title| format!("project:{id}:{title}")),
+                        (None, Some(id)) => areas
+                            .get(id)
+                            .map_or(String::new(), |title| format!("area:{id}:{title}")),
                         (None, None) => String::new(),
                     })
                     .collect()

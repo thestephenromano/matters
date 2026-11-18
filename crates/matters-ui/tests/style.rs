@@ -47,7 +47,10 @@ fn run(theme: &str, explicit: Option<&str>) -> (String, String) {
         .find(|l| l.starts_with("before="))
         .unwrap_or_else(|| panic!("child printed no result:\n{stdout}"));
     let (before, after) = line.split_once(" after=").expect("before=… after=…");
-    (before.trim_start_matches("before=").to_string(), after.to_string())
+    (
+        before.trim_start_matches("before=").to_string(),
+        after.to_string(),
+    )
 }
 
 fn main() {
@@ -66,12 +69,20 @@ fn main() {
     };
 
     check("no theme, no style named", &run("", None).1, "Fusion");
-    check("no theme, Material named", &run("", Some("Material")).1, "Material");
+    check(
+        "no theme, Material named",
+        &run("", Some("Material")).1,
+        "Material",
+    );
 
     let (cosmic_default, after) = run("cosmic", None);
     if cosmic_default == "org.kde.desktop" {
         check("COSMIC theme, no style named", &after, "Fusion");
-        check("COSMIC theme, Fusion named", &run("cosmic", Some("Fusion")).1, "Fusion");
+        check(
+            "COSMIC theme, Fusion named",
+            &run("cosmic", Some("Fusion")).1,
+            "Fusion",
+        );
         check(
             "COSMIC theme, org.kde.desktop named",
             &run("cosmic", Some("org.kde.desktop")).1,
@@ -82,8 +93,14 @@ fn main() {
             "COSMIC theme required but not active (style at start: {cosmic_default:?})"
         ));
     } else {
-        println!("not run: COSMIC cases (theme not active here; style at start: {cosmic_default:?})");
+        println!(
+            "not run: COSMIC cases (theme not active here; style at start: {cosmic_default:?})"
+        );
     }
 
-    assert!(failures.is_empty(), "style cases failed:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "style cases failed:\n{}",
+        failures.join("\n")
+    );
 }

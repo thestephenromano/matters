@@ -1,0 +1,44 @@
+# cargo-deny policy for the Matters workspace (ci/deny.sh runs it).
+# The sync prototype under experiments/ is a separate workspace with its own
+# gates.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every RustSec advisory that affects a dependency fails the check. An
+# exception goes in `ignore` with the advisory id, a reason, and when it can
+# be removed.
+ignore = [
+    # chrono is unmaintained, with no upgrade. Remove once matters-core,
+    # rusqlite's date mapping and interim have moved off chrono (#123).
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained, no fix; migration tracked in #123" },
+]
+
+[licenses]
+# Matters is MIT OR Apache-2.0; dependencies may use these licenses.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate versions are reported, not refused: they come and go with
+# upstream releases and are a size cost, not a correctness one.
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between the workspace's own, unpublished crates.
+allow-wildcard-paths = true
+
+[sources]
+# Dependencies come from crates.io only.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

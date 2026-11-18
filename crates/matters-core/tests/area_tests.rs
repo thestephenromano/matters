@@ -10,7 +10,12 @@ fn today() -> NaiveDate {
 }
 
 fn ids(db: &Database, view: &View) -> Vec<String> {
-    QueryEngine::new(db).tasks_in(view, today()).unwrap().into_iter().map(|t| t.id).collect()
+    QueryEngine::new(db)
+        .tasks_in(view, today())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect()
 }
 
 fn home() -> View {
@@ -48,7 +53,11 @@ fn fixture() -> Database {
 #[test]
 fn an_area_lists_the_tasks_filed_directly_in_it() {
     let db = fixture();
-    assert_eq!(ids(&db, &home()), ["loose-1", "loose-2", "finished"], "not its projects' tasks, nor trashed ones");
+    assert_eq!(
+        ids(&db, &home()),
+        ["loose-1", "loose-2", "finished"],
+        "not its projects' tasks, nor trashed ones"
+    );
 }
 
 #[test]
@@ -59,7 +68,11 @@ fn a_task_captured_in_an_area_is_filed_there() {
     assert_eq!(task.project_id, None);
     db.add_task(&mut task).unwrap();
     assert_eq!(ids(&db, &home()).last().map(String::as_str), Some("new"));
-    assert_eq!(View::containing(&task, today()), home(), "Quick Find opens the area");
+    assert_eq!(
+        View::containing(&task, today()),
+        home(),
+        "Quick Find opens the area"
+    );
 }
 
 #[test]
@@ -80,24 +93,40 @@ fn renaming_an_area_cleans_the_name_and_refuses_blank_ones() {
     let db = fixture();
     db.rename_area("home", "  My\nhome ").unwrap();
     assert_eq!(db.get_area("home").unwrap().unwrap().title, "My home");
-    assert!(matches!(db.rename_area("home", "  "), Err(MattersError::Validation(_))));
-    assert!(matches!(db.rename_area("nope", "x"), Err(MattersError::NotFound { .. })));
+    assert!(matches!(
+        db.rename_area("home", "  "),
+        Err(MattersError::Validation(_))
+    ));
+    assert!(matches!(
+        db.rename_area("nope", "x"),
+        Err(MattersError::NotFound { .. })
+    ));
 }
 
 #[test]
 fn projects_are_filed_in_live_areas_only() {
     let db = fixture();
     db.create_area(&Area::new("work", "Work", 1.0)).unwrap();
-    db.create_project(&Project::new("solo", "Solo", 1.0)).unwrap();
+    db.create_project(&Project::new("solo", "Solo", 1.0))
+        .unwrap();
 
     db.set_project_area("solo", Some("work")).unwrap();
-    assert_eq!(db.get_project("solo").unwrap().unwrap().area_id.as_deref(), Some("work"));
+    assert_eq!(
+        db.get_project("solo").unwrap().unwrap().area_id.as_deref(),
+        Some("work")
+    );
     db.set_project_area("solo", None).unwrap();
     assert_eq!(db.get_project("solo").unwrap().unwrap().area_id, None);
 
     db.trash_area("work").unwrap();
-    assert!(db.set_project_area("solo", Some("work")).is_err(), "not into a trashed area");
+    assert!(
+        db.set_project_area("solo", Some("work")).is_err(),
+        "not into a trashed area"
+    );
     assert!(db.set_project_area("solo", Some("missing")).is_err());
     assert!(db.set_project_area("missing", None).is_err());
-    assert_eq!(db.get_project("solo").unwrap().unwrap().status, Status::Open);
+    assert_eq!(
+        db.get_project("solo").unwrap().unwrap().status,
+        Status::Open
+    );
 }

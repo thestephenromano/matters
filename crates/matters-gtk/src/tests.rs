@@ -85,7 +85,12 @@ fn settle() {
 }
 
 fn titles(ui: &Ui) -> Vec<String> {
-    ui.state.borrow().shown.iter().map(|t| t.title.clone()).collect()
+    ui.state
+        .borrow()
+        .shown
+        .iter()
+        .map(|t| t.title.clone())
+        .collect()
 }
 
 fn row_index(ui: &Ui, title: &str) -> usize {
@@ -102,8 +107,14 @@ fn add_task(ui: &Rc<Ui>, title: &str) {
 }
 
 fn activate_nav(ui: &Ui, view: &View) {
-    let index = crate::ui::nav_views().iter().position(|v| v == view).unwrap();
-    ui.nav_list.row_at_index(index as i32).unwrap().emit_activate();
+    let index = crate::ui::nav_views()
+        .iter()
+        .position(|v| v == view)
+        .unwrap();
+    ui.nav_list
+        .row_at_index(index as i32)
+        .unwrap()
+        .emit_activate();
     settle();
 }
 
@@ -127,15 +138,26 @@ fn adding_a_task_lists_it_in_the_current_view(ui: &Rc<Ui>) {
     add_task(ui, "gtk-add");
     assert!(titles(ui).contains(&"gtk-add".to_string()));
     assert_eq!(ui.new_task_entry.text(), "", "entry clears after adding");
-    let today = QueryEngine::new(&ui.db).tasks_in(&View::Today, matters_core::local_today()).unwrap();
-    assert!(today.iter().any(|t| t.title == "gtk-add"), "stored as a Today task");
+    let today = QueryEngine::new(&ui.db)
+        .tasks_in(&View::Today, matters_core::local_today())
+        .unwrap();
+    assert!(
+        today.iter().any(|t| t.title == "gtk-add"),
+        "stored as a Today task"
+    );
 
     // The Logbook holds no new work: no entry, and nothing is created.
     activate_nav(ui, &View::Logbook);
     // WidgetExt: shown on screen (EntryExt::is_visible is about password text).
-    assert!(!WidgetExt::is_visible(&ui.new_task_entry), "no quick-add entry in the Logbook");
+    assert!(
+        !WidgetExt::is_visible(&ui.new_task_entry),
+        "no quick-add entry in the Logbook"
+    );
     add_task(ui, "gtk-logbook");
-    let all = QueryEngine::new(&ui.db).quick_find("gtk-logbook").unwrap().tasks;
+    let all = QueryEngine::new(&ui.db)
+        .quick_find("gtk-logbook")
+        .unwrap()
+        .tasks;
     assert!(all.is_empty(), "nothing captured in the Logbook");
     activate_nav(ui, &View::Today);
     assert!(WidgetExt::is_visible(&ui.new_task_entry));
@@ -153,17 +175,27 @@ fn ticking_keeps_the_task_until_the_view_is_left(ui: &Rc<Ui>) {
     settle();
     let i = row_index(ui, "gtk-tick");
     assert_eq!(ui.state.borrow().shown[i].status, Status::Completed);
-    assert_eq!(ui.task_rows.borrow()[i].row, row, "same row widget, kept in place");
+    assert_eq!(
+        ui.task_rows.borrow()[i].row,
+        row,
+        "same row widget, kept in place"
+    );
 
     check.set_active(false);
     settle();
-    assert_eq!(ui.state.borrow().shown[row_index(ui, "gtk-tick")].status, Status::Open);
+    assert_eq!(
+        ui.state.borrow().shown[row_index(ui, "gtk-tick")].status,
+        Status::Open
+    );
 
     check.set_active(true);
     settle();
     activate_nav(ui, &View::Inbox);
     activate_nav(ui, &View::Today);
-    assert!(!titles(ui).contains(&"gtk-tick".to_string()), "gone after leaving");
+    assert!(
+        !titles(ui).contains(&"gtk-tick".to_string()),
+        "gone after leaving"
+    );
 }
 
 fn sidebar_views_and_counts(ui: &Rc<Ui>) {
@@ -172,8 +204,14 @@ fn sidebar_views_and_counts(ui: &Rc<Ui>) {
     assert_eq!(ui.content_page.title(), "Someday");
     add_task(ui, "gtk-someday");
 
-    let someday = crate::ui::nav_views().iter().position(|v| *v == View::Someday).unwrap();
-    let logbook = crate::ui::nav_views().iter().position(|v| *v == View::Logbook).unwrap();
+    let someday = crate::ui::nav_views()
+        .iter()
+        .position(|v| *v == View::Someday)
+        .unwrap();
+    let logbook = crate::ui::nav_views()
+        .iter()
+        .position(|v| *v == View::Logbook)
+        .unwrap();
     assert_eq!(ui.nav_counts[someday].label(), "1");
     assert_eq!(ui.nav_counts[logbook].label(), "1", "the ticked task");
 }
@@ -187,13 +225,21 @@ fn projects_can_be_created_and_opened(ui: &Rc<Ui>) {
     };
     add_task(ui, "gtk-in-project");
     assert_eq!(
-        ui.db.get_task(&ui.state.borrow().shown[0].id).unwrap().unwrap().project_id,
+        ui.db
+            .get_task(&ui.state.borrow().shown[0].id)
+            .unwrap()
+            .unwrap()
+            .project_id,
         Some(id.clone()),
         "captured into the project"
     );
 
     activate_nav(ui, &View::Inbox);
-    assert_eq!(ui.proj_list.row_at_index(0).unwrap().index(), 0, "listed in the sidebar");
+    assert_eq!(
+        ui.proj_list.row_at_index(0).unwrap().index(),
+        0,
+        "listed in the sidebar"
+    );
     ui.proj_list.row_at_index(0).unwrap().emit_activate();
     settle();
     assert_eq!(ui.state.borrow().view, View::Project(id));
@@ -214,7 +260,11 @@ fn notes_save_and_the_row_stays_open(ui: &Rc<Ui>) {
 
     let i = row_index(ui, "gtk-notes");
     assert_eq!(ui.state.borrow().shown[i].notes, "first", "notes saved");
-    assert_eq!(ui.task_rows.borrow()[i].row, row, "same row widget after the save");
+    assert_eq!(
+        ui.task_rows.borrow()[i].row,
+        row,
+        "same row widget after the save"
+    );
     assert!(row.is_expanded(), "still expanded");
 
     // Another task arriving while the notes are open leaves this row alone.
@@ -223,7 +273,10 @@ fn notes_save_and_the_row_stays_open(ui: &Rc<Ui>) {
     assert_eq!(ui.task_rows.borrow()[i].row, row);
     assert!(row.is_expanded());
     let buffer = notes.buffer();
-    assert_eq!(buffer.text(&buffer.start_iter(), &buffer.end_iter(), false), "first");
+    assert_eq!(
+        buffer.text(&buffer.start_iter(), &buffer.end_iter(), false),
+        "first"
+    );
 }
 
 fn when_buttons_reschedule(ui: &Rc<Ui>) {
@@ -238,7 +291,10 @@ fn when_buttons_reschedule(ui: &Rc<Ui>) {
         .unwrap();
     someday.emit_clicked();
     settle();
-    assert!(!titles(ui).contains(&"gtk-defer".to_string()), "leaves Today at once");
+    assert!(
+        !titles(ui).contains(&"gtk-defer".to_string()),
+        "leaves Today at once"
+    );
     activate_nav(ui, &View::Someday);
     assert!(titles(ui).contains(&"gtk-defer".to_string()));
 }
