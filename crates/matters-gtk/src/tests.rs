@@ -129,6 +129,17 @@ fn adding_a_task_lists_it_in_the_current_view(ui: &Rc<Ui>) {
     assert_eq!(ui.new_task_entry.text(), "", "entry clears after adding");
     let today = QueryEngine::new(&ui.db).tasks_in(&View::Today, matters_core::local_today()).unwrap();
     assert!(today.iter().any(|t| t.title == "gtk-add"), "stored as a Today task");
+
+    // The Logbook holds no new work: no entry, and nothing is created.
+    activate_nav(ui, &View::Logbook);
+    // WidgetExt: shown on screen (EntryExt::is_visible is about password text).
+    assert!(!WidgetExt::is_visible(&ui.new_task_entry), "no quick-add entry in the Logbook");
+    add_task(ui, "gtk-logbook");
+    let all = QueryEngine::new(&ui.db).quick_find("gtk-logbook").unwrap().tasks;
+    assert!(all.is_empty(), "nothing captured in the Logbook");
+    activate_nav(ui, &View::Today);
+    assert!(WidgetExt::is_visible(&ui.new_task_entry));
+    ui.new_task_entry.set_text("");
 }
 
 fn ticking_keeps_the_task_until_the_view_is_left(ui: &Rc<Ui>) {

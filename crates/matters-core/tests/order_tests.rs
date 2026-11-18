@@ -141,7 +141,7 @@ fn new_tasks_and_projects_are_added_at_the_end() {
     place_task(&db, &project("p1"), today(), "c", None).unwrap();
     place_task(&db, &View::Today, today(), "b", None).unwrap();
 
-    let mut new = View::Project("p1".into()).new_task("new", "new", today());
+    let mut new = View::Project("p1".into()).new_task("new", "new", today()).unwrap();
     new.apply_schedule(&Schedule::Today { evening: false }, today());
     db.add_task(&mut new).unwrap();
     assert_eq!(ids(&db, &project("p1")).last().map(String::as_str), Some("new"));

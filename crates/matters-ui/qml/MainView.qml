@@ -712,8 +712,10 @@ Item {
                     }
                 }
 
-                // Quick Task Input Bar
+                // Quick Task Input Bar (not in the Logbook or the Trash)
                 Rectangle {
+                    objectName: "quickAddBar"
+                    visible: controller.acceptsNewTasks
                     Layout.fillWidth: true
                     Layout.preferredHeight: 42
                     radius: 8
@@ -1406,6 +1408,7 @@ Item {
     }
     Shortcut {
         sequence: "Ctrl+N"
+        enabled: controller.acceptsNewTasks
         onActivated: newTaskInput.forceActiveFocus()
     }
     Shortcut {

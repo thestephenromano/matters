@@ -439,6 +439,21 @@ Item {
             tryVerify(() => ids().indexOf("proj-b") === ids().indexOf("proj-a") - 1, 2000, "proj-b moved above proj-a");
         }
 
+        function test_no_new_tasks_in_the_logbook_or_the_trash() {
+            const bar = findChild(view, "quickAddBar");
+            const input = findChild(view, "newTaskInput");
+            for (const name of ["logbook", "trash"]) {
+                controller.selectView(name);
+                verify(!bar.visible, "no quick-add field in " + name);
+                focusList();
+                keyClick(Qt.Key_N, Qt.ControlModifier);
+                verify(!input.activeFocus, "Ctrl+N does nothing in " + name);
+                compare(controller.addTask("not-here"), "", "nothing is captured in " + name);
+            }
+            controller.selectView("inbox");
+            verify(bar.visible, "the field is back in the Inbox");
+        }
+
         function test_ctrl_s_opens_the_when_menu_for_the_selection() {
             addToToday("menu-me");
             settle();
