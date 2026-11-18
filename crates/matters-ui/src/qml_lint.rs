@@ -90,3 +90,26 @@ fn qml_matches_the_generated_bridge_types() {
         "qmllint reported problems:\n{report}"
     );
 }
+
+/// The interface draws its own symbolic icons (`qml/Icon.qml`). Emoji render
+/// differently from one font to another and don't follow the palette, so none
+/// may come back into the QML.
+#[test]
+fn qml_uses_matters_icons_not_emoji() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("qml");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "qml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let is_emoji = |c: char| matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF);
+            if line.chars().any(is_emoji) {
+                found.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(found.is_empty(), "emoji in QML (use Icon instead):\n{}", found.join("\n"));
+}

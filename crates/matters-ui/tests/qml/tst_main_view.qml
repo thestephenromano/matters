@@ -864,7 +864,7 @@ Item {
             const t = deadlineFor("due-today");
             mouseClick(findChild(t.popup.contentItem, "deadline-today"));
             tryCompare(t.row, "deadlineStatus", "today", 2000);
-            compare(findChild(t.row, "deadlineLabel").text, "⚑ Due today");
+            compare(findChild(t.row, "deadlineLabel").text, "Due today");
             verify(findChild(t.row, "deadlineBadge").urgent, "shown as urgent");
             controller.selectView("today");
             waitForRow("due-today");
@@ -929,7 +929,7 @@ Item {
             view.captureTask("in-grouped");
             waitForRow("in-grouped");
             controller.selectView("anytime");
-            headedBy("in-grouped", "📁 Grouped");
+            headedBy("in-grouped", "Grouped");
         }
 
         function test_the_logbook_is_grouped_by_day() {
@@ -1119,14 +1119,14 @@ Item {
             expandRow(row);
             const when = findChild(row, "schedule-date");
             const deadline = findChild(row, "schedule-deadline");
-            compare(when.text, "📅 Today");
-            compare(deadline.text, "⚑ Deadline");
+            compare(when.text, "Today");
+            compare(deadline.text, "Deadline");
             verify(when.mapToItem(row, 0, 0).x > row.width / 2, "tucked to the right");
 
             controller.setTaskDeadline(row.taskId, Qt.formatDate(new Date(), "yyyy-MM-dd"));
-            tryCompare(deadline, "text", "⚑ Due today", 2000);
+            tryCompare(deadline, "text", "Due today", 2000);
             controller.scheduleTask(row.taskId, "evening");
-            tryCompare(when, "text", "📅 This Evening", 2000);
+            tryCompare(when, "text", "This Evening", 2000);
             controller.scheduleTask(row.taskId, "someday");
             waitForNoRow("corner-task"); // left Today for Someday
         }
