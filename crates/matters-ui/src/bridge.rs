@@ -10,6 +10,7 @@
 //! `matters_core`; this layer only translates between QML and those types.
 
 use core::pin::Pin;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use cxx_qt::CxxQtType;
@@ -705,10 +706,12 @@ enum Role {
     Deadline,
     /// `DeadlineStatus` on today: none, set, today or overdue.
     DeadlineStatus,
+    /// The section the row sits under (`QueryEngine::section_keys`).
+    Section,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 8] = [
+    const ALL: [(Role, &'static str); 9] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -717,6 +720,7 @@ impl Role {
         (Role::Evening, "evening"),
         (Role::Deadline, "deadline"),
         (Role::DeadlineStatus, "deadlineStatus"),
+        (Role::Section, "section"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -727,6 +731,8 @@ impl Role {
 pub struct TaskListModelRust {
     error_message: QString,
     rows: Vec<Task>,
+    /// Section key per listed task id (#25).
+    sections: HashMap<String, String>,
     db: Database,
     /// Keeps tasks ticked during this visit in place (see `matters_core::Visit`).
     visit: Visit,
@@ -749,6 +755,7 @@ impl Default for TaskListModelRust {
             loading: false,
             queued: None,
             visit_id: None,
+            sections: HashMap::new(),
         }
     }
 }
@@ -783,13 +790,33 @@ impl qobject::TaskListModel {
                 this.visit.restart();
             }
             let db = &this.db;
-            QueryEngine::new(db)
+            let engine = QueryEngine::new(db);
+            engine
                 .tasks_in(&view, local_today())
                 .and_then(|members| this.visit.rows(&view, members, &this.rows, |id| db.get_task(id)))
+                .and_then(|tasks| {
+                    let keys = engine.section_keys(&view, &tasks)?;
+                    let sections: HashMap<String, String> =
+                        tasks.iter().map(|t| t.id.clone()).zip(keys).collect();
+                    Ok((tasks, sections))
+                })
         };
         match target {
-            Ok(tasks) => {
+            Ok((tasks, sections)) => {
+                let old = std::mem::replace(&mut self.as_mut().rust_mut().get_mut().sections, sections);
                 reconcile(&mut QtRows(self.as_mut()), tasks, |t| t.id.clone());
+                // A row whose task is unchanged can still move to another
+                // section (the Logbook after midnight, say): refresh those.
+                let moved: Vec<usize> = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| old.get(&t.id) != self.sections.get(&t.id))
+                    .map(|(i, _)| i)
+                    .collect();
+                for row in moved {
+                    QtRows(self.as_mut()).changed(row);
+                }
                 self.set_error_message(QString::default());
             }
             Err(err) => {
@@ -839,6 +866,9 @@ impl qobject::TaskListModel {
             Role::Evening => QVariant::from(&task.is_evening()),
             Role::Deadline => QVariant::from(&QString::from(
                 task.deadline.map(|d| d.to_string()).unwrap_or_default().as_str(),
+            )),
+            Role::Section => QVariant::from(&QString::from(
+                self.sections.get(&task.id).map(String::as_str).unwrap_or_default(),
             )),
             Role::DeadlineStatus => QVariant::from(&QString::from(match task.deadline_status(local_today()) {
                 DeadlineStatus::None => "none",

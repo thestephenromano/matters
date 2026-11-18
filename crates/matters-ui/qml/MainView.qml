@@ -405,6 +405,36 @@ Item {
         whenPopup.close();
     }
 
+    // The heading for a section key (`QueryEngine::section_keys`, #25).
+    function describeSection(key) {
+        if (key === "")
+            return "";
+        if (key === "evening")
+            return "🌙 This Evening";
+        const colon = key.indexOf(":");
+        const kind = key.slice(0, colon);
+        const rest = key.slice(colon + 1);
+        if (kind === "project" || kind === "area") {
+            // <id>:<title>; the title may itself contain colons.
+            const title = rest.slice(rest.indexOf(":") + 1);
+            return (kind === "project" ? "📁 " : "") + title;
+        }
+        if (kind === "done" && rest === "")
+            return "Earlier";
+        const parts = rest.split("-");
+        const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const days = Math.round((date - today) / 86400000);
+        if (kind === "date" && days === 1)
+            return "Tomorrow";
+        if (kind === "done" && days === 0)
+            return "Today";
+        if (kind === "done" && days === -1)
+            return "Yesterday";
+        return Qt.formatDate(date, "dddd, MMMM d");
+    }
+
     // A deadline as shown on a row: "Due today", "Overdue: Nov 10" or the date.
     function describeDeadline(iso, status) {
         if (iso === "")
@@ -959,18 +989,22 @@ Item {
                                 Qt.callLater(root.scrollToTask, selectedTaskId);
                         }
 
-                        // Today lists This Evening under its own heading. The
-                        // section property stays the same in every view (changing
-                        // it re-lays out the whole list after a view switch, which
-                        // undid scrolling a task into view); only the heading
-                        // decides whether it shows.
-                        section.property: "evening"
+                        // Sections (#25): This Evening in Today, days in Upcoming,
+                        // areas and projects in Anytime, finishing days in the
+                        // Logbook. The core gives each row a key
+                        // (`QueryEngine::section_keys`); an empty key has no
+                        // heading. The section property is the same in every view
+                        // (changing it re-lays out the whole list after a view
+                        // switch, which undid scrolling a task into view).
+                        section.property: "section"
                         section.criteria: ViewSection.FullString
                         section.delegate: Item {
                             id: sectionHeading
                             required property string section
-                            readonly property bool shown: section === "true" && controller.currentView === "today"
-                            objectName: shown ? "eveningHeading" : ""
+                            readonly property string kind: section.split(":")[0]
+                            readonly property bool shown: section !== ""
+                            objectName: kind === "evening" ? "eveningHeading" : (shown ? "sectionHeading" : "")
+                            readonly property string title: root.describeSection(section)
                             width: taskListView.width
                             height: shown ? 40 : 0
                             visible: shown
@@ -980,7 +1014,7 @@ Item {
                                 anchors.leftMargin: 8
                                 anchors.bottom: parent.bottom
                                 anchors.bottomMargin: 8
-                                text: "🌙 This Evening"
+                                text: sectionHeading.title
                                 font.pixelSize: 15
                                 font.weight: Font.DemiBold
                                 color: root.colTextPrimary
