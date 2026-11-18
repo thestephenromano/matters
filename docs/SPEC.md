@@ -104,7 +104,7 @@ The sidebar provides access to the foundational GTD buckets:
 * Deleting a task moves it to the Trash. It keeps everything about it (status, schedule, project, notes, checklist), and is hidden from every other view, the sidebar counts, project progress and Quick Find.
 * **Put Back** returns a task exactly where it was. A trashed task that was completed returns to the Logbook.
 * Moving a project to the Trash takes its tasks with it: they leave every view, and the Trash lists the project in their place. Put Back restores the project and its tasks as they were. A task trashed on its own before its project stays in the Trash.
-* Moving an area to the Trash takes its projects and tasks with it in the same way, and the Trash lists the area in their place. Anything trashed on its own before its area or project stays in the Trash when the container is put back. (Areas have no interface yet; the core supports trashing them.)
+* Moving an area to the Trash takes its projects and tasks with it in the same way, and the Trash lists the area in their place. Anything trashed on its own before its area or project stays in the Trash when the container is put back.
 * After a task or project is moved to the Trash, a notice offers **Undo** for 5 seconds. Undoing a project also reopens it.
 * **Empty Trash** permanently deletes everything in the Trash, including trashed areas and projects with everything in them, after a confirmation. It is the only way a task, project or area is destroyed.
 * Listed most recently trashed first, projects above tasks. The sidebar shows no count for the Trash.
@@ -294,7 +294,7 @@ The [encrypted sync design](SYNC_DESIGN.md) records the security contract, propo
 Status of the Qt app. **Done** items are built; **Partly** items say what is missing and link the issue tracking it.
 
 - [x] **Done:** local SQLite persistence with WAL mode.
-- [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app shows projects and tasks; areas (#15), headings (#22) and checklists (#21) have no interface yet.
+- [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app has areas (sidebar, area view, filing projects, rename, Trash), projects and tasks; headings (#22) and checklists (#21) have no interface yet, and tasks are filed in areas only by capturing them in the area until Move (#54).
 - [x] **Done:** core views Inbox, Today (with a This Evening section), Upcoming (grouped by day), Anytime (grouped by area and project), Someday, Logbook (grouped by the day tasks were finished) and Trash.
 - [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
 - [ ] **Partly:** inline task expansion. Title, notes and When are edited in place; checklists aren't shown (#21).

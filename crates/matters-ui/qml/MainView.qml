@@ -15,6 +15,30 @@ Item {
     readonly property alias appController: controller
     readonly property alias taskList: taskListView
 
+    readonly property var projects: {
+        try {
+            return JSON.parse(controller.projectsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
+    readonly property var areas: {
+        try {
+            return JSON.parse(controller.areasJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
+    readonly property var trashedAreas: {
+        try {
+            return JSON.parse(controller.trashedAreasJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
     readonly property var trashedProjects: {
         try {
             return JSON.parse(controller.trashedProjectsJson);
@@ -47,6 +71,9 @@ Item {
         } else if (undoKind === "project") {
             controller.restoreProject(undoId);
             controller.selectProject(undoId);
+        } else if (undoKind === "area") {
+            controller.restoreArea(undoId);
+            controller.selectArea(undoId);
         }
         hideUndo();
     }
@@ -94,7 +121,9 @@ Item {
             taskListView.selectedTaskId = "";
             newBelowId = "";
         }
-        taskModel.load(controller.currentView, controller.currentProjectId, controller.visit);
+        // A project or area view loads the tasks of that project or area.
+        const container = controller.currentView === "area" ? controller.currentAreaId : controller.currentProjectId;
+        taskModel.load(controller.currentView, container, controller.visit);
         if (pendingRevealId !== "") {
             if (taskModel.rowOf(pendingRevealId) >= 0) {
                 taskListView.selectedTaskId = pendingRevealId;
@@ -621,9 +650,24 @@ Item {
                     }
 
                     ToolButton {
+                        objectName: "newContainerButton"
                         text: "+"
                         font.pixelSize: 14
-                        onClicked: newProjectDialog.open()
+                        onClicked: newContainerMenu.popup()
+
+                        Menu {
+                            id: newContainerMenu
+                            MenuItem {
+                                objectName: "newProjectItem"
+                                text: "New Project"
+                                onTriggered: newProjectDialog.open()
+                            }
+                            MenuItem {
+                                objectName: "newAreaItem"
+                                text: "New Area"
+                                onTriggered: newAreaDialog.open()
+                            }
+                        }
                     }
                 }
 
@@ -638,6 +682,101 @@ Item {
                         objectName: "projectsList"
                         spacing: 2
 
+                        // Areas, each with its projects (#15), below the projects
+                        // that have no area; they scroll with the list.
+                        footer: Column {
+                            width: projectsList.width
+                            spacing: 2
+                            topPadding: 8
+
+                            Repeater {
+                                model: root.areas
+
+                                delegate: Column {
+                                    id: areaBlock
+                                    required property var modelData
+                                    width: projectsList.width
+                                    spacing: 2
+
+                                    Rectangle {
+                                        id: areaRow
+                                        objectName: "areaItem"
+                                        readonly property string areaTitle: areaBlock.modelData.title
+                                        readonly property bool isSelected: controller.currentView === "area"
+                                            && controller.currentAreaId === areaBlock.modelData.id
+                                        width: parent.width
+                                        height: 30
+                                        radius: 6
+                                        color: isSelected ? root.colSidebarActive : (areaMouse.containsMouse ? root.colSidebarHover : "transparent")
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 8
+                                            anchors.rightMargin: 8
+                                            spacing: 8
+
+                                            Text {
+                                                text: "🗂"
+                                                font.pixelSize: 12
+                                            }
+                                            Text {
+                                                text: areaBlock.modelData.title
+                                                color: areaRow.isSelected ? root.colAccent : root.colTextPrimary
+                                                font.pixelSize: 13
+                                                font.weight: Font.DemiBold
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: areaMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: controller.selectArea(areaBlock.modelData.id)
+                                        }
+                                    }
+
+                                    Repeater {
+                                        model: root.projects.filter(p => p.area_id === areaBlock.modelData.id)
+
+                                        delegate: Rectangle {
+                                            id: areaProject
+                                            objectName: "areaProjectItem"
+                                            required property var modelData
+                                            readonly property string projectTitle: modelData.title
+                                            readonly property bool isSelected: controller.currentView === "project"
+                                                && controller.currentProjectId === modelData.id
+                                            width: areaBlock.width
+                                            height: 28
+                                            radius: 6
+                                            color: isSelected ? root.colSidebarActive : (areaProjectMouse.containsMouse ? root.colSidebarHover : "transparent")
+
+                                            Text {
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 30
+                                                anchors.right: parent.right
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: areaProject.modelData.title
+                                                color: areaProject.isSelected ? root.colAccent : root.colTextPrimary
+                                                font.pixelSize: 13
+                                                elide: Text.ElideRight
+                                            }
+
+                                            MouseArea {
+                                                id: areaProjectMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: controller.selectProject(areaProject.modelData.id)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Where a dragged project will land.
                         Rectangle {
                             objectName: "projectDropIndicator"
@@ -650,13 +789,9 @@ Item {
                             y: root.projectDrop ? root.projectDrop.y - 1 : 0
                             color: root.colAccent
                         }
-                        model: {
-                            try {
-                                return JSON.parse(controller.projectsJson);
-                            } catch (e) {
-                                return [];
-                            }
-                        }
+                        // Projects with no area; area projects are listed under
+                        // their area (footer).
+                        model: root.projects.filter(p => !p.area_id)
 
                         delegate: Rectangle {
                             id: projItem
@@ -770,7 +905,7 @@ Item {
                         objectName: "emptyTrashButton"
                         text: "Empty Trash"
                         visible: controller.currentView === "trash"
-                            && (taskListView.count > 0 || root.trashedProjects.length > 0)
+                            && (taskListView.count > 0 || root.trashedProjects.length > 0 || root.trashedAreas.length > 0)
                         onClicked: emptyTrashDialog.open()
                         // Once the Trash is empty this button hides; it must not
                         // keep the keyboard focus the dialog hands back to it.
@@ -778,6 +913,47 @@ Item {
                         // before or after the list empties, so both orders are
                         // handled: here, and in the dialog's onClosed.
                         onVisibleChanged: if (!visible && activeFocus) taskListView.forceActiveFocus()
+                    }
+
+                    // Area header: file projects under it from their header;
+                    // rename or trash it here (#15).
+                    ToolButton {
+                        objectName: "renameAreaButton"
+                        text: "Rename…"
+                        visible: controller.currentView === "area"
+                        onClicked: {
+                            renameAreaInput.text = controller.currentTitle;
+                            renameAreaDialog.open();
+                        }
+                    }
+
+                    ToolButton {
+                        objectName: "trashAreaButton"
+                        text: "Move to Trash"
+                        visible: controller.currentView === "area"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Move this area, its projects and its tasks to the Trash"
+                        onClicked: {
+                            const id = controller.currentAreaId;
+                            root.showUndo("area", id, controller.currentTitle);
+                            controller.trashArea(id);
+                        }
+                    }
+
+                    // Project header: which area the project is filed in.
+                    ComboBox {
+                        id: projectAreaPicker
+                        objectName: "projectAreaPicker"
+                        visible: controller.currentView === "project"
+                        readonly property var choices: [{ id: "", title: "No Area" }].concat(root.areas)
+                        readonly property var project: root.projects.find(p => p.id === controller.currentProjectId)
+                        model: choices
+                        textRole: "title"
+                        currentIndex: {
+                            const area = project ? (project.area_id || "") : "";
+                            return Math.max(0, choices.findIndex(a => a.id === area));
+                        }
+                        onActivated: (index) => controller.setProjectArea(controller.currentProjectId, choices[index].id)
                     }
 
                     ToolButton {
@@ -906,6 +1082,51 @@ Item {
                             Keys.onEscapePressed: {
                                 text = "";
                                 taskListView.forceActiveFocus();
+                            }
+                        }
+                    }
+                }
+
+                // Trashed areas, each standing for its projects and tasks.
+                ColumnLayout {
+                    visible: controller.currentView === "trash" && root.trashedAreas.length > 0
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    Repeater {
+                        model: root.trashedAreas
+
+                        delegate: Rectangle {
+                            id: trashedArea
+                            objectName: "trashedArea"
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 40
+                            radius: 8
+                            color: "transparent"
+                            border.color: root.colBorder
+                            border.width: 1
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 8
+                                spacing: 8
+
+                                Text {
+                                    text: "🗂 " + trashedArea.modelData.title
+                                    color: root.colTextPrimary
+                                    font.pixelSize: 14
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+
+                                ToolButton {
+                                    objectName: "restoreAreaButton"
+                                    text: "Put Back"
+                                    font.pixelSize: 11
+                                    onClicked: controller.restoreArea(trashedArea.modelData.id)
+                                }
                             }
                         }
                     }
@@ -1587,7 +1808,8 @@ Item {
             spacing: 12
 
             Text {
-                text: (root.undoKind === "project" ? "Project" : "Task") + " “" + root.undoTitle + "” moved to Trash"
+                text: (root.undoKind === "project" ? "Project" : root.undoKind === "area" ? "Area" : "Task")
+                    + " “" + root.undoTitle + "” moved to Trash"
                 color: root.isDark ? "#212529" : "#F8F9FA"
                 font.pixelSize: 13
                 elide: Text.ElideMiddle
@@ -1733,6 +1955,49 @@ Item {
         // Focus returns to the button that opened the dialog, which hides once
         // the Trash is empty; give it to the task list instead.
         onClosed: if (!emptyTrashButton.visible) taskListView.forceActiveFocus()
+    }
+
+    Dialog {
+        id: newAreaDialog
+        objectName: "newAreaDialog"
+        title: "Create New Area"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 360
+
+        TextField {
+            id: areaTitleInput
+            objectName: "areaTitleInput"
+            width: parent.width
+            placeholderText: "Area name, e.g. Home or Work"
+            focus: true
+        }
+
+        onAccepted: {
+            controller.createArea(areaTitleInput.text);
+            areaTitleInput.text = "";
+        }
+    }
+
+    Dialog {
+        id: renameAreaDialog
+        objectName: "renameAreaDialog"
+        title: "Rename Area"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 360
+
+        TextField {
+            id: renameAreaInput
+            objectName: "renameAreaInput"
+            width: parent.width
+            focus: true
+        }
+
+        // A blank name is refused and the old one kept.
+        onAccepted: controller.renameArea(controller.currentAreaId, renameAreaInput.text)
     }
 
     Dialog {

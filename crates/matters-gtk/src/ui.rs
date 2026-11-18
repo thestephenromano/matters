@@ -90,7 +90,7 @@ impl Ui {
                 View::Anytime => "📦",
                 View::Someday => "🗃️",
                 View::Logbook => "📓",
-                View::Trash | View::Project(_) => "",
+                View::Trash | View::Project(_) | View::Area(_) => "",
             };
             let row = ActionRow::builder()
                 .title(format!("{icon} {}", view.title()))
