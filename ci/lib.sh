@@ -22,6 +22,24 @@ refuse() {
     exit 1
 }
 
+# The version of `tool` pinned in ci/tool-versions.
+pinned_version() {
+    local version
+    version="$(sed -n "s/^$1=//p" ci/tool-versions)"
+    [ -n "$version" ] || cannot_run "no version for $1 in ci/tool-versions"
+    echo "$version"
+}
+
+# Require cargo subcommand `tool` (cargo-<name>) at its pinned version.
+require_pinned_cargo_tool() {
+    local tool="$1" pinned installed
+    pinned="$(pinned_version "$tool")"
+    require_tool "$tool" "cargo install $tool --version $pinned --locked"
+    installed="$(cargo "${tool#cargo-}" --version | awk '{print $2}')"
+    [ "$installed" = "$pinned" ] \
+        || cannot_run "$tool $installed is installed; this gate is pinned to $pinned (ci/tool-versions)"
+}
+
 require_tool() {
     command -v "$1" >/dev/null 2>&1 || cannot_run "$1 is not installed${2:+ ($2)}"
 }

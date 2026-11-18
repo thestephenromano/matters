@@ -1,15 +1,18 @@
 name: Set up the build
 description: >-
   System packages (ci/fedora-deps.sh), the Rust toolchain pinned in
-  rust-toolchain.toml, optionally the cargo-deny pinned in
-  ci/cargo-deny-version, and the cargo cache.
+  rust-toolchain.toml, optionally cargo tools at the versions pinned in
+  ci/tool-versions, and the cargo cache.
 inputs:
   deps-args:
     description: Extra arguments for ci/fedora-deps.sh
     default: ""
-  cargo-deny:
-    description: Also install the pinned cargo-deny ("true" or "false")
-    default: "false"
+  tools:
+    description: Cargo tools to install at their pinned versions, space-separated (e.g. "cargo-deny")
+    default: ""
+  components:
+    description: Extra rustup components, comma-separated (e.g. "llvm-tools")
+    default: ""
 runs:
   using: composite
   steps:
@@ -26,15 +29,24 @@ runs:
       shell: bash
       run: |
         echo "toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
-        echo "cargo-deny=$(tr -d '[:space:]' < ci/cargo-deny-version)" >> "$GITHUB_OUTPUT"
+        components="clippy, rustfmt"
+        [ -z "${{ inputs.components }}" ] || components="$components, ${{ inputs.components }}"
+        echo "components=$components" >> "$GITHUB_OUTPUT"
+        tools=""
+        for tool in ${{ inputs.tools }}; do
+          version="$(sed -n "s/^$tool=//p" ci/tool-versions)"
+          [ -n "$version" ] || { echo "no version for $tool in ci/tool-versions"; exit 2; }
+          tools="${tools:+$tools,}$tool@$version"
+        done
+        echo "tools=$tools" >> "$GITHUB_OUTPUT"
     - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
       with:
         toolchain: ${{ steps.pins.outputs.toolchain }}
-        components: clippy, rustfmt
-    - if: inputs.cargo-deny == 'true'
-      # Installs the pinned release and checks it against the action's
+        components: ${{ steps.pins.outputs.components }}
+    - if: steps.pins.outputs.tools != ''
+      # Installs the pinned releases and checks them against the action's
       # SHA-256 manifest.
       uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
       with:
-        tool: cargo-deny@${{ steps.pins.outputs.cargo-deny }}
+        tool: ${{ steps.pins.outputs.tools }}
     - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3

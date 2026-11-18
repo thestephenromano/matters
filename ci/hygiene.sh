@@ -24,7 +24,8 @@ endgroup
 group "pinned versions"
 channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
 [ -n "$channel" ] || cannot_run "no channel in rust-toolchain.toml"
-deny_version="$(tr -d '[:space:]' < ci/cargo-deny-version)"
-[ -n "$deny_version" ] || cannot_run "ci/cargo-deny-version is empty"
-echo "toolchain $channel, cargo-deny $deny_version"
+echo "toolchain $channel"
+for tool in cargo-deny cargo-mutants cargo-llvm-cov; do
+    echo "$tool $(pinned_version "$tool")"
+done
 endgroup
