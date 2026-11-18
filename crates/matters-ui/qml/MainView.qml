@@ -2031,8 +2031,9 @@ Item {
                                         }
                                     }
 
-                                    // When and Deadline, tucked into the corner; each
-                                    // shows its current value and opens its popover.
+                                    // When and Deadline, tucked into the corner: pills
+                                    // that show the current value, with a chevron to
+                                    // say a click changes it (in the popover).
                                     // The label is the buttons' own property, not
                                     // `text`: some styles (KDE's) paint `text` in
                                     // the background, beside our contentItem.
@@ -2046,10 +2047,23 @@ Item {
                                             id: whenControl
                                             objectName: "schedule-date"
                                             focusPolicy: Qt.NoFocus
-                                            flat: true
                                             font.pixelSize: 12
                                             property string label: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                            readonly property bool hasValue: taskRow.startDate !== "" || taskRow.evening || taskRow.someday
                                             Accessible.name: label
+                                            Accessible.role: Accessible.ButtonMenu
+                                            leftPadding: 10
+                                            rightPadding: 8
+                                            topPadding: 4
+                                            bottomPadding: 4
+                                            background: Rectangle {
+                                                implicitHeight: 26
+                                                radius: height / 2
+                                                color: whenControl.down ? root.colSidebarActive
+                                                    : whenControl.hovered ? root.colSidebarHover : "transparent"
+                                                border.width: 1
+                                                border.color: root.colBorder
+                                            }
                                             contentItem: RowLayout {
                                                 spacing: 6
                                                 Icon {
@@ -2058,13 +2072,20 @@ Item {
                                                     color: root.colTextSecondary
                                                 }
                                                 Text {
+                                                    objectName: "pillLabel"
                                                     text: whenControl.label
                                                     font: whenControl.font
-                                                    color: root.colTextPrimary
+                                                    color: whenControl.hasValue ? root.colTextPrimary : root.colTextSecondary
+                                                }
+                                                Icon {
+                                                    objectName: "pillChevron"
+                                                    name: "chevron-down"
+                                                    size: 12
+                                                    color: root.colTextSecondary
                                                 }
                                             }
                                             ToolTip.visible: hovered
-                                            ToolTip.text: "When (Ctrl+S)"
+                                            ToolTip.text: "Change when (Ctrl+S)"
                                             onClicked: root.openWhenFor(taskRow.taskId)
                                         }
 
@@ -2072,11 +2093,24 @@ Item {
                                             id: deadlineControl
                                             objectName: "schedule-deadline"
                                             focusPolicy: Qt.NoFocus
-                                            flat: true
                                             font.pixelSize: 12
                                             property string label: taskRow.deadline === "" ? "Deadline"
                                                 : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
+                                            readonly property bool hasValue: taskRow.deadline !== ""
                                             Accessible.name: label
+                                            Accessible.role: Accessible.ButtonMenu
+                                            leftPadding: 10
+                                            rightPadding: 8
+                                            topPadding: 4
+                                            bottomPadding: 4
+                                            background: Rectangle {
+                                                implicitHeight: 26
+                                                radius: height / 2
+                                                color: deadlineControl.down ? root.colSidebarActive
+                                                    : deadlineControl.hovered ? root.colSidebarHover : "transparent"
+                                                border.width: 1
+                                                border.color: root.colBorder
+                                            }
                                             contentItem: RowLayout {
                                                 spacing: 6
                                                 Icon {
@@ -2085,13 +2119,20 @@ Item {
                                                     color: root.colTextSecondary
                                                 }
                                                 Text {
+                                                    objectName: "pillLabel"
                                                     text: deadlineControl.label
                                                     font: deadlineControl.font
-                                                    color: root.colTextPrimary
+                                                    color: deadlineControl.hasValue ? root.colTextPrimary : root.colTextSecondary
+                                                }
+                                                Icon {
+                                                    objectName: "pillChevron"
+                                                    name: "chevron-down"
+                                                    size: 12
+                                                    color: root.colTextSecondary
                                                 }
                                             }
                                             ToolTip.visible: hovered
-                                            ToolTip.text: "Deadline (Ctrl+D)"
+                                            ToolTip.text: "Change the deadline (Ctrl+D)"
                                             onClicked: root.openDeadlineFor(taskRow.taskId)
                                         }
                                     }

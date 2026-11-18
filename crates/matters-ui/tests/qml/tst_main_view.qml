@@ -1188,6 +1188,28 @@ Item {
             waitForNoRow("corner-task"); // left Today for Someday
         }
 
+        // When and Deadline read as values to change, not as commands: a pill
+        // with a chevron, a menu button to assistive tools, and an unset
+        // value shown dimmer than a set one.
+        function test_when_and_deadline_are_pills_to_change() {
+            const row = addToToday("pill-task");
+            expandRow(row);
+            const when = findChild(row, "schedule-date");
+            const deadline = findChild(row, "schedule-deadline");
+            for (const pill of [when, deadline]) {
+                verify(findChild(pill, "pillChevron").visible, pill.objectName + " has a chevron");
+                compare(pill.Accessible.role, Accessible.ButtonMenu);
+                verify(pill.background.border.width > 0, pill.objectName + " is outlined");
+            }
+            verify(when.hasValue, "Today is a set value");
+            verify(!deadline.hasValue, "no deadline yet");
+            verify(!Qt.colorEqual(findChild(when, "pillLabel").color, findChild(deadline, "pillLabel").color),
+                "an unset value is dimmer than a set one");
+            controller.setTaskDeadline(row.taskId, Qt.formatDate(new Date(), "yyyy-MM-dd"));
+            tryVerify(() => deadline.hasValue, 2000);
+            verify(Qt.colorEqual(findChild(when, "pillLabel").color, findChild(deadline, "pillLabel").color));
+        }
+
         function test_notes_grow_with_what_is_written() {
             const row = addToToday("long-notes");
             expandRow(row);
