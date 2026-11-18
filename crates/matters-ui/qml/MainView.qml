@@ -83,7 +83,16 @@ Item {
     }
 
     // Theme color palette (respects light/dark system settings)
-    readonly property bool isDark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
+    // "system" follows the desktop's light or dark scheme; "light" and "dark"
+    // choose one (for a future Appearance preference, #72, and for tests: a
+    // desktop without a theme ignores an app's request to switch scheme).
+    property string appearance: "system"
+
+    // The sidebar can be hidden (F9 or the header's toggle) to give the list
+    // the whole window.
+    property bool sidebarShown: true
+    readonly property bool isDark: appearance === "dark"
+        || (appearance === "system" && Application.styleHints.colorScheme === Qt.ColorScheme.Dark)
     readonly property color colBg: isDark ? "#1A1B1E" : "#FFFFFF"
     readonly property color colSidebarBg: isDark ? "#141517" : "#F7F8FA"
     readonly property color colSidebarHover: isDark ? "#25262B" : "#EBECEF"
@@ -547,11 +556,20 @@ Item {
         // LEFT SIDEBAR
         // =====================================================================
         Rectangle {
+            id: sidebar
+            objectName: "sidebar"
             Layout.fillHeight: true
-            Layout.preferredWidth: 240
-            Layout.minimumWidth: 200
+            Layout.preferredWidth: root.sidebarShown ? 240 : 0
+            Layout.minimumWidth: root.sidebarShown ? 200 : 0
             Layout.maximumWidth: 320
+            visible: root.sidebarShown || width > 0
+            clip: true
             color: root.colSidebarBg
+
+            Behavior on Layout.preferredWidth {
+                enabled: !root.reduceMotion
+                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+            }
 
             Rectangle {
                 anchors.right: parent.right
@@ -963,6 +981,19 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 12
+
+                    ToolButton {
+                        objectName: "sidebarToggle"
+                        focusPolicy: Qt.NoFocus
+                        contentItem: Icon {
+                            name: "sidebar"
+                            size: 18
+                            color: root.colTextSecondary
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: (root.sidebarShown ? "Hide" : "Show") + " the sidebar (F9)"
+                        onClicked: root.sidebarShown = !root.sidebarShown
+                    }
 
                     // A project's progress, as a pie that fills as its tasks are
                     // done (#28).
@@ -1377,8 +1408,23 @@ Item {
                             objectName: kind === "evening" ? "eveningHeading" : (shown ? "sectionHeading" : "")
                             readonly property string title: root.describeSection(section)
                             width: taskListView.width
-                            height: shown ? 40 : 0
+                            height: !shown ? 0 : kind === "date" ? 48 : 40
                             visible: shown
+
+                            // Upcoming's days lead with the day of the month.
+                            Text {
+                                id: headingDay
+                                objectName: "headingDay"
+                                visible: sectionHeading.kind === "date"
+                                text: visible ? String(Number(sectionHeading.section.split(":")[1].split("-")[2])) : ""
+                                anchors.left: parent.left
+                                anchors.leftMargin: 8
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 6
+                                font.pixelSize: 24
+                                font.weight: Font.Bold
+                                color: root.colTextPrimary
+                            }
 
                             // This Evening, a project or an area gets its icon.
                             Icon {
@@ -1396,7 +1442,8 @@ Item {
 
                             Text {
                                 id: headingText
-                                anchors.left: headingIcon.visible ? headingIcon.right : parent.left
+                                anchors.left: headingDay.visible ? headingDay.right
+                                    : headingIcon.visible ? headingIcon.right : parent.left
                                 anchors.leftMargin: 8
                                 anchors.bottom: parent.bottom
                                 anchors.bottomMargin: 8
@@ -2279,6 +2326,10 @@ Item {
     Shortcut {
         sequence: "/"
         onActivated: quickFindDialog.open()
+    }
+    Shortcut {
+        sequence: "F9"
+        onActivated: root.sidebarShown = !root.sidebarShown
     }
     Shortcut {
         sequence: "Ctrl+N"
