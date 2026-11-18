@@ -12,6 +12,18 @@ import sys
 ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "experiments/sync-prototype/evidence/record-contract-2026-11-18.json"
 REQUIRED = {
+    "docs/SYNC_DESIGN.md",
+    "docs/decisions/0002-post-quantum-sync.md",
+    "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md",
+    "experiments/sync-prototype/tests/support/record_crypto.rs",
+    "experiments/sync-prototype/tests/vectors/check_oracles.py",
+    "docs/SYNC_KEY_DISTRIBUTION.md",
+    "docs/protocol/sync-key-distribution-v0.cddl",
+    "experiments/sync-prototype/tests/key_distribution.rs",
+    "experiments/sync-prototype/tests/support/key_distribution.rs",
+    "experiments/sync-prototype/tests/vectors/key-distribution/generate.py",
+    "experiments/sync-prototype/tests/vectors/key-distribution/golden.json",
+    "experiments/sync-prototype/tests/vectors/key-distribution/README.md",
     "experiments/sync-prototype/src/wire.rs",
     "experiments/sync-prototype/tests/record_contract.rs",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py",

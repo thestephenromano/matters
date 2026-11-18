@@ -10,12 +10,13 @@
 //! `matters_core`; this layer only translates between QML and those types.
 
 use core::pin::Pin;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
 use matters_core::{
-    local_today, Database, DateOrder, DayTracker, DeadlineStatus, Project, QueryEngine, Schedule, Status, Task, View, Visit,
+    local_today, Area, Database, DateOrder, DayTracker, DeadlineStatus, Project, QueryEngine, Schedule, Status, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -47,6 +48,8 @@ pub mod qobject {
         #[qproperty(QString, current_view)]
         #[qproperty(QString, current_title)]
         #[qproperty(QString, current_project_id)]
+        /// The open area, in an area view (#15).
+        #[qproperty(QString, current_area_id)]
         #[qproperty(f64, current_project_progress)]
         #[qproperty(i32, inbox_count)]
         #[qproperty(i32, today_count)]
@@ -55,6 +58,10 @@ pub mod qobject {
         #[qproperty(i32, someday_count)]
         #[qproperty(i32, logbook_count)]
         #[qproperty(QString, projects_json)]
+        /// Areas in the sidebar, in order.
+        #[qproperty(QString, areas_json)]
+        /// Trashed areas, listed in the Trash view.
+        #[qproperty(QString, trashed_areas_json)]
         /// Trashed projects, listed in the Trash view.
         #[qproperty(QString, trashed_projects_json)]
         #[qproperty(QString, search_results_json)]
@@ -75,6 +82,26 @@ pub mod qobject {
         fn select_view(self: Pin<&mut AppController>, view: &QString);
         #[qinvokable]
         fn select_project(self: Pin<&mut AppController>, project_id: &QString);
+        /// Open an area: the tasks filed directly in it.
+        #[qinvokable]
+        fn select_area(self: Pin<&mut AppController>, area_id: &QString);
+        /// Create an area at the end of the sidebar and open it; returns its id,
+        /// or an empty string for a blank name.
+        #[qinvokable]
+        fn create_area(self: Pin<&mut AppController>, title: &QString) -> QString;
+        /// Rename an area; false, changing nothing, for a blank name.
+        #[qinvokable]
+        fn rename_area(self: Pin<&mut AppController>, area_id: &QString, title: &QString) -> bool;
+        /// Move an area, with its projects and tasks, to the Trash. If it is
+        /// the open view, the Inbox is shown instead.
+        #[qinvokable]
+        fn trash_area(self: Pin<&mut AppController>, area_id: &QString);
+        /// Put a trashed area back with its projects and tasks.
+        #[qinvokable]
+        fn restore_area(self: Pin<&mut AppController>, area_id: &QString);
+        /// File a project in an area, or take it out of one (empty `area_id`).
+        #[qinvokable]
+        fn set_project_area(self: Pin<&mut AppController>, project_id: &QString, area_id: &QString);
         #[qinvokable]
         /// Capture a task in the current view; returns its id, or an empty
         /// string when nothing was created.
@@ -277,6 +304,9 @@ pub struct AppControllerRust {
     someday_count: i32,
     logbook_count: i32,
     projects_json: QString,
+    areas_json: QString,
+    trashed_areas_json: QString,
+    current_area_id: QString,
     trashed_projects_json: QString,
     search_results_json: QString,
     error_message: QString,
@@ -307,6 +337,9 @@ impl Default for AppControllerRust {
             someday_count: 0,
             logbook_count: 0,
             projects_json: QString::from("[]"),
+            areas_json: QString::from("[]"),
+            trashed_areas_json: QString::from("[]"),
+            current_area_id: QString::default(),
             trashed_projects_json: QString::from("[]"),
             search_results_json: QString::from("[]"),
             error_message: QString::default(),
@@ -334,6 +367,73 @@ impl qobject::AppController {
             Some(view) => self.set_view(view),
             None => self.report(format!("unknown view '{view}'")),
         }
+    }
+
+    pub fn select_area(self: Pin<&mut Self>, area_id: &QString) {
+        match View::from_key("area", Some(&String::from(area_id))) {
+            Some(view) => self.set_view(view),
+            None => self.report("no area selected".to_string()),
+        }
+    }
+
+    pub fn create_area(self: Pin<&mut Self>, title: &QString) -> QString {
+        let Some(title) = Task::clean_title(&String::from(title)) else {
+            return QString::default();
+        };
+        let mut area = Area::new(Uuid::new_v4().to_string(), title, 0.0);
+        match self.db.add_area(&mut area) {
+            Ok(()) => {
+                self.set_view(View::Area(area.id.clone()));
+                QString::from(area.id.as_str())
+            }
+            Err(err) => {
+                self.finish(Err(err));
+                QString::default()
+            }
+        }
+    }
+
+    pub fn rename_area(self: Pin<&mut Self>, area_id: &QString, title: &QString) -> bool {
+        let title = String::from(title);
+        if Task::clean_title(&title).is_none() {
+            return false;
+        }
+        let result = self.db.rename_area(&String::from(area_id), &title);
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn trash_area(self: Pin<&mut Self>, area_id: &QString) {
+        let id = String::from(area_id);
+        let result = self.db.trash_area(&id);
+        // The open area, or a project in it, is gone from the sidebar.
+        let open_project_in_area = match self.view.project_id() {
+            Some(project) => self
+                .db
+                .get_project(project)
+                .ok()
+                .flatten()
+                .is_some_and(|p| p.area_id.as_deref() == Some(id.as_str())),
+            None => false,
+        };
+        if result.is_ok() && (self.view.area_id() == Some(id.as_str()) || open_project_in_area) {
+            return self.set_view(View::Inbox);
+        }
+        self.finish(result);
+    }
+
+    pub fn restore_area(self: Pin<&mut Self>, area_id: &QString) {
+        let result = self.db.restore_area(&String::from(area_id));
+        self.finish(result);
+    }
+
+    pub fn set_project_area(self: Pin<&mut Self>, project_id: &QString, area_id: &QString) {
+        let area = String::from(area_id);
+        let result = self
+            .db
+            .set_project_area(&String::from(project_id), (!area.is_empty()).then_some(area.as_str()));
+        self.finish(result);
     }
 
     pub fn select_project(self: Pin<&mut Self>, project_id: &QString) {
@@ -607,6 +707,7 @@ impl qobject::AppController {
         self.as_mut().set_current_view(QString::from(view.key()));
         self.as_mut()
             .set_current_project_id(QString::from(view.project_id().unwrap_or_default()));
+        self.as_mut().set_current_area_id(QString::from(view.area_id().unwrap_or_default()));
         self.as_mut().set_reorderable(view.is_reorderable());
         self.as_mut().set_accepts_new_tasks(view.accepts_new_tasks());
         self.as_mut().rust_mut().view = view;
@@ -644,19 +745,22 @@ impl qobject::AppController {
     }
 
     fn refresh_sidebar_and_header(mut self: Pin<&mut Self>) -> matters_core::Result<()> {
-        let (counts, projects, trashed_projects, title, progress) = {
+        let (counts, projects, trashed_projects, areas, trashed_areas, title, progress) = {
             let engine = QueryEngine::new(&self.db);
             let counts = engine.counts(self.day.day())?;
             let projects = self.db.list_projects()?;
             let trashed_projects = self.db.list_trashed_projects()?;
+            let areas = self.db.list_areas()?;
+            let trashed_areas = self.db.list_trashed_areas()?;
             let (title, progress) = match &self.view {
                 View::Project(id) => (
                     self.db.get_project(id)?.map(|p| p.title).unwrap_or_else(|| "Project".into()),
                     engine.project_progress(id)?.ratio(),
                 ),
+                View::Area(id) => (self.db.get_area(id)?.map(|a| a.title).unwrap_or_else(|| "Area".into()), 0.0),
                 other => (other.title().to_string(), 0.0),
             };
-            (counts, projects, trashed_projects, title, progress)
+            (counts, projects, trashed_projects, areas, trashed_areas, title, progress)
         };
 
         let count = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
@@ -668,6 +772,8 @@ impl qobject::AppController {
         self.as_mut().set_logbook_count(count(counts.logbook));
         self.as_mut().set_projects_json(to_json(&projects));
         self.as_mut().set_trashed_projects_json(to_json(&trashed_projects));
+        self.as_mut().set_areas_json(to_json(&areas));
+        self.as_mut().set_trashed_areas_json(to_json(&trashed_areas));
         self.as_mut().set_current_title(QString::from(title.as_str()));
         self.as_mut().set_current_project_progress(progress);
         Ok(())
@@ -705,10 +811,14 @@ enum Role {
     Deadline,
     /// `DeadlineStatus` on today: none, set, today or overdue.
     DeadlineStatus,
+    /// The section the row sits under (`QueryEngine::section_keys`).
+    Section,
+    /// Whether the task is deferred to Someday.
+    Someday,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 8] = [
+    const ALL: [(Role, &'static str); 10] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -717,6 +827,8 @@ impl Role {
         (Role::Evening, "evening"),
         (Role::Deadline, "deadline"),
         (Role::DeadlineStatus, "deadlineStatus"),
+        (Role::Section, "section"),
+        (Role::Someday, "someday"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -727,6 +839,8 @@ impl Role {
 pub struct TaskListModelRust {
     error_message: QString,
     rows: Vec<Task>,
+    /// Section key per listed task id (#25).
+    sections: HashMap<String, String>,
     db: Database,
     /// Keeps tasks ticked during this visit in place (see `matters_core::Visit`).
     visit: Visit,
@@ -749,6 +863,7 @@ impl Default for TaskListModelRust {
             loading: false,
             queued: None,
             visit_id: None,
+            sections: HashMap::new(),
         }
     }
 }
@@ -783,13 +898,33 @@ impl qobject::TaskListModel {
                 this.visit.restart();
             }
             let db = &this.db;
-            QueryEngine::new(db)
+            let engine = QueryEngine::new(db);
+            engine
                 .tasks_in(&view, local_today())
                 .and_then(|members| this.visit.rows(&view, members, &this.rows, |id| db.get_task(id)))
+                .and_then(|tasks| {
+                    let keys = engine.section_keys(&view, &tasks)?;
+                    let sections: HashMap<String, String> =
+                        tasks.iter().map(|t| t.id.clone()).zip(keys).collect();
+                    Ok((tasks, sections))
+                })
         };
         match target {
-            Ok(tasks) => {
+            Ok((tasks, sections)) => {
+                let old = std::mem::replace(&mut self.as_mut().rust_mut().get_mut().sections, sections);
                 reconcile(&mut QtRows(self.as_mut()), tasks, |t| t.id.clone());
+                // A row whose task is unchanged can still move to another
+                // section (the Logbook after midnight, say): refresh those.
+                let moved: Vec<usize> = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| old.get(&t.id) != self.sections.get(&t.id))
+                    .map(|(i, _)| i)
+                    .collect();
+                for row in moved {
+                    QtRows(self.as_mut()).changed(row);
+                }
                 self.set_error_message(QString::default());
             }
             Err(err) => {
@@ -839,6 +974,10 @@ impl qobject::TaskListModel {
             Role::Evening => QVariant::from(&task.is_evening()),
             Role::Deadline => QVariant::from(&QString::from(
                 task.deadline.map(|d| d.to_string()).unwrap_or_default().as_str(),
+            )),
+            Role::Someday => QVariant::from(&task.is_someday),
+            Role::Section => QVariant::from(&QString::from(
+                self.sections.get(&task.id).map(String::as_str).unwrap_or_default(),
             )),
             Role::DeadlineStatus => QVariant::from(&QString::from(match task.deadline_status(local_today()) {
                 DeadlineStatus::None => "none",

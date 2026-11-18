@@ -2,7 +2,7 @@
 
 Implements the experiment approved in [ADR 0001](../../docs/decisions/0001-crdt-adoption.md) and [ADR 0002](../../docs/decisions/0002-post-quantum-sync.md). Tracks [#32](https://github.com/thestephenromano/matters/issues/32), [#33](https://github.com/thestephenromano/matters/issues/33), [#35](https://github.com/thestephenromano/matters/issues/35) and [#36](https://github.com/thestephenromano/matters/issues/36).
 
-This standalone Rust workspace is outside the application's dependency graph. It never opens the default Matters database and rejects an existing database without its prototype format marker. **Its record journal is plaintext and unauthenticated.** The crypto tests exercise primitives separately; this is not an encrypted sync client, transport, service or migration tool.
+This standalone Rust workspace is outside the application's dependency graph. It never opens the default Matters database and rejects an existing database without its prototype format marker. **Its record journal is plaintext and unauthenticated.** The crypto tests include a separate in-memory key-distribution flow; this is not an encrypted sync client, transport, service or migration tool.
 
 ## Run
 
@@ -42,7 +42,7 @@ The feature-gated probes compile the pinned HPKE/libcrux and ML-DSA candidates a
 2. The selected MLKEM768-P256/HKDF-SHA256/**AES-256-GCM** suite's same-provider round trip, changed info/AAD/ciphertext, wrong recipient, truncated encapsulation and fresh encapsulation on repeated sealing.
 3. Pure ML-DSA-65 signing/verification and rejection of a different author, message or domain context. Fixed public test seeds are confined to the test file.
 
-The published vector uses a different AEAD from the proposed application suite. These results do not establish independent interoperability of the full selected suite, KEM/signature certification, constant-time behavior, secure application key storage, or the protocol's security. Canonical signed messages, membership/recovery, record encryption, usage bounds, cross-target execution and independent review remain open. No signing/encryption helper is exposed to production application code.
+The published vector uses a different AEAD from the proposed application suite. These results do not establish independent interoperability of the full selected suite, KEM/signature certification, constant-time behavior, secure application key storage, or the protocol's security. Canonical content/control messages and a first encrypted update are exercised in the bounded tests below. Durable membership/recovery and encrypted journal integration, usage bounds, cross-target execution and independent review remain open. No signing/encryption helper is exposed to production application code.
 
 ## Persistence and measurement limits
 
@@ -77,3 +77,7 @@ Keep #32/#33/#35/#36 open. Reconcile the final ordering changes; complete missin
 The opt-in `record-contract` feature exposes a bounded minicbor adapter for the [experimental content-record contract](../../docs/SYNC_RECORD_CONTRACT.md). It is not connected to the replica journal or the application. `wire::parse` returns structural validity only; membership, signature, epoch/actor/chain admission, AEAD and domain validation remain mandatory downstream gates. Snapshot bytes are defined, but authoritative snapshot import still requires authenticated coverage.
 
 [Golden fixtures](tests/vectors/record-contract/README.md) compare exact CBOR transcripts with Python cbor2, validate the CDDL shape through cddl-cat/Ciborium, and cross-check HKDF/AES bytes with Python cryptography. Signature tests use the selected ML-DSA provider and public synthetic keys; they do not establish independent signature or hybrid HPKE interoperability.
+
+## Key-distribution contract experiment
+
+The [key-distribution contract](../../docs/SYNC_KEY_DISTRIBUTION.md) and [independent fixtures](tests/vectors/key-distribution/README.md) specify pinned-root genesis, device-key fingerprints, removal/rotation, writer-start and signed recipient envelopes. With both crypto features enabled, the integration tests distribute a real CEK between two devices through hybrid HPKE, then authenticate, decrypt and import the admitted actor's first Loro update. All authority and secrets remain in test memory. The support module is not an application API or a durable encrypted journal; enrollment, recovery, historical admission and crash-safe sealing remain open.

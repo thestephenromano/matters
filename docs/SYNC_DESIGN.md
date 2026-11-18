@@ -17,6 +17,7 @@ The recommended evaluation starts with Loro for CRDT state, SQLite for local per
 - [Dependency evidence](evidence/README.md) records the inspected versions, checksums and source limitations. The [prototype review record](../experiments/sync-prototype/REVIEW.md) maps semantic checks to their tests. [Refreshed measurement samples](../experiments/sync-prototype/evidence/review-2026-11-18.json) cover Loro/SQLite revision `49e969c` on `betelgeuse`; independent security review remains open.
 
 - [Encrypted content-record contract](SYNC_RECORD_CONTRACT.md) defines the experimental canonical bytes, bounded codec, conformance fixtures and remaining admission/service obligations for #33/#34/#36.
+- [Authenticated key-distribution experiment](SYNC_KEY_DISTRIBUTION.md) binds device keys, membership, writer admission and recipient envelopes to exact bytes, with a test-only two-device encrypted Loro round trip; durable lifecycle and outbox work remain open.
 
 Both ADRs were approved for bounded prototype evaluation on 2026-11-18. They refine the options below; approval does not turn planned security properties into demonstrated behavior.
 

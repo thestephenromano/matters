@@ -4,7 +4,7 @@ These public synthetic fixtures bind the [content-record contract](../../../../.
 
 `golden.json` contains two records (`data`, `snapshot`), ten epoch-width boundary headers, and 58 compact rejection splices. The record signatures are **all-zero structural placeholders**. The Rust crypto tests generate separate signatures with public fixed seeds/randomness and verify the exact original transcript; they never treat the placeholders as authenticated records. Device IDs in these fixtures are synthetic roster inputs, not independently verified key fingerprints.
 
-`generate.py` uses cbor2 5.6.5 for RFC 8949 deterministic encoding and cryptography 46.0.3 for HKDF-SHA256/AES-256-GCM. It emits header/AAD, KDF info, PRK, derived key, ciphertext/tag, signed-body and complete structural-record bytes. This oracle is independent of the Rust minicbor/libcrux path. cddl-cat 0.7.1, using Ciborium 0.2.2, separately validates the CDDL shape. CDDL does not enforce canonical serialization, context equality or cryptographic validity; those have separate checks.
+`generate.py` uses cbor2 5.6.5 for RFC 8949 deterministic encoding and cryptography 50.0.0 for HKDF-SHA256/AES-256-GCM. It emits header/AAD, KDF info, PRK, derived key, ciphertext/tag, signed-body and complete structural-record bytes. This oracle is independent of the Rust minicbor/libcrux path. cddl-cat 0.7.1, using Ciborium 0.2.2, separately validates the CDDL shape. CDDL does not enforce canonical serialization, context equality or cryptographic validity; those have separate checks.
 
 Reproduce from the repository root (the Python dependencies are oracle tools only):
 

@@ -1,4 +1,4 @@
-"""Independent public-data oracle. Requires cbor2==5.6.5, cryptography==46.0.3.
+"""Independent public-data oracle. Requires cbor2==5.6.5, cryptography==50.0.0.
 
 Run with --check to compare against committed bytes; regeneration is explicit.
 Zero signatures are STRUCTURAL placeholders, not valid signed records.
@@ -16,8 +16,10 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF, HKDFExpand
 from cryptography.hazmat.primitives import hmac
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-assert importlib.metadata.version("cbor2") == "5.6.5"
-assert importlib.metadata.version("cryptography") == "46.0.3"
+if importlib.metadata.version("cbor2") != "5.6.5":
+    raise SystemExit("oracle requires cbor2 5.6.5")
+if importlib.metadata.version("cryptography") != "50.0.0":
+    raise SystemExit("oracle requires cryptography 50.0.0")
 enc = lambda value: cbor2.dumps(value, canonical=True)
 SUITE = "matters-sync-pq-v0"
 SIGNATURE = bytes(3309)
@@ -41,7 +43,8 @@ def vector(name, h, plain):
     mac.update(CEK)
     prk = mac.finalize()
     key = HKDFExpand(algorithm=hashes.SHA256(), length=32, info=info).derive(prk)
-    assert key == HKDF(algorithm=hashes.SHA256(), length=32, salt=h[11], info=info).derive(CEK)
+    if key != HKDF(algorithm=hashes.SHA256(), length=32, salt=h[11], info=info).derive(CEK):
+        raise SystemExit("independent HKDF derivations disagree")
     cipher = AESGCM(key).encrypt(bytes(12), plain, aad)
     b = base(h, cipher)
     return dict(name=name, kind=h[6], epoch=h[7], previous_hex=None if h[13] is None else h[13].hex(),
@@ -135,7 +138,7 @@ for outer, inner in [(3, 2), (4, 3), (5, 4)]:
 max_h = header("snapshot", 2**64-1, bytes([10])*48)
 max_wire = enc([base(max_h, bytes(1048592)), SIGNATURE])
 result = dict(schema="matters-sync-pq-v0/content-record/2026-11-18",
-              provenance={"cbor2": "5.6.5", "cryptography": "46.0.3", "signature": "all-zero structural placeholder; never an authenticated vector"},
+              provenance={"cbor2": "5.6.5", "cryptography": "50.0.0", "signature": "all-zero structural placeholder; never an authenticated vector"},
               max_wire_bytes=len(max_wire), max_overhead_bytes=len(max_wire)-1048592,
               max_wire_sha256=hashlib.sha256(max_wire).hexdigest(),
               vectors=vectors,
@@ -145,7 +148,8 @@ result = dict(schema="matters-sync-pq-v0/content-record/2026-11-18",
 path = Path(__file__).with_name("golden.json")
 output = json.dumps(result, indent=2) + "\n"
 if "--check" in sys.argv:
-    assert path.read_text() == output, "fixture drift: review before regenerating"
+    if path.read_text() != output:
+        raise SystemExit("fixture drift: review before regenerating")
 else:
     path.write_text(output)
 print(f"2 golden records; {len(negative)} rejection splices; max wire {len(max_wire)}; overhead {len(max_wire)-1048592}")
