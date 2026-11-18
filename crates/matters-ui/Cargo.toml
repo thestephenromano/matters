@@ -3,6 +3,7 @@ name = "matters-ui"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
+publish = false
 authors = ["Matters Contributors"]
 description = "Native Qt 6 / QML GUI for Matters"
 

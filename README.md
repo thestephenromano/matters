@@ -38,22 +38,25 @@ Planned synchronization requirements and evaluation gates are recorded in the [e
 
 ## Building and Testing
 
-Matters needs Qt 6.8 or later, GTK 4 with libadwaita 1.5 or later, and a stable Rust toolchain. On Fedora, `sudo ci/fedora-deps.sh` installs the system packages.
+Matters needs Qt 6.8 or later, GTK 4 with libadwaita 1.5 or later, and the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it). On Fedora, `sudo ci/fedora-deps.sh` installs the system packages; cargo-deny is pinned in `ci/cargo-deny-version`.
 
 ```sh
 cargo run -p matters-ui     # the Qt app
 ci/check.sh                 # every gate CI runs
 ```
 
-`ci/check.sh` runs:
+Each gate is a script in `ci/` that runs the same locally and in CI. A gate that ran and refused the change exits 1. One that could not run (a missing tool, no test output) exits 2, so the two can't be confused.
 
-- clippy with warnings denied;
-- the workspace tests, which include the core tests, a `qmllint` check of the QML against the generated bridge types, and GTK widget tests on a headless Broadway display;
-- the Qt Quick interaction tests, offscreen, twice: with animations off and with them on (`MATTERS_UI_TEST_MOTION=1`). Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch them run.
+- `ci/hygiene.sh`: no tracked files that `.gitignore` excludes, and shellcheck on `ci/*.sh`.
+- `ci/lint.sh`: rustfmt, clippy with warnings denied, and rustdoc with warnings denied.
+- `ci/deny.sh`: cargo-deny against `deny.toml` (advisories, licenses, banned crates, sources). Every advisory exception names its reason and the issue that retires it.
+- `ci/workspace-tests.sh`: the core tests, a `qmllint` check of the QML against the generated bridge types, and GTK widget tests on a headless Broadway display.
+- `ci/ui-lane.sh reduced|animations`: the Qt Quick interaction tests, offscreen, with animations off or on. The lane checks that every test in `tests/qml` ran, keeps to a time budget, and writes a JUnit report. Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch the tests run.
+- `ci/style-check.sh`: Matters' control style holds under the desktop's Qt platform theme, COSMIC's included.
 
 Matters skips its animations when the desktop asks for reduced motion (KDE's instant animation speed, or GNOME's animations turned off). `MATTERS_REDUCE_MOTION=1` or `=0` overrides that.
 
-CI (`.github/workflows/ci.yml`) runs the same script in a `fedora:44` container on every pull request and every push to `main`.
+CI (`.github/workflows/ci.yml`) runs these scripts as parallel jobs in a `fedora:44` container on every pull request and every push to `main`. The required check, "clippy and tests", passes only when every job passes.
 
 ## License
 
