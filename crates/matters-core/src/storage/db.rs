@@ -188,6 +188,24 @@ impl Database {
         Ok(())
     }
 
+    /// Rename a project. The name is cleaned like a task title
+    /// ([`Task::clean_title`]); a blank name is refused.
+    pub fn rename_project(&self, id: &str, title: &str) -> Result<()> {
+        let Some(title) = Task::clean_title(title) else {
+            return Err(MattersError::Validation("a project needs a name".into()));
+        };
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let changed = conn.execute(
+            "UPDATE projects SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now, id],
+        )?;
+        if changed == 0 {
+            return Err(MattersError::NotFound { entity: "project", id: id.to_string() });
+        }
+        Ok(())
+    }
+
     /// File a project in an area, or take it out of one (`None`). The area
     /// must exist and not be in the Trash.
     pub fn set_project_area(&self, project_id: &str, area_id: Option<&str>) -> Result<()> {

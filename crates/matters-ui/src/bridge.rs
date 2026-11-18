@@ -99,6 +99,9 @@ pub mod qobject {
         /// Put a trashed area back with its projects and tasks.
         #[qinvokable]
         fn restore_area(self: Pin<&mut AppController>, area_id: &QString);
+        /// Rename a project; false, changing nothing, for a blank name.
+        #[qinvokable]
+        fn rename_project(self: Pin<&mut AppController>, project_id: &QString, title: &QString) -> bool;
         /// File a project in an area, or take it out of one (empty `area_id`).
         #[qinvokable]
         fn set_project_area(self: Pin<&mut AppController>, project_id: &QString, area_id: &QString);
@@ -426,6 +429,17 @@ impl qobject::AppController {
     pub fn restore_area(self: Pin<&mut Self>, area_id: &QString) {
         let result = self.db.restore_area(&String::from(area_id));
         self.finish(result);
+    }
+
+    pub fn rename_project(self: Pin<&mut Self>, project_id: &QString, title: &QString) -> bool {
+        let title = String::from(title);
+        if Task::clean_title(&title).is_none() {
+            return false;
+        }
+        let result = self.db.rename_project(&String::from(project_id), &title);
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
     }
 
     pub fn set_project_area(self: Pin<&mut Self>, project_id: &QString, area_id: &QString) {

@@ -28,7 +28,7 @@ Item {
             // Styles that animate popups (Material) may still be closing the
             // previous test's popover or dialog; while one is, it catches
             // clicks, and opening it again does nothing.
-            for (const name of ["whenPopup", "newAreaDialog", "renameAreaDialog", "newProjectDialog",
+            for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
                                 "emptyTrashDialog", "quickFindDialog"]) {
                 const popup = findChild(view, name);
                 if (popup)
@@ -211,7 +211,7 @@ Item {
             waitForRow("paint the shed");
 
             // Move to Trash leaves the project; Undo returns to it.
-            mouseClick(findChild(view, "trashProjectButton"));
+            menuAction("trashProjectItem");
             compare(controller.currentView, "inbox");
             verify(projectIds(controller.projectsJson).indexOf(id) < 0, "gone from the sidebar");
             const toast = findChild(view, "undoToast");
@@ -223,7 +223,7 @@ Item {
 
             // In the Trash the project stands for its tasks, and Put Back
             // restores both.
-            mouseClick(findChild(view, "trashProjectButton"));
+            menuAction("trashProjectItem");
             controller.selectView("trash");
             const trashed = findChild(view, "trashedProject");
             verify(trashed !== null && trashed.visible, "the Trash lists the project");
@@ -864,7 +864,7 @@ Item {
             const t = deadlineFor("due-today");
             mouseClick(findChild(t.popup.contentItem, "deadline-today"));
             tryCompare(t.row, "deadlineStatus", "today", 2000);
-            compare(findChild(t.row, "deadlineLabel").text, "⚑ Due today");
+            compare(findChild(t.row, "deadlineLabel").text, "Due today");
             verify(findChild(t.row, "deadlineBadge").urgent, "shown as urgent");
             controller.selectView("today");
             waitForRow("due-today");
@@ -929,7 +929,7 @@ Item {
             view.captureTask("in-grouped");
             waitForRow("in-grouped");
             controller.selectView("anytime");
-            headedBy("in-grouped", "📁 Grouped");
+            headedBy("in-grouped", "Grouped");
         }
 
         function test_the_logbook_is_grouped_by_day() {
@@ -1002,12 +1002,19 @@ Item {
             controller.createProject("Filed Project");
             const project = JSON.parse(controller.projectsJson).find(p => p.title === "Filed Project");
             controller.selectProject(project.id);
-            const picker = findChild(view, "projectAreaPicker");
-            verify(picker.visible, "a project's header shows its area");
-            compare(picker.currentText, "No Area");
-            const index = picker.choices.findIndex(a => a.title === "Filing Area");
-            picker.activated(index); // the user's choice
-            tryCompare(picker, "currentText", "Filing Area", 2000);
+            // The ⋯ menu's Area submenu files it.
+            const button = findChild(view, "containerMenuButton");
+            clickWhenShown(button);
+            const menu = findChild(button, "projectMenu");
+            tryVerify(() => menu.opened, 1000);
+            const none = findChild(button, "areaChoice-none");
+            verify(none.checked, "not in an area yet");
+            mouseClick(menu.itemAt(0)); // the Area submenu
+            const area = JSON.parse(controller.areasJson).find(a => a.title === "Filing Area");
+            const choice = findChild(button, "areaChoice-" + area.id);
+            tryVerify(() => choice.visible, 1000, "the Area submenu lists the area");
+            waitForRendering(view);
+            mouseClick(choice);
             tryVerify(() => sidebarAreaProject("Filed Project") !== null, 2000, "listed under its area");
             const top = findChild(view, "projectsList");
             verify(!top.model.some(p => p.title === "Filed Project"), "no longer among projects without an area");
@@ -1016,7 +1023,7 @@ Item {
         function test_an_area_goes_to_the_trash_and_comes_back() {
             const id = createArea("Spare Area");
             controller.selectArea(id);
-            clickWhenShown(findChild(view, "trashAreaButton"));
+            menuAction("trashAreaItem");
             compare(controller.currentView, "inbox", "the Inbox shows instead");
             tryVerify(() => sidebarArea("Spare Area") === null, 2000, "gone from the sidebar");
 
@@ -1027,7 +1034,7 @@ Item {
             compare(controller.currentAreaId, id);
             tryVerify(() => sidebarArea("Spare Area") !== null, 2000, "Undo puts it back");
 
-            clickWhenShown(findChild(view, "trashAreaButton"));
+            menuAction("trashAreaItem");
             controller.selectView("trash");
             const trashed = findVisual(view, i => i.objectName === "trashedArea" && i.visible);
             verify(trashed !== null, "the Trash lists the area");
@@ -1046,10 +1053,10 @@ Item {
         function test_an_area_is_renamed() {
             const id = createArea("Old Name");
             controller.selectArea(id);
-            clickWhenShown(findChild(view, "renameAreaButton"));
-            const dialog = findChild(view, "renameAreaDialog");
+            menuAction("renameAreaItem");
+            const dialog = findChild(view, "renameDialog");
             tryVerify(() => dialog.opened, 1000);
-            const input = findChild(dialog, "renameAreaInput");
+            const input = findChild(dialog, "renameInput");
             compare(input.text, "Old Name");
             input.text = "New Name";
             dialog.accept();
@@ -1058,9 +1065,9 @@ Item {
 
             // A blank name is refused.
             tryVerify(() => !dialog.visible, 1000);
-            clickWhenShown(findChild(view, "renameAreaButton"));
+            menuAction("renameAreaItem");
             tryVerify(() => dialog.opened, 1000);
-            findChild(dialog, "renameAreaInput").text = "   ";
+            findChild(dialog, "renameInput").text = "   ";
             dialog.accept();
             tryVerify(() => !dialog.visible, 2000);
             compare(controller.currentTitle, "New Name");
@@ -1112,14 +1119,14 @@ Item {
             expandRow(row);
             const when = findChild(row, "schedule-date");
             const deadline = findChild(row, "schedule-deadline");
-            compare(when.text, "📅 Today");
-            compare(deadline.text, "⚑ Deadline");
+            compare(when.text, "Today");
+            compare(deadline.text, "Deadline");
             verify(when.mapToItem(row, 0, 0).x > row.width / 2, "tucked to the right");
 
             controller.setTaskDeadline(row.taskId, Qt.formatDate(new Date(), "yyyy-MM-dd"));
-            tryCompare(deadline, "text", "⚑ Due today", 2000);
+            tryCompare(deadline, "text", "Due today", 2000);
             controller.scheduleTask(row.taskId, "evening");
-            tryCompare(when, "text", "📅 This Evening", 2000);
+            tryCompare(when, "text", "This Evening", 2000);
             controller.scheduleTask(row.taskId, "someday");
             waitForNoRow("corner-task"); // left Today for Someday
         }
@@ -1137,6 +1144,52 @@ Item {
             tryVerify(() => notes.height > before + 40, 2000, "the notes grew: " + before + " -> " + notes.height);
             tryVerify(() => row.height === row.targetHeight, 2000, "and the card with them");
             keyClick(Qt.Key_Escape);
+        }
+
+        // ---- Project header ---------------------------------------------------
+
+        // Open the ⋯ menu beside the title and choose `itemName`.
+        function menuAction(itemName) {
+            const button = findChild(view, "containerMenuButton");
+            clickWhenShown(button);
+            const item = findChild(button, itemName);
+            verify(item !== null, itemName + " in the menu");
+            tryVerify(() => item.visible, 1000, "the menu is open");
+            waitForRendering(view);
+            mouseClick(item);
+            // Styles that animate menus (Material) keep a closing menu over
+            // the window, catching clicks, until it has faded out.
+            for (const name of ["projectMenu", "areaMenu"]) {
+                const menu = findChild(button, name);
+                tryVerify(() => !menu.visible, 2000, name + " has closed");
+            }
+        }
+
+        function test_a_projects_progress_pie_fills_as_tasks_are_done() {
+            openFreshProject("pie-proj", ["pie-1", "pie-2", "pie-3", "pie-4"]);
+            const pie = findChild(view, "progressPie");
+            verify(pie.visible);
+            compare(pie.progress, 0);
+            controller.toggleTask(rowFor("pie-1").taskId);
+            tryCompare(pie, "progress", 0.25, 2000);
+            controller.toggleTask(rowFor("pie-2").taskId);
+            tryCompare(pie, "progress", 0.5, 2000);
+            controller.selectView("inbox");
+            verify(!pie.visible, "only projects have one");
+        }
+
+        function test_a_project_is_renamed_from_its_menu() {
+            openFreshProject("old-proj-name", ["rn-1"]);
+            menuAction("renameProjectItem");
+            const dialog = findChild(view, "renameDialog");
+            tryVerify(() => dialog.opened, 1000);
+            const input = findChild(dialog, "renameInput");
+            compare(input.text, "old-proj-name");
+            input.text = "New project name";
+            dialog.accept();
+            tryCompare(controller, "currentTitle", "New project name", 2000);
+            tryVerify(() => JSON.parse(controller.projectsJson).some(p => p.title === "New project name"), 2000);
+            tryVerify(() => !dialog.visible, 2000);
         }
 
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {
