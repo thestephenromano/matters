@@ -25,7 +25,28 @@ matters/
 │   └── SPEC.md                 # Product & technical specification
 ├── crates/
 │   ├── matters-core/           # Pure Rust domain & SQLite storage engine
-│   └── matters-ui/             # Qt 6 / QML interface layer (cxx-qt)
+│   ├── matters-ui/             # Qt 6 / QML interface layer (cxx-qt)
+│   └── matters-gtk/            # GTK 4 / libadwaita interface (secondary)
+├── ci/                         # System packages and the gates CI runs
 ```
 
 For full architectural, data model, and interaction specifications, see [docs/SPEC.md](docs/SPEC.md).
+
+---
+
+## Building and Testing
+
+Matters needs Qt 6.8 or later, GTK 4 with libadwaita 1.5 or later, and a stable Rust toolchain. On Fedora, `sudo ci/fedora-deps.sh` installs the system packages.
+
+```sh
+cargo run -p matters-ui     # the Qt app
+ci/check.sh                 # every gate CI runs
+```
+
+`ci/check.sh` runs:
+
+- clippy with warnings denied;
+- the workspace tests, which include the core tests, a `qmllint` check of the QML against the generated bridge types, and GTK widget tests on a headless Broadway display;
+- the Qt Quick interaction tests, offscreen. Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch them run.
+
+CI (`.github/workflows/ci.yml`) runs the same script in a `fedora:44` container on every pull request and every push to `main`.

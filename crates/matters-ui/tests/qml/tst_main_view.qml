@@ -28,7 +28,21 @@ Item {
             view.hideUndo();
             controller.selectView("today");
             list.expandedTaskId = "";
-            wait(0);
+            settle();
+        }
+
+        // Wait until no row is still growing or shrinking. Rows animate their
+        // height, which moves the rows below them; a test that clicks before
+        // they stop can hit the wrong place, depending on machine speed.
+        function settle() {
+            tryVerify(() => {
+                for (let i = 0; i < list.count; ++i) {
+                    const item = list.itemAtIndex(i);
+                    if (item && item.height !== item.targetHeight)
+                        return false;
+                }
+                return true;
+            }, 2000, "rows finish animating");
         }
 
         function rowFor(title) {
@@ -69,6 +83,18 @@ Item {
             mouseClick(row, row.width / 2, 24);
         }
 
+        // Expand a row the way a user does, and wait until it has finished
+        // growing, so its notes and When buttons are on screen. Layouts update
+        // before the next frame is drawn, so the row's full height is only
+        // known once a frame has gone by; a real user can't click sooner.
+        function expandRow(row) {
+            settle();
+            clickRowBody(row);
+            verify(row.isExpanded);
+            tryVerify(() => row.targetHeight > 48 && row.height === row.targetHeight, 2000,
+                      "row finishes expanding");
+        }
+
         function test_typing_a_task_adds_it_to_the_current_view() {
             const input = findChild(view, "newTaskInput");
             mouseClick(input);
@@ -103,10 +129,10 @@ Item {
         function test_row_click_toggles_expansion() {
             const row = addToToday("expand-me");
             verify(!row.isExpanded);
-            clickRowBody(row);
-            verify(row.isExpanded);
+            expandRow(row);
             clickRowBody(row);
             verify(!row.isExpanded);
+            tryVerify(() => row.height === 48, 2000, "row finishes collapsing");
         }
 
         function test_delete_button_moves_the_task_to_the_trash() {
@@ -208,8 +234,7 @@ Item {
 
         function test_when_button_reschedules_the_task() {
             const row = addToToday("defer-me");
-            clickRowBody(row);
-            verify(row.isExpanded);
+            expandRow(row);
             mouseClick(findChild(row, "schedule-someday"));
             waitForNoRow("defer-me");
             controller.selectView("someday");
@@ -218,7 +243,7 @@ Item {
 
         function test_typing_notes_keeps_the_row_open_and_focused() {
             const row = addToToday("note-me");
-            clickRowBody(row);
+            expandRow(row);
             const notes = findChild(row, "notesInput");
             mouseClick(notes);
             verify(notes.activeFocus);
@@ -244,7 +269,7 @@ Item {
             const above = addToToday("focus-a");
             const row = addToToday("focus-b");
             verify(indexOf("focus-a") < indexOf("focus-b"), "focus-a is listed above focus-b");
-            clickRowBody(row);
+            expandRow(row);
             const notes = findChild(row, "notesInput");
             mouseClick(notes);
             verify(notes.activeFocus);

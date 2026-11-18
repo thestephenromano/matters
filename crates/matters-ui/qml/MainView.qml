@@ -363,6 +363,12 @@ Item {
                         visible: controller.currentView === "trash"
                             && (taskListView.count > 0 || root.trashedProjects.length > 0)
                         onClicked: emptyTrashDialog.open()
+                        // Once the Trash is empty this button hides; it must not
+                        // keep the keyboard focus the dialog hands back to it.
+                        // Depending on the style, the dialog finishes closing
+                        // before or after the list empties, so both orders are
+                        // handled: here, and in the dialog's onClosed.
+                        onVisibleChanged: if (!visible && activeFocus) taskListView.forceActiveFocus()
                     }
 
                     ToolButton {
@@ -572,11 +578,24 @@ Item {
                             required property bool done
                             required property string startDate
                             required property bool evening
+                            required property int index
 
                             readonly property bool isExpanded: taskListView.expandedTaskId === taskId
 
+                            // The content keeps its natural height, pinned to the top;
+                            // the row grows to reveal it and clips the rest, so the
+                            // header stays put while the height animates.
+                            readonly property real targetHeight: isExpanded ? rowContent.implicitHeight + 16 : 48
                             width: taskListView.width
-                            height: isExpanded ? expandedContent.height + 56 : 48
+                            height: targetHeight
+                            clip: true
+
+                            // Once expanded, scroll the whole row into view, so its
+                            // notes and When buttons don't open below the fold.
+                            onHeightChanged: {
+                                if (isExpanded && height === targetHeight)
+                                    taskListView.positionViewAtIndex(index, ListView.Contain);
+                            }
 
                             Rectangle {
                                 anchors.fill: parent
@@ -603,13 +622,19 @@ Item {
                             }
 
                             ColumnLayout {
-                                anchors.fill: parent
+                                id: rowContent
+                                anchors.top: parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
                                 anchors.margins: 8
                                 spacing: 8
 
-                                // Main Row: Checkbox + Title + Date Pills
+                                // Main Row: Checkbox + Title + Date Pills. Fixed
+                                // height: the collapsed row shows exactly this.
                                 RowLayout {
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: 32
+                                    Layout.maximumHeight: 32
                                     spacing: 12
 
                                     // Things-style Circular Checkbox
