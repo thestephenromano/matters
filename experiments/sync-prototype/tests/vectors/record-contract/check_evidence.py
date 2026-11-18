@@ -12,6 +12,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "experiments/sync-prototype/evidence/record-contract-2026-11-18.json"
 REQUIRED = {
+    "ci/sqlite_runtime.rs",
+    "ci/sqlite_wal_tests.rs",
+    "docs/SQLITE_UPGRADE.md",
+    "experiments/sync-prototype/tests/sqlite.rs",
+    "experiments/sync-prototype/tests/review_regressions.rs",
     "experiments/sync-prototype/src/replica.rs",
     "experiments/sync-prototype/tests/crash.rs",
     "experiments/sync-prototype/tests/support/record_chain.rs",

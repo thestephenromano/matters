@@ -85,3 +85,7 @@ The [key-distribution contract](../../docs/SYNC_KEY_DISTRIBUTION.md) and [indepe
 ## Encrypted-outbox persistence experiment
 
 The [outbox contract](../../docs/SYNC_ENCRYPTED_OUTBOX.md) and test-only SQLite component implement committed record-ID/header reservations, immutable signed ciphertext, writer-head commits and local ACK bookkeeping. The harness verifies a real encrypted Loro update and nine abrupt process-exit boundaries. Reopen fences older signing handles and allocates a fresh local writer. Already-sealed bytes remain deliverable; unsealed old-writer intents remain visible as recovery-required and cannot be signed from a potentially restored head. Delivery-only and read-only opens allocate no writer. This uses a separate rollback-journal database. Pending plaintext stays local and unencrypted at rest. Transport, secret storage, historical admission and domain-journal integration remain separate gates. The ignored `outbox_crash_worker` runs nine times through its parent test.
+
+## SQLite dependency gate
+
+The app, this standalone prototype and the optional measurement baseline each run an exact linked-version/source-ID test for SQLite 3.54.1. [Upgrade provenance and integration coverage](../../docs/SQLITE_UPGRADE.md) records the upstream-fixed bundled release. Shared test source does not join their Cargo dependency graphs. Historical latency artifacts still describe their recorded older dependencies; no new timing claim follows from this upgrade.
