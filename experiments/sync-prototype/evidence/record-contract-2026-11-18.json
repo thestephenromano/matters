@@ -1,0 +1,82 @@
+{
+  "date": "2026-11-18T14:01:49.809239+00:00",
+  "source_commit": "e4f8297aef7f3d9be710e58f9d85ffb62ecc8795",
+  "base_commit": "4ef04e0dce17f72e62fd72ecdc695e05c533cd37",
+  "source_sha256": {
+    "experiments/sync-prototype/src/wire.rs": "33591a98c982c4df04c692f1ee9a68928fe16908e5ff1892baf697fdf9c55341",
+    "experiments/sync-prototype/tests/record_contract.rs": "dc8d80fc0a5efab3235c690fd1832c7a4e079808f0b66ca4528ded0200d73aea",
+    "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "6338ab4718b794aab07770ef0df16b6b99e6ef8d0deb3c94179093904c757e75",
+    "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "fc30d0865473cd21f4cc4da13d2bff4d74b11d422206603506f710ebf8b491c9",
+    "docs/protocol/sync-record-v0.cddl": "fe3c16e53791efa6b7a25ae48f3be862cb61253b9b8df9c47617aadd7d1dfd18",
+    "docs/SYNC_RECORD_CONTRACT.md": "e77883c410bcd4ad2d825d36ff04555718152c91cc40ee069307b7227047326a",
+    "experiments/sync-prototype/Cargo.lock": "0180e42d6d49fb98b86edc706b4f27b1a4fa7143eb69270fce7faebaa79e7634"
+  },
+  "host": {
+    "hostname": "betelgeuse",
+    "platform": "Linux-7.3.4-200.fc44.x86_64-x86_64-with-glibc2.43",
+    "machine": "x86_64",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+    "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)"
+  },
+  "adoption": {
+    "component": "minicbor",
+    "version": "2.3.1",
+    "features": [
+      "std"
+    ],
+    "default_features": false,
+    "scope": "bounded experimental codec; explicit maintainer approval in conversation 2026-11-18",
+    "license": "BlueOak-1.0.0",
+    "archive_sha256": "e7244eafd1e09e7c4e33043881997aa6ab6dffff3ed2cee3395a278980481d6e",
+    "vcs": {
+      "git": {
+        "sha1": "0432e74b1c85edf45db3c64da9f8b0d0897cdfda"
+      },
+      "path_in_vcs": "minicbor"
+    },
+    "inspected_source_sha256": {
+      "src/decode/decoder.rs": "10fb9d32206c19db5f4559932da2c3e1188ab3fdd0e05b493252a7a477107d2c",
+      "src/encode/encoder.rs": "6418054840d6d6c59bfd80b12a7e0a527fc1cdbdd6cb233a5036c8b9a818ca26",
+      "Cargo.toml": "dd727b639af49e36e7ac9954ac77265a48da8d3bffd75cf767b123f85aeb9335"
+    }
+  },
+  "oracles": {
+    "cbor2": "5.6.5",
+    "cryptography": "46.0.3",
+    "python": "3.13.7",
+    "openssl": "OpenSSL 3.5.4 30 Sep 2025",
+    "cddl_cat": "0.7.1",
+    "ciborium": "0.2.2",
+    "regeneration_check": "passed"
+  },
+  "checks": {
+    "tests_passed": 55,
+    "ignored_discovery_helpers": 1,
+    "helper_executions": 2,
+    "clippy": "passed with -D warnings",
+    "format": "passed",
+    "markdown_files": 5,
+    "local_links": 25,
+    "test_command": "CARGO_TARGET_DIR=/home/stephen/Development/matters/target/sync-prototype cargo test --manifest-path experiments/sync-prototype/Cargo.toml --locked --features crypto-probe,record-contract -j 4",
+    "clippy_command": "CARGO_TARGET_DIR=/home/stephen/Development/matters/target/sync-prototype cargo clippy --manifest-path experiments/sync-prototype/Cargo.toml --locked --all-targets --features crypto-probe,record-contract -j 4 -- -D warnings",
+    "format_command": "cargo fmt --manifest-path experiments/sync-prototype/Cargo.toml -- --check",
+    "test_output": "   Compiling matters-sync-prototype v0.0.0 (/tmp/matters-sync-contract-20261118/experiments/sync-prototype)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s\n     Running unittests src/lib.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/matters_sync_prototype-82ae75b97da519bc)\n\nrunning 2 tests\ntest replica::tests::receive_projects_once_and_persists_that_result ... ok\ntest model::tests::identity_and_kind_lookup_never_materialize_notes ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n     Running tests/convergence.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/convergence-627311c04d18ecee)\n\nrunning 20 tests\ntest lost_ack_after_commit_survives_restart_and_projection_rebuild ... ok\ntest c15_clone_opens_with_new_actor_and_preserves_old_outbox ... ok\ntest c14_pending_import_survives_snapshot_restart_and_local_write ... ok\ntest record_identity_rejects_conflicting_bytes ... ok\ntest c06_project_trash_keeps_concurrent_child_edit_for_restore ... ok\ntest c05_move_and_reorder_have_one_location ... ok\ntest failed_commit_does_not_advance_memory_disk_or_outbox ... ok\ntest c04_schedule_is_atomic ... ok\ntest c13_check_is_idempotent_and_delete_is_permanent ... ok\ntest c16_invalid_commands_leave_journal_and_projection_unchanged ... ok\ntest c02_text_inserts_preserve_both_intents ... ok\ntest c07_move_out_of_trashed_project_is_visible ... ok\ntest c17_today_order_is_independent_of_home_placement ... ok\ntest c03_completion_is_one_register_with_a_fixed_peer_tie_break ... ok\ntest c08_restore_parent_keeps_independent_child_trash ... ok\ntest c10_unknown_children_survive_purge_in_inbox ... ok\ntest c11_deleted_heading_preserves_children_in_project ... ok\ntest c12_duplicate_tag_names_keep_original_memberships_on_rename ... ok\ntest c01_independent_fields_survive_reversed_duplicate_delivery ... ok\ntest c09_purge_wins_over_stale_edit_restore_and_move ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n     Running tests/crash.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crash-6c619184370df059)\n\nrunning 4 tests\ntest process_crash_worker ... ignored, invoked only as a child by abrupt_exit_recovers_sqlite\ntest refuses_an_existing_application_database ... ok\ntest actual_sql_write_failure_leaves_memory_and_disk_unchanged ... ok\ntest abrupt_exit_recovers_sqlite ... ok\n\ntest result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/crypto_probe.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/crypto_probe-0e0e2f1465b7159e)\n\nrunning 3 tests\ntest published_draft_vector_checks_hybrid_key_derivation_and_decryption ... ok\ntest mldsa65_verifies_authorship_and_domain_context ... ok\ntest selected_aes256_suite_round_trips_and_rejects_context_or_ciphertext_changes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s\n\n     Running tests/record_contract.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/record_contract-d84ee53b2e9ee922)\n\nrunning 9 tests\ntest route_context_must_be_supplied_independently ... ok\ntest shortest_integer_width_boundaries_match_independent_encoder ... ok\ntest independent_golden_bytes_and_original_transcript_slices ... ok\ntest crypto::independent_hkdf_aes_vectors_match_selected_provider ... ok\ntest independently_encoded_rejection_cases ... ok\ntest exact_wire_budget_and_payload_bounds ... ok\ntest every_truncation_rejects_without_panicking ... ok\ntest cddl_schema_matches_structural_fixtures_with_an_independent_decoder ... ok\ntest crypto::exact_signing_input_and_every_variable_header_field_are_authenticated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s\n\n     Running tests/review_regressions.rs (/home/stephen/Development/matters/target/sync-prototype/debug/deps/review_regressions-c0e21d2b9ae0e596)\n\nrunning 18 tests\ntest retry_after_rollback_commits_once ... ok\ntest rejected_record_is_retained_for_diagnosis ... ok\ntest lost_ack_retry_does_not_insert_notes_twice ... ok\ntest home_reorders_children_lifted_through_a_deleted_heading ... ok\ntest open_actually_reads_a_saved_checkpoint ... ok\ntest retries_of_create_batch_and_notes_survive_restart_and_reject_changed_intent ... ok\ntest quarantine_rejects_changed_bytes_for_an_existing_transport_id ... ok\ntest normal_and_fixture_ordering_policies_are_separate ... ok\ntest received_bytes_resume_after_sql_admission_failure ... ok\ntest home_move_uses_visible_rank_after_purge ... ok\ntest invalid_domain_import_is_quarantined_without_changing_valid_state ... ok\ntest quarantine_and_dependency_wait_are_durable_and_observable ... ok\ntest today_move_uses_visible_rank_after_purge ... ok\ntest legacy_checkpoint_migrates_without_losing_its_pending_imports ... ok\ntest snapshot_loads_prefix_pending_bytes_and_journal_tail ... ok\ntest tag_removal_preserves_other_names_tasks_and_unseen_concurrent_links ... ok\ntest remove_merged_tag_clears_every_known_alias ... ok\ntest reorder_slots_exclude_purged_prefix_middle_and_suffix ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s\n\n   Doc-tests matters_sync_prototype\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+    "clippy_output": "    Checking matters-sync-prototype v0.0.0 (/tmp/matters-sync-contract-20261118/experiments/sync-prototype)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s\n"
+  },
+  "fixtures": {
+    "golden_records": 2,
+    "rejection_splices": 58,
+    "epoch_boundaries": 10,
+    "tested_truncations": 7734,
+    "max_wire_bytes": 1052451,
+    "max_overhead_bytes": 3859
+  },
+  "limits": [
+    "Content-record schema/codec only; no encrypted outbox, relay or application integration.",
+    "Structural golden signatures are zero placeholders; tests reject them cryptographically.",
+    "ML-DSA tests use public fixed seeds/randomness with the selected provider; not an independent signature oracle.",
+    "Independent HKDF/AES/CBOR fixtures do not establish hybrid HPKE interoperability or full protocol security.",
+    "No aarch64, fuzz campaign, production usage-bound proof, actor/membership/lifecycle implementation, snapshot coverage or independent security review.",
+    "No new performance claim."
+  ]
+}

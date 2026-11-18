@@ -23,3 +23,5 @@ The maximum fixture has a 1,048,592-byte ciphertext (1 MiB plaintext plus the 16
 The provider tests check the independent PRK/key/ciphertext values and reject changes to every variable header field, ciphertext, author key and signature context. Version/suite changes reject at the codec boundary. Every proper prefix of both complete golden records is rejected. Tests also cover nonminimal widths, indefinite items, forbidden types, lengths/arity, repeated context disagreement, and consistently substituted route context.
 
 This establishes content encoding and finite test behavior on the recorded host. It does not validate device enrollment, writer admission, recovery, durable nonce reservations, cryptographic usage bounds, snapshot coverage, a relay, or independent interoperability of the approved hybrid HPKE suite. Those remain their owning issues' gates. The replica journal remains plaintext and is not wired to this adapter.
+
+The [execution record](../../../evidence/record-contract-2026-11-18.json) binds these results to source and dependency hashes, the named host and oracle versions.
