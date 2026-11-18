@@ -3,11 +3,11 @@
   "source_commit": "a486b520db03c3c9b3b00c09277e068453a93617",
   "base_commit": "b31d88edebcb3e723cc4758f079ef05d6304dfe9",
   "source_sha256": {
-    ".github/workflows/sync-prototype.yml": "4feb6a99e78c95f4578b05fd8339a5da6b9339ad1a3263abe2f8bafc55dea976",
+    ".github/workflows/sync-prototype.yml": "c69791dd6fb101ca21c3ed75098ed971273cd820ec94e5985fab85188f8c7f4f",
     "ci/sqlite_runtime.rs": "c668549e37ad8feb6c4898e9d08eef2ddf1553f443e1cd8f5a023d0cff4f416c",
     "ci/sqlite_wal_tests.rs": "740ef3c4ede5883161274782ba7e6e46b0b98c938d9f7deb02a1ba352e0f8f10",
-    "docs/SQLITE_REVIEW.md": "73c0e8bf90dbff71bd43cdaf5905722bdfa3725f53a91fa1e87a14277d4a47ce",
-    "docs/SQLITE_UPGRADE.md": "5f4108060e9e42b1715b520f5979b918aeab25cac7716f23be0bfee1f19bac10",
+    "docs/SQLITE_REVIEW.md": "059792c1187aecea4484b75d732c4b67302a535de554cd60ad819d3046c99351",
+    "docs/SQLITE_UPGRADE.md": "27ef2d121635390b369111155a274451dfcea73beacfe0131fd0647fef7eb3fd",
     "docs/SYNC_DESIGN.md": "e2ac4048c8b27a43d782ad43b9ed6833586f84ac12be952295688565a907c341",
     "docs/SYNC_DURABLE_RECEIVE.md": "04afa548c4bded68f86b00e3c27ce2e5d04bcb16c562169581ce0f4cb00ec744",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "8f5a89411579154be9370f320054a906392d1a4e411b02b617cecbd9f92c4de7",
@@ -19,12 +19,11 @@
     "experiments/sync-prototype/.gitignore": "395fc2939d3e8df2f16cd3752e9501b85a47191f283fff07ed4bc4d9875013d9",
     "experiments/sync-prototype/Cargo.lock": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
     "experiments/sync-prototype/Cargo.toml": "2cc80c243f4f221f9daa649f99c4b045695fedfe7da8df788deeb0e6c4eb8396",
-    "experiments/sync-prototype/README.md": "10ae9524e1a3326b392cd3c63a9b6a7de62cea0079dca07c5fc041c33fb216fc",
+    "experiments/sync-prototype/README.md": "0609b5c6e0a3d97f4e77098fb503a3c2779f09112fc8d83205e2fc17e81ab844",
     "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md": "89973fc6fe9d9a1bae64c48010060ee0d6b6ce2a48d9e992e5a50dd53cefa842",
     "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md": "19a43b042517a212e1fce6eebb9c6f136c034032a7e983e4077fced2a592c77f",
     "experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md": "55feba116369cffef17b55203f41224ed0ecbdfe14d87d707ae186eb5c8a1f79",
-    "experiments/sync-prototype/baseline/Cargo.lock": "bb8f9afc1717346517f8dd2cdeded0cf52213b548b8245c7c334c1a866a90acf",
-    "experiments/sync-prototype/baseline/Cargo.toml": "1d81dd6fc4a4b8548ee1c570db0ac8b36d9a2bcb413e786d6e3263e92e9278ab",
+    "experiments/sync-prototype/baseline/Cargo.toml": "36853bbbd79151afeb6479fac879f5e9be2e7b50f1e0d50804e7c05c621c5aad",
     "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
     "experiments/sync-prototype/src/lib.rs": "3697d2bff61fc2b1621192a717dd5f597899741b65b636bd6666298db077ae28",
     "experiments/sync-prototype/src/model.rs": "21ea2823fb40428eb65be105a099dcca2d1c174b939ac3458380e0dc4ec7ee98",
@@ -42,13 +41,13 @@
     "experiments/sync-prototype/tests/support/key_distribution.rs": "81b91ee08d45049955186665f8c3967ffb49623088b3da9f3d76baa2a7c3880e",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
     "experiments/sync-prototype/tests/support/record_crypto.rs": "85f652231a86fb6cc3367a7677d88f6ed61c61ffacc56ca6ff7d0009b41ab8f2",
-    "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "d67084363d935693df5b43d30b00e84846ed79e4b3a160a42832fb6b41bcdfa1",
+    "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "448f37f3653b5dc1d85fde4ec9046a070b314e44bfff1fc152603d2395170b53",
     "experiments/sync-prototype/tests/vectors/check_oracles.py": "041c17e18d1c1be220b1935c13992cf96e939b0660a8f820be01f3fc5d3bba7e",
     "experiments/sync-prototype/tests/vectors/key-distribution/README.md": "eb2de80970524e9338628ee79fbda77171220bc9a6d2be6a4fdf20b3c41c5e96",
     "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "b4468ee8117874a14e6c74d1914f9ce8c83961401715a98f333f418ce376dc5b",
     "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "4bb36d74e83579238a9a00c79a57bf94855a8b5bda17daacdba02419a3b1ac87",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
-    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "bf969472c69f2ddaba9980cb8e60a504f25ec29f2474b1fa80cfa46ee571c679",
+    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "3befca5b3ac54f0e30750351dc045393c43b8a730c5946f8406b4322625ed8cf",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6",
@@ -2507,6 +2506,16 @@
       ],
       "previous_sha256": "4017e18fb260b9f44603483dadaf041f71df87f5eb6e1cd6002099babf67eff9",
       "verification": "cargo test --locked --manifest-path baseline/Cargo.toml -- --nocapture: SQLite runtime 3.54.1, linked_sqlite_matches_approved_release ok"
+    },
+    {
+      "change": "Baseline joins the app workspace and shares the app Cargo.lock; its own lockfile is removed",
+      "reason": "Its own --locked lockfile needed a manual refresh on every matters-core dependency change (#127)",
+      "removed_lockfile_sha256": "bb8f9afc1717346517f8dd2cdeded0cf52213b548b8245c7c334c1a866a90acf",
+      "root_lockfile_change": "adds the matters-sync-baseline workspace package only; no dependency version changed (cargo update -w)",
+      "verification": [
+        "cargo test --locked -p matters-sync-baseline -- --nocapture: SQLite runtime 3.54.1, linked_sqlite_matches_approved_release ok",
+        "cargo fmt --all --check; cargo clippy -p matters-sync-baseline --all-targets --locked -- -D warnings; RUSTDOCFLAGS=-D warnings cargo doc -p matters-sync-baseline --no-deps --locked; cargo deny --locked check: advisories, bans, licenses, sources ok"
+      ]
     }
   ]
 }

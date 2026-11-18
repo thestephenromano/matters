@@ -49,15 +49,16 @@ jobs:
         with:
           workspaces: |
             experiments/sync-prototype -> ../../target/sync-prototype
-            experiments/sync-prototype/baseline -> ../../../target/sync-prototype-baseline
+            . -> target/sync-prototype-baseline
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --features crypto-probe,record-contract -- -D warnings
       - run: cargo test --locked --features crypto-probe,record-contract
       - name: Run ignored crash helpers through direct discovery too
         run: cargo test --locked --features crypto-probe,record-contract -- --include-ignored
-      # The measurement helper has its own committed lockfile and target, so its
-      # graph stays independent of the prototype. It links matters-core and
-      # asserts the same exact SQLite runtime identity.
+      # The measurement helper is a member of the app workspace and resolves
+      # against the app's Cargo.lock, independent of the prototype graph. It
+      # links matters-core and asserts the same exact SQLite runtime identity.
+      # App CI also runs it through `cargo test --workspace`.
       - name: Measurement baseline SQLite runtime
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/sync-prototype-baseline

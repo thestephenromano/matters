@@ -3,6 +3,9 @@ members = [
     "crates/matters-core",
     "crates/matters-ui",
     "crates/matters-gtk",
+    # Sync-prototype measurement helper: shares the app lockfile so it measures
+    # the app's exact SQLite stack.
+    "experiments/sync-prototype/baseline",
 ]
 resolver = "2"
 

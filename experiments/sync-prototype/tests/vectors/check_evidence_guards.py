@@ -17,7 +17,9 @@ class EvidenceGuards(unittest.TestCase):
     def test_each_required_binding_rejects_drift_removal_and_omission(self):
         import hashlib
         self.assertIn("ci/sqlite_runtime.rs", checker.REQUIRED)
-        self.assertIn("experiments/sync-prototype/baseline/Cargo.lock", checker.REQUIRED)
+        self.assertIn("experiments/sync-prototype/baseline/Cargo.toml", checker.REQUIRED)
+        # The baseline shares the app lockfile; it has none of its own to bind.
+        self.assertNotIn("experiments/sync-prototype/baseline/Cargo.lock", checker.REQUIRED)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             original_root, original_manifest = checker.ROOT, checker.MANIFEST
