@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use rusqlite::params;
 
-use crate::domain::{Area, Project, ProjectProgress, Task};
+use crate::domain::{Area, Project, ProjectProgress, Task, View};
 use crate::error::Result;
 use crate::storage::db::Database;
 
@@ -33,6 +33,59 @@ pub struct QuickFindResult {
     pub areas: Vec<Area>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ViewCounts {
+    pub inbox: usize,
+    pub today: usize,
+    pub upcoming: usize,
+    pub anytime: usize,
+    pub someday: usize,
+    pub logbook: usize,
+}
+
+/// Columns read by [`Database::map_task_row`], in its expected order.
+const TASK_COLUMNS: &str = "id, area_id, project_id, heading_id, title, notes, start_date,
+     time_of_day, is_someday, deadline, status, completed_at, sort_order,
+     created_at, updated_at";
+
+// Membership rule for each view, written once and shared by the list query and
+// the count query so the sidebar badge always matches what the view shows.
+// `?1` is the reference date (YYYY-MM-DD) wherever a rule depends on it.
+
+/// INBOX: unassigned tasks with no project, area, date, or Someday flag.
+const INBOX_WHERE: &str = "status = 'open'
+    AND project_id IS NULL AND area_id IS NULL
+    AND start_date IS NULL AND is_someday = 0";
+
+/// TODAY: scheduled for today or earlier (overdue), or undated with a deadline
+/// today or earlier.
+const TODAY_WHERE: &str = "status = 'open' AND is_someday = 0
+    AND (start_date <= ?1 OR (start_date IS NULL AND deadline <= ?1))";
+
+/// UPCOMING: start date strictly after the reference date.
+const UPCOMING_WHERE: &str = "status = 'open' AND is_someday = 0 AND start_date > ?1";
+
+/// ANYTIME: actionable now and organised under an area or project.
+const ANYTIME_WHERE: &str = "status = 'open' AND is_someday = 0
+    AND (start_date IS NULL OR start_date <= ?1)
+    AND (project_id IS NOT NULL OR area_id IS NOT NULL)";
+
+/// SOMEDAY: explicitly deferred.
+const SOMEDAY_WHERE: &str = "status = 'open' AND is_someday = 1";
+
+/// LOGBOOK: finished tasks.
+const LOGBOOK_WHERE: &str = "status IN ('completed', 'canceled')";
+
+/// PROJECT: a project's live tasks, done or not (the same set its progress
+/// ring counts). `?1` is the project id.
+const PROJECT_WHERE: &str = "project_id = ?1 AND status IN ('open', 'completed')";
+
+/// Stable order for manually sorted lists; `id` breaks exact ties.
+const MANUAL_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
+
+/// Logbook order: most recently finished first.
+const LOGBOOK_ORDER: &str = "completed_at DESC, updated_at DESC, id ASC";
+
 pub struct QueryEngine<'a> {
     db: &'a Database,
 }
@@ -42,176 +95,123 @@ impl<'a> QueryEngine<'a> {
         Self { db }
     }
 
-    /// INBOX:
-    /// Unassigned tasks that have no project, no area, no scheduled date, and are not Someday.
-    pub fn inbox(&self) -> Result<Vec<Task>> {
+    fn select_tasks(&self, where_clause: &str, order: &str, params: impl rusqlite::Params) -> Result<Vec<Task>> {
+        let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE {where_clause} ORDER BY {order}");
         self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                        time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                        created_at, updated_at
-                 FROM tasks
-                 WHERE status = 'open'
-                   AND project_id IS NULL
-                   AND area_id IS NULL
-                   AND start_date IS NULL
-                   AND is_someday = 0
-                 ORDER BY sort_order ASC, created_at ASC",
-            )?;
-            let rows = stmt.query_map([], Database::map_task_row)?;
-            let mut tasks = Vec::new();
-            for r in rows {
-                tasks.push(r?);
-            }
-            Ok(tasks)
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params, Database::map_task_row)?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
-    /// TODAY:
-    /// Tasks scheduled for today or earlier (overdue), or tasks with no start date whose deadline is today or earlier.
-    /// Split cleanly into Daytime and This Evening.
+    /// The tasks a view lists, in display order. Today lists daytime tasks
+    /// before evening ones; Upcoming is ordered by date.
+    pub fn tasks_in(&self, view: &View, reference_date: NaiveDate) -> Result<Vec<Task>> {
+        Ok(match view {
+            View::Inbox => self.inbox()?,
+            View::Today => {
+                let today = self.today(reference_date)?;
+                let mut tasks = today.daytime;
+                tasks.extend(today.evening);
+                tasks
+            }
+            View::Upcoming => self
+                .upcoming(reference_date)?
+                .into_iter()
+                .flat_map(|group| group.tasks)
+                .collect(),
+            View::Anytime => self.anytime(reference_date)?,
+            View::Someday => self.someday_tasks()?,
+            // Every finished task, so the list matches its badge count.
+            View::Logbook => self.select_tasks(LOGBOOK_WHERE, LOGBOOK_ORDER, [])?,
+            View::Project(id) => self.project_tasks(id)?,
+        })
+    }
+
+    /// Badge counts for every sidebar view in one aggregate query, without
+    /// loading any rows.
+    pub fn counts(&self, reference_date: NaiveDate) -> Result<ViewCounts> {
+        let ref_str = reference_date.format("%Y-%m-%d").to_string();
+        let sql = format!(
+            "SELECT
+                COUNT(CASE WHEN {INBOX_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {TODAY_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {UPCOMING_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {ANYTIME_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {SOMEDAY_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {LOGBOOK_WHERE} THEN 1 END)
+             FROM tasks"
+        );
+        self.db.with_conn(|conn| {
+            Ok(conn.query_row(&sql, params![ref_str], |r| {
+                let n = |i| r.get::<_, i64>(i).map(|v| v as usize);
+                Ok(ViewCounts {
+                    inbox: n(0)?,
+                    today: n(1)?,
+                    upcoming: n(2)?,
+                    anytime: n(3)?,
+                    someday: n(4)?,
+                    logbook: n(5)?,
+                })
+            })?)
+        })
+    }
+
+    pub fn inbox(&self) -> Result<Vec<Task>> {
+        self.select_tasks(INBOX_WHERE, MANUAL_ORDER, [])
+    }
+
+    /// Today's tasks, split into daytime and This Evening.
     pub fn today(&self, reference_date: NaiveDate) -> Result<TodayView> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
-
-        self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                        time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                        created_at, updated_at
-                 FROM tasks
-                 WHERE status = 'open'
-                   AND is_someday = 0
-                   AND (
-                       start_date <= ?1
-                       OR (start_date IS NULL AND deadline <= ?1)
-                   )
-                 ORDER BY sort_order ASC, created_at ASC",
-            )?;
-
-            let rows = stmt.query_map(params![ref_str], Database::map_task_row)?;
-            let mut view = TodayView::default();
-
-            for r in rows {
-                let task = r?;
-                if task.is_evening() {
-                    view.evening.push(task);
-                } else {
-                    view.daytime.push(task);
-                }
-            }
-
-            Ok(view)
-        })
+        let (evening, daytime) = self
+            .select_tasks(TODAY_WHERE, MANUAL_ORDER, params![ref_str])?
+            .into_iter()
+            .partition(Task::is_evening);
+        Ok(TodayView { daytime, evening })
     }
 
-    /// UPCOMING:
-    /// Tasks with start_date strictly after the reference date, grouped by calendar date.
+    /// Future tasks grouped by calendar date.
     pub fn upcoming(&self, reference_date: NaiveDate) -> Result<Vec<UpcomingGroup>> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
+        let tasks = self.select_tasks(
+            UPCOMING_WHERE,
+            &format!("start_date ASC, {MANUAL_ORDER}"),
+            params![ref_str],
+        )?;
 
-        self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                        time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                        created_at, updated_at
-                 FROM tasks
-                 WHERE status = 'open'
-                   AND is_someday = 0
-                   AND start_date > ?1
-                 ORDER BY start_date ASC, sort_order ASC",
-            )?;
-
-            let rows = stmt.query_map(params![ref_str], Database::map_task_row)?;
-            let mut date_map: BTreeMap<NaiveDate, Vec<Task>> = BTreeMap::new();
-
-            for r in rows {
-                let task = r?;
-                if let Some(date) = task.start_date {
-                    date_map.entry(date).or_default().push(task);
-                }
+        let mut date_map: BTreeMap<NaiveDate, Vec<Task>> = BTreeMap::new();
+        for task in tasks {
+            if let Some(date) = task.start_date {
+                date_map.entry(date).or_default().push(task);
             }
-
-            let groups = date_map
-                .into_iter()
-                .map(|(date, tasks)| UpcomingGroup { date, tasks })
-                .collect();
-
-            Ok(groups)
-        })
+        }
+        Ok(date_map
+            .into_iter()
+            .map(|(date, tasks)| UpcomingGroup { date, tasks })
+            .collect())
     }
 
-    /// ANYTIME:
-    /// Actionable tasks that are ready to work on right now:
-    /// Open, not in Someday, start_date is NULL or <= reference_date, and organized under an Area or Project.
     pub fn anytime(&self, reference_date: NaiveDate) -> Result<Vec<Task>> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
-
-        self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                        time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                        created_at, updated_at
-                 FROM tasks
-                 WHERE status = 'open'
-                   AND is_someday = 0
-                   AND (start_date IS NULL OR start_date <= ?1)
-                   AND (project_id IS NOT NULL OR area_id IS NOT NULL)
-                 ORDER BY sort_order ASC, created_at ASC",
-            )?;
-
-            let rows = stmt.query_map(params![ref_str], Database::map_task_row)?;
-            let mut tasks = Vec::new();
-            for r in rows {
-                tasks.push(r?);
-            }
-            Ok(tasks)
-        })
+        self.select_tasks(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])
     }
 
-    /// SOMEDAY:
-    /// Open tasks and projects explicitly deferred to Someday.
     pub fn someday_tasks(&self) -> Result<Vec<Task>> {
-        self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                        time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                        created_at, updated_at
-                 FROM tasks
-                 WHERE status = 'open'
-                   AND is_someday = 1
-                 ORDER BY sort_order ASC, created_at ASC",
-            )?;
-
-            let rows = stmt.query_map([], Database::map_task_row)?;
-            let mut tasks = Vec::new();
-            for r in rows {
-                tasks.push(r?);
-            }
-            Ok(tasks)
-        })
+        self.select_tasks(SOMEDAY_WHERE, MANUAL_ORDER, [])
     }
 
-    /// LOGBOOK:
-    /// Completed or canceled tasks, ordered by most recently completed.
+    /// The `limit` most recently finished tasks.
     pub fn logbook(&self, limit: usize) -> Result<Vec<Task>> {
-        self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                        time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                        created_at, updated_at
-                 FROM tasks
-                 WHERE status IN ('completed', 'canceled')
-                 ORDER BY completed_at DESC, updated_at DESC
-                 LIMIT ?1",
-            )?;
+        self.select_tasks(
+            LOGBOOK_WHERE,
+            &format!("{LOGBOOK_ORDER} LIMIT ?1"),
+            params![i64::try_from(limit).unwrap_or(i64::MAX)],
+        )
+    }
 
-            let rows = stmt.query_map(params![limit as i64], Database::map_task_row)?;
-            let mut tasks = Vec::new();
-            for r in rows {
-                tasks.push(r?);
-            }
-            Ok(tasks)
-        })
+    pub fn project_tasks(&self, project_id: &str) -> Result<Vec<Task>> {
+        self.select_tasks(PROJECT_WHERE, MANUAL_ORDER, params![project_id])
     }
 
     /// PROJECT PROGRESS:
