@@ -100,3 +100,13 @@ UPDATE tasks
  WHERE status = 'trashed';
 CREATE INDEX IF NOT EXISTS idx_tasks_trashed ON tasks(trashed_at);
 "#;
+
+/// v3: projects can be trashed the same way as tasks (see v2).
+pub const MIGRATION_V3: &str = r#"
+ALTER TABLE projects ADD COLUMN trashed_at INTEGER;
+UPDATE projects
+   SET trashed_at = updated_at,
+       status = CASE WHEN completed_at IS NOT NULL THEN 'completed' ELSE 'open' END
+ WHERE status = 'trashed';
+CREATE INDEX IF NOT EXISTS idx_projects_trashed ON projects(trashed_at);
+"#;

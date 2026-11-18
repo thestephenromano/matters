@@ -15,6 +15,42 @@ Item {
     readonly property alias appController: controller
     readonly property alias taskList: taskListView
 
+    readonly property var trashedProjects: {
+        try {
+            return JSON.parse(controller.trashedProjectsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
+    // What the Undo notice would put back: kind is "task", "project" or ""
+    // (no notice).
+    property string undoKind: ""
+    property string undoId: ""
+    property string undoTitle: ""
+
+    function showUndo(kind, id, title) {
+        undoKind = kind;
+        undoId = id;
+        undoTitle = title;
+        undoTimer.restart();
+    }
+
+    function hideUndo() {
+        undoKind = "";
+        undoTimer.stop();
+    }
+
+    function undo() {
+        if (undoKind === "task") {
+            controller.restoreTask(undoId);
+        } else if (undoKind === "project") {
+            controller.restoreProject(undoId);
+            controller.selectProject(undoId);
+        }
+        hideUndo();
+    }
+
     // Theme color palette (respects light/dark system settings)
     readonly property bool isDark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
     readonly property color colBg: isDark ? "#1A1B1E" : "#FFFFFF"
@@ -324,8 +360,22 @@ Item {
                         id: emptyTrashButton
                         objectName: "emptyTrashButton"
                         text: "Empty Trash"
-                        visible: controller.currentView === "trash" && taskListView.count > 0
+                        visible: controller.currentView === "trash"
+                            && (taskListView.count > 0 || root.trashedProjects.length > 0)
                         onClicked: emptyTrashDialog.open()
+                    }
+
+                    ToolButton {
+                        objectName: "trashProjectButton"
+                        text: "Move to Trash"
+                        visible: controller.currentView === "project"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Move this project and its tasks to the Trash"
+                        onClicked: {
+                            const id = controller.currentProjectId;
+                            root.showUndo("project", id, controller.currentTitle);
+                            controller.trashProject(id);
+                        }
                     }
 
                     // Circular Progress Display for Projects
@@ -434,6 +484,51 @@ Item {
                                 if (text.trim().length > 0) {
                                     controller.addTask(text);
                                     text = "";
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Trashed projects, each standing for its tasks.
+                ColumnLayout {
+                    visible: controller.currentView === "trash" && root.trashedProjects.length > 0
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    Repeater {
+                        model: root.trashedProjects
+
+                        delegate: Rectangle {
+                            id: trashedProject
+                            objectName: "trashedProject"
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 40
+                            radius: 8
+                            color: "transparent"
+                            border.color: root.colBorder
+                            border.width: 1
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 8
+                                spacing: 8
+
+                                Text {
+                                    text: "📁 " + trashedProject.modelData.title
+                                    color: root.colTextPrimary
+                                    font.pixelSize: 14
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+
+                                ToolButton {
+                                    objectName: "restoreProjectButton"
+                                    text: "Put Back"
+                                    font.pixelSize: 11
+                                    onClicked: controller.restoreProject(trashedProject.modelData.id)
                                 }
                             }
                         }
@@ -600,7 +695,10 @@ Item {
                                         font.pixelSize: 11
                                         ToolTip.visible: hovered
                                         ToolTip.text: "Move to Trash"
-                                        onClicked: controller.trashTask(taskRow.taskId)
+                                        onClicked: {
+                                            root.showUndo("task", taskRow.taskId, taskRow.title);
+                                            controller.trashTask(taskRow.taskId);
+                                        }
                                     }
 
                                     // In the Trash, each task can be put back.
@@ -696,6 +794,49 @@ Item {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // =========================================================================
+    // UNDO NOTICE: shown for a few seconds after moving something to the Trash
+    // =========================================================================
+    Timer {
+        id: undoTimer
+        interval: 5000
+        onTriggered: root.hideUndo()
+    }
+
+    Rectangle {
+        objectName: "undoToast"
+        visible: root.undoKind !== ""
+        z: 10
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 24
+        width: undoRow.implicitWidth + 24
+        height: 40
+        radius: 8
+        color: root.isDark ? "#E9ECEF" : "#212529"
+
+        RowLayout {
+            id: undoRow
+            anchors.centerIn: parent
+            spacing: 12
+
+            Text {
+                text: (root.undoKind === "project" ? "Project" : "Task") + " “" + root.undoTitle + "” moved to Trash"
+                color: root.isDark ? "#212529" : "#F8F9FA"
+                font.pixelSize: 13
+                elide: Text.ElideMiddle
+                Layout.maximumWidth: 360
+            }
+
+            Button {
+                objectName: "undoButton"
+                text: "Undo"
+                flat: true
+                onClicked: root.undo()
             }
         }
     }
@@ -807,9 +948,7 @@ Item {
         Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: taskListView.count === 1
-                ? "The task in the Trash will be permanently deleted. This can't be undone."
-                : "The " + taskListView.count + " tasks in the Trash will be permanently deleted. This can't be undone."
+            text: "Everything in the Trash will be permanently deleted, including the tasks in trashed projects. This can't be undone."
         }
 
         footer: DialogButtonBox {
@@ -825,7 +964,10 @@ Item {
             }
         }
 
-        onAccepted: controller.emptyTrash()
+        onAccepted: {
+            root.hideUndo(); // nothing left to put back
+            controller.emptyTrash();
+        }
         // Focus returns to the button that opened the dialog, which hides once
         // the Trash is empty; give it to the task list instead.
         onClosed: if (!emptyTrashButton.visible) taskListView.forceActiveFocus()

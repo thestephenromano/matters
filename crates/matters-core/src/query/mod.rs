@@ -4,7 +4,7 @@ use rusqlite::params;
 
 use crate::domain::{Area, Project, ProjectProgress, Task, View};
 use crate::error::Result;
-use crate::storage::db::{Database, TASK_COLUMNS};
+use crate::storage::db::{Database, PROJECT_COLUMNS, TASK_COLUMNS};
 
 #[derive(Debug, Clone, Default)]
 pub struct TodayView {
@@ -49,11 +49,21 @@ pub struct ViewCounts {
 // These rules apply to live tasks only: `select_live` and `counts` exclude the
 // Trash, whose tasks belong to no other view.
 
-/// Live tasks: everything not in the Trash.
-const LIVE: &str = "trashed_at IS NULL";
+/// Not in a trashed project. A trashed project takes its tasks out of every
+/// view, and the Trash lists the project in their place.
+macro_rules! outside_trashed_projects {
+    () => {
+        "(project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE trashed_at IS NOT NULL))"
+    };
+}
 
-/// TRASH: trashed tasks, whatever their status.
-const TRASH_WHERE: &str = "trashed_at IS NOT NULL";
+/// Live tasks: not trashed, and not in a trashed project.
+const LIVE: &str = concat!("trashed_at IS NULL AND ", outside_trashed_projects!());
+
+/// TRASH: tasks trashed on their own, whatever their status. Tasks of a
+/// trashed project are represented by the project
+/// (`Database::list_trashed_projects`).
+const TRASH_WHERE: &str = concat!("trashed_at IS NOT NULL AND ", outside_trashed_projects!());
 
 /// INBOX: unassigned tasks with no project, area, date, or Someday flag.
 const INBOX_WHERE: &str = "status = 'open'
@@ -275,39 +285,14 @@ impl<'a> QueryEngine<'a> {
             }
 
             // 2. Search Projects
-            let mut proj_stmt = conn.prepare(
-                "SELECT id, area_id, title, notes, start_date, time_of_day, is_someday,
-                        deadline, status, completed_at, sort_order, created_at, updated_at
-                 FROM projects
-                 WHERE status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
-                 ORDER BY sort_order ASC LIMIT 10",
-            )?;
-            let mut projects = Vec::new();
-            let mut rows = proj_stmt.query(params![pattern])?;
-            while let Some(row) = rows.next()? {
-                let start_date_str: Option<String> = row.get(4)?;
-                let start_date = start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
-                let is_someday_int: i64 = row.get(6)?;
-                let deadline_str: Option<String> = row.get(7)?;
-                let deadline = deadline_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
-                let status_str: String = row.get(8)?;
-
-                projects.push(Project {
-                    id: row.get(0)?,
-                    area_id: row.get(1)?,
-                    title: row.get(2)?,
-                    notes: row.get(3)?,
-                    start_date,
-                    time_of_day: row.get(5)?,
-                    is_someday: is_someday_int == 1,
-                    deadline,
-                    status: crate::domain::Status::from_str_loose(&status_str),
-                    completed_at: row.get(9)?,
-                    sort_order: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
-                });
-            }
+            let mut proj_stmt = conn.prepare(&format!(
+                "SELECT {PROJECT_COLUMNS} FROM projects
+                 WHERE trashed_at IS NULL AND status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
+                 ORDER BY sort_order ASC LIMIT 10"
+            ))?;
+            let projects = proj_stmt
+                .query_map(params![pattern], Database::map_project_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             // 3. Search Areas
             let mut area_stmt = conn.prepare(

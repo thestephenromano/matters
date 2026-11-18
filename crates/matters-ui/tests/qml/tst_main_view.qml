@@ -25,6 +25,7 @@ Item {
         readonly property var list: view.taskList
 
         function init() {
+            view.hideUndo();
             controller.selectView("today");
             list.expandedTaskId = "";
             wait(0);
@@ -124,6 +125,57 @@ Item {
 
             controller.selectView("today");
             waitForRow("delete-me");
+        }
+
+        function test_undo_puts_a_trashed_task_back() {
+            const row = addToToday("oops");
+            mouseMove(row, row.width / 2, 24);
+            const button = findChild(row, "deleteButton");
+            tryVerify(() => button.visible, 1000);
+            mouseClick(button);
+            waitForNoRow("oops");
+
+            const toast = findChild(view, "undoToast");
+            verify(toast.visible, "the undo notice shows");
+            mouseClick(findChild(toast, "undoButton"));
+            waitForRow("oops");
+            verify(!toast.visible, "the notice goes away once used");
+        }
+
+        function projectIds(json) {
+            return JSON.parse(json).map(p => p.id);
+        }
+
+        function test_project_moves_to_the_trash_with_its_tasks_and_back() {
+            controller.createProject("Shed");
+            const id = JSON.parse(controller.projectsJson).find(p => p.title === "Shed").id;
+            controller.selectProject(id);
+            controller.addTask("paint the shed");
+            waitForRow("paint the shed");
+
+            // Move to Trash leaves the project; Undo returns to it.
+            mouseClick(findChild(view, "trashProjectButton"));
+            compare(controller.currentView, "inbox");
+            verify(projectIds(controller.projectsJson).indexOf(id) < 0, "gone from the sidebar");
+            const toast = findChild(view, "undoToast");
+            verify(toast.visible);
+            mouseClick(findChild(toast, "undoButton"));
+            compare(controller.currentView, "project");
+            compare(controller.currentProjectId, id);
+            waitForRow("paint the shed");
+
+            // In the Trash the project stands for its tasks, and Put Back
+            // restores both.
+            mouseClick(findChild(view, "trashProjectButton"));
+            controller.selectView("trash");
+            const trashed = findChild(view, "trashedProject");
+            verify(trashed !== null && trashed.visible, "the Trash lists the project");
+            waitForNoRow("paint the shed"); // its tasks are not listed one by one
+            verify(findChild(view, "emptyTrashButton").visible);
+            mouseClick(findChild(trashed, "restoreProjectButton"));
+            tryVerify(() => projectIds(controller.projectsJson).indexOf(id) >= 0, 1000, "back in the sidebar");
+            controller.selectProject(id);
+            waitForRow("paint the shed");
         }
 
         function test_empty_trash_asks_before_deleting_for_good() {
