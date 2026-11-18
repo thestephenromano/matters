@@ -74,25 +74,49 @@ fn first_and_consecutive_kept_tasks_keep_their_order() {
 }
 
 #[test]
-fn rescheduled_or_deleted_tasks_leave_immediately() {
+fn rescheduled_or_trashed_tasks_leave_immediately() {
     let mut f = Fixture::new(&["a", "b", "c"]);
     f.show(View::Today);
 
     let mut b = f.db.get_task("b").unwrap().unwrap();
     b.apply_schedule(&Schedule::Someday, today());
     f.db.update_task(&b).unwrap();
-    f.db.delete_task("c").unwrap();
+    f.db.trash_task("c").unwrap();
     assert_eq!(f.show(View::Today), ["a"]);
 }
 
 #[test]
-fn a_kept_task_that_is_then_deleted_disappears() {
+fn a_kept_task_that_is_then_trashed_disappears() {
     let mut f = Fixture::new(&["a", "b"]);
     f.show(View::Today);
     f.db.complete_task("a").unwrap();
     assert_eq!(f.show(View::Today), ["a", "b"]);
-    f.db.delete_task("a").unwrap();
+    f.db.trash_task("a").unwrap();
     assert_eq!(f.show(View::Today), ["b"]);
+}
+
+#[test]
+fn in_the_trash_ticking_keeps_a_task_and_putting_back_removes_it() {
+    let mut f = Fixture::new(&["a", "b", "c"]);
+    for id in ["a", "b", "c"] {
+        f.db.trash_task(id).unwrap();
+    }
+    let shown = f.show(View::Trash);
+    assert_eq!(shown.len(), 3);
+
+    // Ticking changes nothing about Trash membership.
+    f.db.complete_task("a").unwrap();
+    assert_eq!(f.show(View::Trash), shown);
+    assert_eq!(f.status("a"), Status::Completed);
+
+    // Put Back takes effect at once, even for a task kept by a tick.
+    f.db.restore_task("a").unwrap();
+    f.db.restore_task("b").unwrap();
+    assert_eq!(f.show(View::Trash), ["c"]);
+
+    // Emptying the Trash removes what is left.
+    f.db.empty_trash().unwrap();
+    assert!(f.show(View::Trash).is_empty());
 }
 
 #[test]

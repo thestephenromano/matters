@@ -25,6 +25,12 @@ use uuid::Uuid;
 
 use crate::task_row::TaskRow;
 
+/// The sidebar views GTK offers. GTK has no way to delete a task, so it has no
+/// Trash either: Put Back and Empty Trash are Qt-only (SPEC §3.7).
+pub(crate) fn nav_views() -> Vec<View> {
+    View::sidebar().into_iter().filter(|v| *v != View::Trash).collect()
+}
+
 pub(crate) struct State {
     pub(crate) view: View,
     /// The date the window was last built for.
@@ -76,7 +82,7 @@ impl Ui {
         nav_list.set_selection_mode(SelectionMode::Single);
         nav_list.add_css_class("navigation-sidebar");
         let mut nav_counts = Vec::new();
-        for view in View::sidebar() {
+        for view in nav_views() {
             let icon = match view {
                 View::Inbox => "📥",
                 View::Today => "⭐",
@@ -84,7 +90,7 @@ impl Ui {
                 View::Anytime => "📦",
                 View::Someday => "🗃️",
                 View::Logbook => "📓",
-                View::Project(_) => "",
+                View::Trash | View::Project(_) => "",
             };
             let row = ActionRow::builder()
                 .title(format!("{icon} {}", view.title()))
@@ -193,7 +199,7 @@ impl Ui {
             let ui = ui.clone();
             nav_list.connect_row_activated(move |_, row| {
                 let index = usize::try_from(row.index()).ok();
-                if let Some(view) = index.and_then(|i| View::sidebar().get(i).cloned()) {
+                if let Some(view) = index.and_then(|i| nav_views().get(i).cloned()) {
                     ui.select(view);
                 }
             });
@@ -386,7 +392,7 @@ impl Ui {
             }
             other => {
                 self.proj_list.unselect_all();
-                let row = View::sidebar().iter().position(|v| v == other);
+                let row = nav_views().iter().position(|v| v == other);
                 if let Some(row) = row.and_then(|i| self.nav_list.row_at_index(i as i32)) {
                     self.nav_list.select_row(Some(&row));
                 }

@@ -101,6 +101,13 @@ The sidebar provides access to the foundational GTD buckets:
 
 ### 7. Trash
 * Soft-deleted items, recoverable until explicitly emptied.
+* Deleting a task moves it to the Trash. It keeps everything about it (status, schedule, project, notes, checklist), and is hidden from every other view, the sidebar counts, project progress and Quick Find.
+* **Put Back** returns a task exactly where it was. A trashed task that was completed returns to the Logbook.
+* Moving a project to the Trash takes its tasks with it: they leave every view, and the Trash lists the project in their place. Put Back restores the project and its tasks as they were. A task trashed on its own before its project stays in the Trash.
+* After a task or project is moved to the Trash, a notice offers **Undo** for 5 seconds. Undoing a project also reopens it.
+* **Empty Trash** permanently deletes everything in the Trash, including trashed projects with their headings and tasks, after a confirmation. It is the only way a task or project is destroyed.
+* Listed most recently trashed first, projects above tasks. The sidebar shows no count for the Trash.
+* Trash is stored as `trashed_at` on tasks and projects, separate from `status`. Only the `trash_*` and `restore_*` operations change it; saving a task or project never does.
 
 ### Capturing into a view
 A task typed into the quick-add field is placed where the current view can show it, when the model allows:
@@ -114,11 +121,12 @@ A task typed into the quick-add field is placed where the current view can show 
 | Project | Filed in that project, unscheduled |
 | Anytime | Inbox: Anytime only lists tasks filed under an area or project |
 | Logbook | Inbox: the Logbook only lists finished tasks |
+| Trash | Inbox: the Trash only lists trashed tasks |
 
 This rule lives in `matters_core::View::new_task` and is shared by every frontend.
 
 ### Completing a task
-Ticking a task done (or not done) leaves it where it is in the current list, shown with its new state, until the user navigates away, including re-selecting the same view. This lets the user see what they finished and undo a misclick. Badge counts update immediately. Any other change that takes a task out of the view, such as rescheduling, moving or deleting it, applies at once. This rule lives in `matters_core::Visit`.
+Ticking a task done (or not done) leaves it where it is in the current list, shown with its new state, until the user navigates away, including re-selecting the same view. This lets the user see what they finished and undo a misclick. Badge counts update immediately. Any other change that takes a task out of the view, such as rescheduling, moving, trashing or putting it back, applies at once. This rule lives in `matters_core::Visit`.
 
 ---
 
@@ -203,11 +211,12 @@ CREATE TABLE IF NOT EXISTS projects (
     start_date TEXT,               -- ISO 8601 'YYYY-MM-DD', NULL = no date
     time_of_day TEXT,              -- NULL or 'evening'
     deadline TEXT,                 -- ISO 8601 'YYYY-MM-DD'
-    status TEXT NOT NULL DEFAULT 'open', -- 'open', 'completed', 'canceled', 'trashed'
+    status TEXT NOT NULL DEFAULT 'open', -- 'open', 'completed', 'canceled'
     completed_at INTEGER,
     sort_order REAL NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    trashed_at INTEGER             -- NULL = not in the Trash (added in schema v3)
 );
 
 CREATE TABLE IF NOT EXISTS headings (
@@ -230,11 +239,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     time_of_day TEXT,              -- NULL or 'evening'
     is_someday INTEGER NOT NULL DEFAULT 0,
     deadline TEXT,                 -- ISO 8601 'YYYY-MM-DD'
-    status TEXT NOT NULL DEFAULT 'open', -- 'open', 'completed', 'canceled', 'trashed'
+    status TEXT NOT NULL DEFAULT 'open', -- 'open', 'completed', 'canceled'
     completed_at INTEGER,
     sort_order REAL NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    trashed_at INTEGER             -- NULL = not in the Trash (added in schema v2)
 );
 
 CREATE TABLE IF NOT EXISTS checklist_items (
@@ -262,6 +272,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_start_date ON tasks(start_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_trashed ON tasks(trashed_at);
 ```
 
 ---

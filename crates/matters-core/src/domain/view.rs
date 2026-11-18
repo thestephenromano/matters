@@ -15,12 +15,13 @@ pub enum View {
     Anytime,
     Someday,
     Logbook,
+    Trash,
     Project(String),
 }
 
 impl View {
     /// The fixed sidebar views, in display order.
-    pub fn sidebar() -> [View; 6] {
+    pub fn sidebar() -> [View; 7] {
         [
             View::Inbox,
             View::Today,
@@ -28,6 +29,7 @@ impl View {
             View::Anytime,
             View::Someday,
             View::Logbook,
+            View::Trash,
         ]
     }
 
@@ -40,6 +42,7 @@ impl View {
             View::Anytime => "anytime",
             View::Someday => "someday",
             View::Logbook => "logbook",
+            View::Trash => "trash",
             View::Project(_) => "project",
         }
     }
@@ -53,6 +56,7 @@ impl View {
             "anytime" => View::Anytime,
             "someday" => View::Someday,
             "logbook" => View::Logbook,
+            "trash" => View::Trash,
             "project" => match project_id {
                 Some(id) if !id.is_empty() => View::Project(id.to_string()),
                 _ => return None,
@@ -71,6 +75,7 @@ impl View {
             View::Anytime => "Anytime",
             View::Someday => "Someday",
             View::Logbook => "Logbook",
+            View::Trash => "Trash",
             View::Project(_) => "Project",
         }
     }
@@ -84,12 +89,16 @@ impl View {
 
     /// The view to open to show `task`, as a search result for example.
     ///
-    /// A project's tasks live in the project; finished tasks in the Logbook;
+    /// Trashed tasks are only in the Trash. Otherwise a project's tasks live
+    /// in the project; finished tasks in the Logbook;
     /// otherwise the task's schedule decides (Someday, Upcoming, Today), then
     /// whether it is filed under an area (Anytime) or not (Inbox). An undated
     /// task with a due deadline is shown in Today even when it is also listed
     /// in the Inbox.
     pub fn containing(task: &Task, today: NaiveDate) -> View {
+        if task.is_trashed() {
+            return View::Trash;
+        }
         if let Some(project_id) = &task.project_id {
             return View::Project(project_id.clone());
         }
@@ -114,8 +123,9 @@ impl View {
     /// The task lands in the view it was typed into wherever the model allows:
     /// Today and Someday schedule it accordingly, Upcoming schedules it for
     /// tomorrow, a project view files it in that project. Anytime only lists
-    /// tasks that belong to an area or project, and the Logbook only lists
-    /// finished tasks, so captures there go to the Inbox (SPEC §3.1: a task
+    /// tasks that belong to an area or project, the Logbook only lists
+    /// finished tasks and the Trash only trashed ones, so captures there go to
+    /// the Inbox (SPEC §3.1: a task
     /// created without an explicit project or date defaults to the Inbox).
     pub fn new_task(&self, id: impl Into<String>, title: impl Into<String>, today: NaiveDate) -> Task {
         let mut task = Task::new(id, title, 0.0);
@@ -123,7 +133,9 @@ impl View {
             View::Today => Schedule::Today { evening: false },
             View::Upcoming => Schedule::Date(today.checked_add_days(Days::new(1)).unwrap_or(today)),
             View::Someday => Schedule::Someday,
-            View::Inbox | View::Anytime | View::Logbook | View::Project(_) => Schedule::None,
+            View::Inbox | View::Anytime | View::Logbook | View::Trash | View::Project(_) => {
+                Schedule::None
+            }
         };
         task.apply_schedule(&schedule, today);
         task.project_id = self.project_id().map(str::to_string);

@@ -4,7 +4,7 @@ use rusqlite::params;
 
 use crate::domain::{Area, Project, ProjectProgress, Task, View};
 use crate::error::Result;
-use crate::storage::db::Database;
+use crate::storage::db::{Database, PROJECT_COLUMNS, TASK_COLUMNS};
 
 #[derive(Debug, Clone, Default)]
 pub struct TodayView {
@@ -43,14 +43,27 @@ pub struct ViewCounts {
     pub logbook: usize,
 }
 
-/// Columns read by [`Database::map_task_row`], in its expected order.
-const TASK_COLUMNS: &str = "id, area_id, project_id, heading_id, title, notes, start_date,
-     time_of_day, is_someday, deadline, status, completed_at, sort_order,
-     created_at, updated_at";
-
 // Membership rule for each view, written once and shared by the list query and
 // the count query so the sidebar badge always matches what the view shows.
 // `?1` is the reference date (YYYY-MM-DD) wherever a rule depends on it.
+// These rules apply to live tasks only: `select_live` and `counts` exclude the
+// Trash, whose tasks belong to no other view.
+
+/// Not in a trashed project. A trashed project takes its tasks out of every
+/// view, and the Trash lists the project in their place.
+macro_rules! outside_trashed_projects {
+    () => {
+        "(project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE trashed_at IS NOT NULL))"
+    };
+}
+
+/// Live tasks: not trashed, and not in a trashed project.
+const LIVE: &str = concat!("trashed_at IS NULL AND ", outside_trashed_projects!());
+
+/// TRASH: tasks trashed on their own, whatever their status. Tasks of a
+/// trashed project are represented by the project
+/// (`Database::list_trashed_projects`).
+const TRASH_WHERE: &str = concat!("trashed_at IS NOT NULL AND ", outside_trashed_projects!());
 
 /// INBOX: unassigned tasks with no project, area, date, or Someday flag.
 const INBOX_WHERE: &str = "status = 'open'
@@ -86,6 +99,9 @@ const MANUAL_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
 /// Logbook order: most recently finished first.
 const LOGBOOK_ORDER: &str = "completed_at DESC, updated_at DESC, id ASC";
 
+/// Trash order: most recently trashed first.
+const TRASH_ORDER: &str = "trashed_at DESC, id ASC";
+
 pub struct QueryEngine<'a> {
     db: &'a Database,
 }
@@ -93,6 +109,11 @@ pub struct QueryEngine<'a> {
 impl<'a> QueryEngine<'a> {
     pub fn new(db: &'a Database) -> Self {
         Self { db }
+    }
+
+    /// Live tasks matching a view rule.
+    fn select_live(&self, rule: &str, order: &str, params: impl rusqlite::Params) -> Result<Vec<Task>> {
+        self.select_tasks(&format!("{LIVE} AND ({rule})"), order, params)
     }
 
     fn select_tasks(&self, where_clause: &str, order: &str, params: impl rusqlite::Params) -> Result<Vec<Task>> {
@@ -123,7 +144,8 @@ impl<'a> QueryEngine<'a> {
             View::Anytime => self.anytime(reference_date)?,
             View::Someday => self.someday_tasks()?,
             // Every finished task, so the list matches its badge count.
-            View::Logbook => self.select_tasks(LOGBOOK_WHERE, LOGBOOK_ORDER, [])?,
+            View::Logbook => self.select_live(LOGBOOK_WHERE, LOGBOOK_ORDER, [])?,
+            View::Trash => self.trash()?,
             View::Project(id) => self.project_tasks(id)?,
         })
     }
@@ -140,7 +162,7 @@ impl<'a> QueryEngine<'a> {
                 COUNT(CASE WHEN {ANYTIME_WHERE} THEN 1 END),
                 COUNT(CASE WHEN {SOMEDAY_WHERE} THEN 1 END),
                 COUNT(CASE WHEN {LOGBOOK_WHERE} THEN 1 END)
-             FROM tasks"
+             FROM tasks WHERE {LIVE}"
         );
         self.db.with_conn(|conn| {
             Ok(conn.query_row(&sql, params![ref_str], |r| {
@@ -158,14 +180,14 @@ impl<'a> QueryEngine<'a> {
     }
 
     pub fn inbox(&self) -> Result<Vec<Task>> {
-        self.select_tasks(INBOX_WHERE, MANUAL_ORDER, [])
+        self.select_live(INBOX_WHERE, MANUAL_ORDER, [])
     }
 
     /// Today's tasks, split into daytime and This Evening.
     pub fn today(&self, reference_date: NaiveDate) -> Result<TodayView> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
         let (evening, daytime) = self
-            .select_tasks(TODAY_WHERE, MANUAL_ORDER, params![ref_str])?
+            .select_live(TODAY_WHERE, MANUAL_ORDER, params![ref_str])?
             .into_iter()
             .partition(Task::is_evening);
         Ok(TodayView { daytime, evening })
@@ -174,7 +196,7 @@ impl<'a> QueryEngine<'a> {
     /// Future tasks grouped by calendar date.
     pub fn upcoming(&self, reference_date: NaiveDate) -> Result<Vec<UpcomingGroup>> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
-        let tasks = self.select_tasks(
+        let tasks = self.select_live(
             UPCOMING_WHERE,
             &format!("start_date ASC, {MANUAL_ORDER}"),
             params![ref_str],
@@ -194,16 +216,16 @@ impl<'a> QueryEngine<'a> {
 
     pub fn anytime(&self, reference_date: NaiveDate) -> Result<Vec<Task>> {
         let ref_str = reference_date.format("%Y-%m-%d").to_string();
-        self.select_tasks(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])
+        self.select_live(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])
     }
 
     pub fn someday_tasks(&self) -> Result<Vec<Task>> {
-        self.select_tasks(SOMEDAY_WHERE, MANUAL_ORDER, [])
+        self.select_live(SOMEDAY_WHERE, MANUAL_ORDER, [])
     }
 
     /// The `limit` most recently finished tasks.
     pub fn logbook(&self, limit: usize) -> Result<Vec<Task>> {
-        self.select_tasks(
+        self.select_live(
             LOGBOOK_WHERE,
             &format!("{LOGBOOK_ORDER} LIMIT ?1"),
             params![i64::try_from(limit).unwrap_or(i64::MAX)],
@@ -211,7 +233,12 @@ impl<'a> QueryEngine<'a> {
     }
 
     pub fn project_tasks(&self, project_id: &str) -> Result<Vec<Task>> {
-        self.select_tasks(PROJECT_WHERE, MANUAL_ORDER, params![project_id])
+        self.select_live(PROJECT_WHERE, MANUAL_ORDER, params![project_id])
+    }
+
+    /// Every trashed task, most recently trashed first.
+    pub fn trash(&self) -> Result<Vec<Task>> {
+        self.select_tasks(TRASH_WHERE, TRASH_ORDER, [])
     }
 
     /// PROJECT PROGRESS:
@@ -223,7 +250,7 @@ impl<'a> QueryEngine<'a> {
                     COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
                     COUNT(CASE WHEN status IN ('open', 'completed') THEN 1 END) as total
                  FROM tasks
-                 WHERE project_id = ?1",
+                 WHERE project_id = ?1 AND trashed_at IS NULL",
             )?;
 
             let row = stmt.query_row(params![project_id], |r| {
@@ -246,14 +273,11 @@ impl<'a> QueryEngine<'a> {
 
         self.db.with_conn(|conn| {
             // 1. Search Tasks
-            let mut task_stmt = conn.prepare(
-                "SELECT id, area_id, project_id, heading_id, title, notes, start_date,
-                        time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                        created_at, updated_at
-                 FROM tasks
-                 WHERE status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
-                 ORDER BY sort_order ASC LIMIT 20",
-            )?;
+            let mut task_stmt = conn.prepare(&format!(
+                "SELECT {TASK_COLUMNS} FROM tasks
+                 WHERE {LIVE} AND status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
+                 ORDER BY sort_order ASC LIMIT 20"
+            ))?;
             let task_rows = task_stmt.query_map(params![pattern], Database::map_task_row)?;
             let mut tasks = Vec::new();
             for r in task_rows {
@@ -261,39 +285,14 @@ impl<'a> QueryEngine<'a> {
             }
 
             // 2. Search Projects
-            let mut proj_stmt = conn.prepare(
-                "SELECT id, area_id, title, notes, start_date, time_of_day, is_someday,
-                        deadline, status, completed_at, sort_order, created_at, updated_at
-                 FROM projects
-                 WHERE status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
-                 ORDER BY sort_order ASC LIMIT 10",
-            )?;
-            let mut projects = Vec::new();
-            let mut rows = proj_stmt.query(params![pattern])?;
-            while let Some(row) = rows.next()? {
-                let start_date_str: Option<String> = row.get(4)?;
-                let start_date = start_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
-                let is_someday_int: i64 = row.get(6)?;
-                let deadline_str: Option<String> = row.get(7)?;
-                let deadline = deadline_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
-                let status_str: String = row.get(8)?;
-
-                projects.push(Project {
-                    id: row.get(0)?,
-                    area_id: row.get(1)?,
-                    title: row.get(2)?,
-                    notes: row.get(3)?,
-                    start_date,
-                    time_of_day: row.get(5)?,
-                    is_someday: is_someday_int == 1,
-                    deadline,
-                    status: crate::domain::Status::from_str_loose(&status_str),
-                    completed_at: row.get(9)?,
-                    sort_order: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
-                });
-            }
+            let mut proj_stmt = conn.prepare(&format!(
+                "SELECT {PROJECT_COLUMNS} FROM projects
+                 WHERE trashed_at IS NULL AND status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
+                 ORDER BY sort_order ASC LIMIT 10"
+            ))?;
+            let projects = proj_stmt
+                .query_map(params![pattern], Database::map_project_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             // 3. Search Areas
             let mut area_stmt = conn.prepare(

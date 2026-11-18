@@ -55,6 +55,8 @@ pub mod qobject {
         #[qproperty(i32, someday_count)]
         #[qproperty(i32, logbook_count)]
         #[qproperty(QString, projects_json)]
+        /// Trashed projects, listed in the Trash view.
+        #[qproperty(QString, trashed_projects_json)]
         #[qproperty(QString, search_results_json)]
         #[qproperty(QString, error_message)]
         #[qproperty(i32, revision)]
@@ -71,8 +73,22 @@ pub mod qobject {
         fn add_task(self: Pin<&mut AppController>, title: &QString);
         #[qinvokable]
         fn toggle_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Move a task to the Trash (recoverable until the Trash is emptied).
         #[qinvokable]
-        fn delete_task(self: Pin<&mut AppController>, task_id: &QString);
+        fn trash_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Put a trashed task back where it was.
+        #[qinvokable]
+        fn restore_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Permanently delete everything in the Trash.
+        #[qinvokable]
+        fn empty_trash(self: Pin<&mut AppController>);
+        /// Move a project and its tasks to the Trash. If it is the open view,
+        /// the Inbox is shown instead.
+        #[qinvokable]
+        fn trash_project(self: Pin<&mut AppController>, project_id: &QString);
+        /// Put a trashed project back with its tasks.
+        #[qinvokable]
+        fn restore_project(self: Pin<&mut AppController>, project_id: &QString);
         #[qinvokable]
         fn schedule_task(self: Pin<&mut AppController>, task_id: &QString, when: &QString);
         #[qinvokable]
@@ -197,6 +213,7 @@ pub struct AppControllerRust {
     someday_count: i32,
     logbook_count: i32,
     projects_json: QString,
+    trashed_projects_json: QString,
     search_results_json: QString,
     error_message: QString,
     revision: i32,
@@ -224,6 +241,7 @@ impl Default for AppControllerRust {
             someday_count: 0,
             logbook_count: 0,
             projects_json: QString::from("[]"),
+            trashed_projects_json: QString::from("[]"),
             search_results_json: QString::from("[]"),
             error_message: QString::default(),
             revision: 0,
@@ -279,8 +297,32 @@ impl qobject::AppController {
         self.finish(result);
     }
 
-    pub fn delete_task(self: Pin<&mut Self>, task_id: &QString) {
-        let result = self.db.delete_task(&String::from(task_id));
+    pub fn trash_task(self: Pin<&mut Self>, task_id: &QString) {
+        let result = self.db.trash_task(&String::from(task_id));
+        self.finish(result);
+    }
+
+    pub fn restore_task(self: Pin<&mut Self>, task_id: &QString) {
+        let result = self.db.restore_task(&String::from(task_id));
+        self.finish(result);
+    }
+
+    pub fn empty_trash(self: Pin<&mut Self>) {
+        let result = self.db.empty_trash().map(drop);
+        self.finish(result);
+    }
+
+    pub fn trash_project(self: Pin<&mut Self>, project_id: &QString) {
+        let id = String::from(project_id);
+        let result = self.db.trash_project(&id);
+        if result.is_ok() && self.view.project_id() == Some(id.as_str()) {
+            return self.set_view(View::Inbox);
+        }
+        self.finish(result);
+    }
+
+    pub fn restore_project(self: Pin<&mut Self>, project_id: &QString) {
+        let result = self.db.restore_project(&String::from(project_id));
         self.finish(result);
     }
 
@@ -384,10 +426,11 @@ impl qobject::AppController {
     }
 
     fn refresh_sidebar_and_header(mut self: Pin<&mut Self>) -> matters_core::Result<()> {
-        let (counts, projects, title, progress) = {
+        let (counts, projects, trashed_projects, title, progress) = {
             let engine = QueryEngine::new(&self.db);
             let counts = engine.counts(self.day.day())?;
             let projects = self.db.list_projects()?;
+            let trashed_projects = self.db.list_trashed_projects()?;
             let (title, progress) = match &self.view {
                 View::Project(id) => (
                     self.db.get_project(id)?.map(|p| p.title).unwrap_or_else(|| "Project".into()),
@@ -395,7 +438,7 @@ impl qobject::AppController {
                 ),
                 other => (other.title().to_string(), 0.0),
             };
-            (counts, projects, title, progress)
+            (counts, projects, trashed_projects, title, progress)
         };
 
         let count = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
@@ -406,6 +449,7 @@ impl qobject::AppController {
         self.as_mut().set_someday_count(count(counts.someday));
         self.as_mut().set_logbook_count(count(counts.logbook));
         self.as_mut().set_projects_json(to_json(&projects));
+        self.as_mut().set_trashed_projects_json(to_json(&trashed_projects));
         self.as_mut().set_current_title(QString::from(title.as_str()));
         self.as_mut().set_current_project_progress(progress);
         Ok(())
