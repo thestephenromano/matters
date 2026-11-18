@@ -5,8 +5,9 @@
 //! * a task's home list (the Inbox, its area or its project) uses
 //!   `tasks.sort_order`;
 //! * Today keeps its own order, `tasks.today_order`, so planning the day never
-//!   rearranges a project, and the reverse; This Evening is ordered within
-//!   itself;
+//!   rearranges a project, and the reverse. This Evening is ordered within
+//!   itself; moving a task past its boundary moves the task into the other
+//!   section, switching This Evening on or off (decided on #53);
 //! * the sidebar orders projects and areas by their `sort_order`.
 //!
 //! A moved item takes the midpoint of its new neighbours' keys. When the
@@ -42,8 +43,13 @@ pub fn place_task(db: &Database, view: &View, today: NaiveDate, id: &str, after:
 }
 
 /// Move a task `step` places up (negative) or down (positive) in `view`,
-/// stopping at the ends of its list (or of its Today section).
+/// stopping at the ends of the list. In Today, a task moved past the This
+/// Evening boundary goes into the other section ([`place_in_today`]): one
+/// step down from the last daytime task is the top of This Evening.
 pub fn move_task(db: &Database, view: &View, today: NaiveDate, id: &str, step: isize) -> Result<()> {
+    if *view == View::Today {
+        return move_in_today(db, today, id, step);
+    }
     let (_, list) = section_of(db, view, today, id)?;
     let from = list.iter().position(|t| t.id == id).expect("section_of includes the task");
     let to = from.saturating_add_signed(step).min(list.len() - 1);
@@ -53,6 +59,68 @@ pub fn move_task(db: &Database, view: &View, today: NaiveDate, id: &str, step: i
     let rest: Vec<&Task> = list.iter().filter(|t| t.id != id).collect();
     let after = to.checked_sub(1).map(|i| rest[i].id.as_str());
     place_task(db, view, today, id, after)
+}
+
+fn move_in_today(db: &Database, today: NaiveDate, id: &str, step: isize) -> Result<()> {
+    let list = QueryEngine::new(db).tasks_in(&View::Today, today)?;
+    let Some(task) = list.iter().find(|t| t.id == id) else {
+        return Err(invalid(format!("task '{id}' is not in Today")));
+    };
+    let evening = task.is_evening();
+    let section: Vec<&str> = list.iter().filter(|t| t.is_evening() == evening).map(|t| t.id.as_str()).collect();
+    let other: Vec<&str> = list.iter().filter(|t| t.is_evening() != evening).map(|t| t.id.as_str()).collect();
+    let from = section.iter().position(|t| *t == id).expect("the task is in its own section") as isize;
+    let target = from + step;
+    let len = section.len() as isize;
+
+    if (0..len).contains(&target) {
+        if target == from {
+            return Ok(());
+        }
+        let rest: Vec<&str> = section.iter().copied().filter(|t| *t != id).collect();
+        let after = (target as usize).checked_sub(1).map(|i| rest[i]);
+        return place_task(db, &View::Today, today, id, after);
+    }
+    if target >= len && !evening {
+        // Down past the last daytime task: into This Evening, `k` places
+        // below its top.
+        let k = ((target - len) as usize).min(other.len());
+        return place_in_today(db, today, id, true, k.checked_sub(1).map(|i| other[i]));
+    }
+    if target < 0 && evening {
+        // Up past the first evening task: into the daytime tasks, `k` places
+        // above their end.
+        let k = (-target - 1) as usize;
+        let at = other.len().saturating_sub(k);
+        return place_in_today(db, today, id, false, at.checked_sub(1).map(|i| other[i]));
+    }
+    Ok(()) // already at the top of Today or the bottom of This Evening
+}
+
+/// Put a Today task in the daytime section or This Evening, right after
+/// `after` within that section (first when `None`). Changing section changes
+/// only This Evening: the task's date is kept, so an overdue task stays
+/// overdue. A task listed in Today only because of a due deadline has no
+/// start date; moving it into This Evening schedules it for `today`.
+pub fn place_in_today(db: &Database, today: NaiveDate, id: &str, evening: bool, after: Option<&str>) -> Result<()> {
+    let list = QueryEngine::new(db).tasks_in(&View::Today, today)?;
+    let Some(task) = list.iter().find(|t| t.id == id) else {
+        return Err(invalid(format!("task '{id}' is not in Today")));
+    };
+    if let Some(after) = after {
+        if !list.iter().any(|t| t.id == after && t.is_evening() == evening && t.id != id) {
+            return Err(invalid(format!("'{after}' is not in the section '{id}' is moving to")));
+        }
+    }
+    if task.is_evening() != evening {
+        let mut task = task.clone();
+        task.time_of_day = evening.then(|| "evening".to_string());
+        if evening && task.start_date.is_none() {
+            task.start_date = Some(today);
+        }
+        db.update_task(&task)?;
+    }
+    place_task(db, &View::Today, today, id, after)
 }
 
 /// Move a project in the sidebar so it follows `after` (or comes first).

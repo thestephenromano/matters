@@ -149,7 +149,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Up` / `Down` | Task list | Moves list selection |
 | `Escape` | Task list, task editor | Closes the open task, then clears the selection; returns focus to the list |
 | `Ctrl + Z` | After moving to Trash | Undoes, while the Undo notice shows |
-| `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list |
+| `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list. In Today, moving past the This Evening heading moves the task into or out of This Evening (dragging does the same) |
 
 ---
 

@@ -2,7 +2,7 @@
 //! its own order, and only the ordering operations change it.
 
 use chrono::NaiveDate;
-use matters_core::ordering::{move_task, place_area, place_project, place_task};
+use matters_core::ordering::{move_task, place_area, place_in_today, place_project, place_task};
 use matters_core::{Area, Database, Project, QueryEngine, Schedule, Task, View};
 
 fn today() -> NaiveDate {
@@ -109,23 +109,81 @@ fn today_keeps_its_own_order() {
     assert_eq!(ids(&db, &View::Today), ["c", "a", "b"], "and arranging the project leaves Today alone");
 }
 
-#[test]
-fn this_evening_is_ordered_within_itself() {
-    let db = Database::open_in_memory().unwrap();
-    for (i, (id, evening)) in [("d1", false), ("d2", false), ("e1", true), ("e2", true)].iter().enumerate() {
+fn today_with(db: &Database, tasks: &[(&str, bool)]) {
+    for (i, (id, evening)) in tasks.iter().enumerate() {
         let mut t = Task::new(*id, *id, 0.0);
         t.created_at = i as i64;
         t.apply_schedule(&Schedule::Today { evening: *evening }, today());
         db.create_task(&t).unwrap();
     }
+}
+
+fn evening_of(db: &Database, id: &str) -> bool {
+    db.get_task(id).unwrap().unwrap().is_evening()
+}
+
+#[test]
+fn this_evening_is_ordered_within_itself() {
+    let db = Database::open_in_memory().unwrap();
+    today_with(&db, &[("d1", false), ("d2", false), ("e1", true), ("e2", true)]);
     assert_eq!(ids(&db, &View::Today), ["d1", "d2", "e1", "e2"]);
 
-    move_task(&db, &View::Today, today(), "e2", -10).unwrap();
-    assert_eq!(ids(&db, &View::Today), ["d1", "d2", "e2", "e1"], "stops at the top of This Evening");
-    move_task(&db, &View::Today, today(), "d1", 10).unwrap();
-    assert_eq!(ids(&db, &View::Today), ["d2", "d1", "e2", "e1"], "stops at the end of the daytime tasks");
+    move_task(&db, &View::Today, today(), "e2", -1).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["d1", "d2", "e2", "e1"]);
+    assert!(evening_of(&db, "e2"), "moving within This Evening keeps it there");
 
-    assert!(place_task(&db, &View::Today, today(), "e1", Some("d1")).is_err(), "no move across sections");
+    assert!(place_task(&db, &View::Today, today(), "e1", Some("d1")).is_err(),
+            "place_task never changes a task's section");
+}
+
+#[test]
+fn moving_past_the_this_evening_boundary_changes_section() {
+    let db = Database::open_in_memory().unwrap();
+    // The reported case: one daytime task above two evening tasks.
+    today_with(&db, &[("d1", false), ("e1", true), ("e2", true)]);
+
+    move_task(&db, &View::Today, today(), "d1", 1).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["d1", "e1", "e2"], "first step: top of This Evening");
+    assert!(evening_of(&db, "d1"));
+    move_task(&db, &View::Today, today(), "d1", 1).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["e1", "d1", "e2"]);
+
+    move_task(&db, &View::Today, today(), "e1", -1).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["e1", "d1", "e2"], "first step up: last daytime task");
+    assert!(!evening_of(&db, "e1"));
+
+    // The ends of Today stop a move.
+    move_task(&db, &View::Today, today(), "e1", -1).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["e1", "d1", "e2"]);
+    assert!(!evening_of(&db, "e1"));
+    move_task(&db, &View::Today, today(), "e2", 1).unwrap();
+    assert!(evening_of(&db, "e2"));
+    assert_eq!(ids(&db, &View::Today), ["e1", "d1", "e2"]);
+}
+
+#[test]
+fn placing_in_the_other_section_keeps_the_date() {
+    let db = Database::open_in_memory().unwrap();
+    let overdue = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+    let mut late = Task::new("late", "late", 0.0);
+    late.start_date = Some(overdue);
+    db.create_task(&late).unwrap();
+    let mut due = Task::new("due", "due", 0.0);
+    due.deadline = Some(today()); // in Today only because of its deadline
+    db.create_task(&due).unwrap();
+    today_with(&db, &[("e1", true)]);
+
+    place_in_today(&db, today(), "late", true, Some("e1")).unwrap();
+    let late = db.get_task("late").unwrap().unwrap();
+    assert!(late.is_evening());
+    assert_eq!(late.start_date, Some(overdue), "an overdue task stays overdue");
+
+    place_in_today(&db, today(), "due", true, None).unwrap();
+    let due = db.get_task("due").unwrap().unwrap();
+    assert_eq!((due.is_evening(), due.start_date), (true, Some(today())));
+    assert_eq!(ids(&db, &View::Today), ["due", "e1", "late"]);
+
+    assert!(place_in_today(&db, today(), "due", false, Some("e1")).is_err(), "after must be in the target section");
 }
 
 #[test]

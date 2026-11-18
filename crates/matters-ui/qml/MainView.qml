@@ -95,10 +95,9 @@ Item {
         }
         taskModel.load(controller.currentView, controller.currentProjectId, controller.visit);
         if (pendingRevealId !== "") {
-            const row = taskModel.rowOf(pendingRevealId);
-            if (row >= 0) {
+            if (taskModel.rowOf(pendingRevealId) >= 0) {
                 taskListView.selectedTaskId = pendingRevealId;
-                taskListView.positionViewAtIndex(row, ListView.Contain);
+                scrollToTask(pendingRevealId);
             }
             pendingRevealId = "";
         }
@@ -108,8 +107,13 @@ Item {
     // directly or deferred, never from a row's handler during a list layout.
     function scrollToTask(id) {
         const row = taskModel.rowOf(id);
-        if (row >= 0)
-            taskListView.positionViewAtIndex(row, ListView.Contain);
+        if (row < 0)
+            return;
+        // Finish any pending layout (new rows, section headings) first, so the
+        // position is final. Safe here: never called from a row's handler
+        // during a layout.
+        taskListView.forceLayout();
+        taskListView.positionViewAtIndex(row, ListView.Contain);
     }
 
     property int loadedVisit: -1
@@ -162,47 +166,53 @@ Item {
     // item will land; dropping asks the core to place it there.
 
     // Where an item dragged from row `from` of `list` would land with the
-    // pointer at `scenePos`: { afterId, y } (y is the gap's position in the
-    // list's content), or null when it would stay where it is or the slot
-    // is not allowed. `idAt(i)` gives row ids; `mayNeighbour(i)` says whether
-    // the dragged item may sit next to row i (Today keeps This Evening apart).
-    function dropSlot(list, from, idAt, mayNeighbour, scenePos) {
+    // pointer at `scenePos`: { afterId, section, y }, or null when it would
+    // stay where it is. Rows belong to sections (`sectionAt(i)`; Today's are
+    // daytime and This Evening, other lists have one). The section is the one
+    // of the row under the pointer, or of the row below when the pointer is
+    // in a gap or on a section heading; `afterId` is the row it lands after
+    // within that section ("" when first). `y` is the gap's position in the
+    // list's content, for the drop line.
+    function dropSlot(list, from, idAt, sectionAt, scenePos) {
         const count = list.count;
         const p = list.contentItem.mapFromItem(null, scenePos.x, scenePos.y);
-        // The drop goes before the first row whose middle is below the pointer.
-        let k = count;
+        // r: the row under the pointer, else the first row below it (the drop
+        // then goes before it), else the last row.
+        let r = -1;
+        let before = true;
         for (let i = 0; i < count; ++i) {
             const item = list.itemAtIndex(i);
-            if (item && p.y < item.y + item.height / 2) {
-                k = i;
+            if (!item)
+                continue;
+            if (p.y < item.y) {
+                r = i;
+                before = true;
                 break;
             }
+            if (p.y < item.y + item.height) {
+                r = i;
+                before = p.y < item.y + item.height / 2;
+                break;
+            }
+            r = i;
+            before = false;
         }
-        if (k === from || k === from + 1)
+        if (r < 0)
             return null;
+        const section = sectionAt(r);
+        const k = before ? r : r + 1; // insert before row k
+        if (section === sectionAt(from) && (k === from || k === from + 1))
+            return null;
+        // The row it lands after: the nearest row above k in the same section.
         let above = k - 1;
         if (above === from)
             above--;
-        let below = k;
-        if (below === from)
-            below++;
-        const aboveOk = above >= 0 && mayNeighbour(above);
-        const belowOk = below < count && mayNeighbour(below);
-        if (!aboveOk && !belowOk)
-            return null;
-        // Next to a row of another section only from its far side: the item
-        // goes first in its own section.
-        const afterId = aboveOk ? idAt(above) : "";
+        const afterId = above >= 0 && sectionAt(above) === section ? idAt(above) : "";
 
         const spacing = list.spacing / 2;
-        let y;
-        if (k < count && list.itemAtIndex(k)) {
-            y = list.itemAtIndex(k).y - spacing;
-        } else {
-            const last = list.itemAtIndex(count - 1);
-            y = last ? last.y + last.height + spacing : 0;
-        }
-        return { afterId: afterId, y: y };
+        const anchor = list.itemAtIndex(r);
+        const y = before ? anchor.y - spacing : anchor.y + anchor.height + spacing;
+        return { afterId: afterId, section: section, y: y };
     }
 
     property string dragTaskId: ""
@@ -222,10 +232,11 @@ Item {
             taskDrop = null;
             return;
         }
-        const evening = taskModel.eveningAt(from);
+        // Today is split into daytime and This Evening; dropping in the
+        // other section moves the task there (decided on #53).
         const sectioned = controller.currentView === "today";
         taskDrop = dropSlot(taskListView, from, row => taskModel.idAt(row),
-                            row => !sectioned || taskModel.eveningAt(row) === evening, scenePos);
+                            row => sectioned && taskModel.eveningAt(row), scenePos);
     }
 
     function endTaskDrag() {
@@ -234,7 +245,10 @@ Item {
         dragTaskId = "";
         taskDrop = null;
         if (drop && id !== "") {
-            controller.placeTask(id, drop.afterId);
+            if (controller.currentView === "today")
+                controller.placeTodayTask(id, drop.section, drop.afterId);
+            else
+                controller.placeTask(id, drop.afterId);
             Qt.callLater(root.scrollToTask, id);
         }
     }
@@ -246,7 +260,7 @@ Item {
         const projects = projectsList.model;
         const from = projects.findIndex(p => p.id === dragProjectId);
         projectDrop = from < 0 ? null
-            : dropSlot(projectsList, from, row => projects[row].id, row => true, scenePos);
+            : dropSlot(projectsList, from, row => projects[row].id, row => false, scenePos);
     }
 
     function endProjectDrag() {
@@ -833,6 +847,49 @@ Item {
                         // Arrow keys are handled below, by task id; ListView's own
                         // current-index navigation is not used.
                         keyNavigationEnabled: false
+
+                        // Keep the selected task in view when the list's visible
+                        // height changes (the quick-add bar or error banner shows
+                        // or hides, the window is resized): a task just scrolled
+                        // into view must not end up below the fold.
+                        onHeightChanged: {
+                            if (selectedTaskId !== "")
+                                Qt.callLater(root.scrollToTask, selectedTaskId);
+                        }
+
+                        // Today lists This Evening under its own heading. The
+                        // section property stays the same in every view (changing
+                        // it re-lays out the whole list after a view switch, which
+                        // undid scrolling a task into view); only the heading
+                        // decides whether it shows.
+                        section.property: "evening"
+                        section.criteria: ViewSection.FullString
+                        section.delegate: Item {
+                            id: sectionHeading
+                            required property string section
+                            readonly property bool shown: section === "true" && controller.currentView === "today"
+                            objectName: shown ? "eveningHeading" : ""
+                            width: taskListView.width
+                            height: shown ? 40 : 0
+                            visible: shown
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.leftMargin: 8
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 8
+                                text: "🌙 This Evening"
+                                font.pixelSize: 15
+                                font.weight: Font.DemiBold
+                                color: root.colTextPrimary
+                            }
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                width: parent.width
+                                height: 1
+                                color: root.colBorder
+                            }
+                        }
                         activeFocusOnTab: true
 
                         // Keys typed into a row's editors (notes) are handled there
