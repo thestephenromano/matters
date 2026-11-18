@@ -1127,14 +1127,19 @@ Item {
             expandRow(row);
             const when = findChild(row, "schedule-date");
             const deadline = findChild(row, "schedule-deadline");
-            compare(when.text, "Today");
-            compare(deadline.text, "Deadline");
+            compare(when.label, "Today");
+            compare(deadline.label, "Deadline");
+            // The buttons carry no text of their own, so no style paints a
+            // second label behind theirs.
+            compare(when.text, "");
+            compare(deadline.text, "");
+            compare(when.Accessible.name, "Today");
             verify(when.mapToItem(row, 0, 0).x > row.width / 2, "tucked to the right");
 
             controller.setTaskDeadline(row.taskId, Qt.formatDate(new Date(), "yyyy-MM-dd"));
-            tryCompare(deadline, "text", "Due today", 2000);
+            tryCompare(deadline, "label", "Due today", 2000);
             controller.scheduleTask(row.taskId, "evening");
-            tryCompare(when, "text", "This Evening", 2000);
+            tryCompare(when, "label", "This Evening", 2000);
             controller.scheduleTask(row.taskId, "someday");
             waitForNoRow("corner-task"); // left Today for Someday
         }

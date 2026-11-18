@@ -1999,6 +1999,9 @@ Item {
 
                                     // When and Deadline, tucked into the corner; each
                                     // shows its current value and opens its popover.
+                                    // The label is the buttons' own property, not
+                                    // `text`: some styles (KDE's) paint `text` in
+                                    // the background, beside our contentItem.
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 4
@@ -2011,7 +2014,8 @@ Item {
                                             focusPolicy: Qt.NoFocus
                                             flat: true
                                             font.pixelSize: 12
-                                            text: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                            property string label: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                            Accessible.name: label
                                             contentItem: RowLayout {
                                                 spacing: 6
                                                 Icon {
@@ -2020,7 +2024,7 @@ Item {
                                                     color: root.colTextSecondary
                                                 }
                                                 Text {
-                                                    text: whenControl.text
+                                                    text: whenControl.label
                                                     font: whenControl.font
                                                     color: root.colTextPrimary
                                                 }
@@ -2036,8 +2040,9 @@ Item {
                                             focusPolicy: Qt.NoFocus
                                             flat: true
                                             font.pixelSize: 12
-                                            text: taskRow.deadline === "" ? "Deadline"
+                                            property string label: taskRow.deadline === "" ? "Deadline"
                                                 : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
+                                            Accessible.name: label
                                             contentItem: RowLayout {
                                                 spacing: 6
                                                 Icon {
@@ -2046,7 +2051,7 @@ Item {
                                                     color: root.colTextSecondary
                                                 }
                                                 Text {
-                                                    text: deadlineControl.text
+                                                    text: deadlineControl.label
                                                     font: deadlineControl.font
                                                     color: root.colTextPrimary
                                                 }
