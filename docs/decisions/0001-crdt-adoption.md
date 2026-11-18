@@ -86,6 +86,8 @@ Audit baseline: `e6bcdbaa28a0d282fcbf3405a6181d0dfb530d7e`. At that committed ba
 
 Concurrent, uncommitted task-ordering work appeared during this research: it adds a separate `today_order`, creation helpers and dedicated ordering mutations. It is outside this PR and outside the baseline audit. Reconcile its final committed API before closing #32 or implementing #35. Home-tree order cannot represent independent Today order. Evaluate Loro's movable list for a separate view-order index keyed by task UUID, retaining one logical entry per task and deriving Today membership from the task schedule. Its initialization, duplicate-entry handling and migration need a fixture-backed decision after the ordering change lands. C17 makes that compatibility requirement explicit; the table below must not be treated as an audit of those later edits.
 
+Prototype follow-up: that ordering work is now committed at `47dcba5`. Its additional mutation boundary is `ordering::{place_task, move_task, place_project, place_area}`, with `Database::add_*` and `with_conn_mut`. The [evaluation harness](../../experiments/sync-prototype/README.md) creates one Today movable-list entry alongside each original task create, retains those entries and filters tombstones in projection. C17 demonstrates independent Today/home intent. Production view membership, evening sections and SQL/UI command routing still require integration against the final ordering branch.
+
 | Existing boundary | Intended command / constraint |
 | --- | --- |
 | `init_schema`, migration transaction | Versioned local migration; not a replicated domain edit. |
@@ -120,3 +122,5 @@ Proposed prototype budgets, subject to approval:
 - Retention: record all history/pending bytes; no destructive compaction. Measure storage growth and establish a quota before pilot. No storage-cost claim is justified yet.
 
 If these gates fail, first determine whether the engine, adapter or workload budget owns the failure. Compare the same fixture/trace with Automerge before inventing infrastructure. Approval authorizes a bounded prototype, not production adoption. The prototype decision is approved; record the remaining evidence links here before closing #32.
+
+Initial execution is recorded in [the prototype evidence](../evidence/sync-prototype-2026-11-18.json). The focused cases pass on Linux x86_64, with explicit coverage limits for actor authentication, hostile imports and UI behavior. The 1,000-task comparison is exploratory; no full-workload acceptance budget is marked passed.

@@ -13,3 +13,7 @@ To reproduce an individual entry:
 5. Remove the disposable downloads/extraction directory when finished. Before actual adoption, resolve a Cargo lockfile, inspect the complete graph and licenses, build the required targets, and produce interoperability/correctness measurements separately.
 
 Known limits: the Automerge package reports a Git revision that returned 404 in a GitHub contents lookup; the checksummed package remains the inspected artifact. SQLite-Sync evidence is release metadata and reported license/assets, not a downloaded/built binary. Direct crypto pins do not establish the versions or assurance of every transitive implementation. Publication dates indicate releases, not security-review completion.
+
+## Prototype execution
+
+After approval, the [standalone evaluation harness](../../experiments/sync-prototype/README.md) built the chosen Loro and cryptographic candidates and exercised focused convergence, SQLite recovery and provider tests. The [execution record](sync-prototype-2026-11-18.json) contains exact code/lockfile provenance and three same-host comparisons against the unmodified Matters core. Its workload and limits are explicit; it does not replace the larger ADR acceptance plan or independent security review.
