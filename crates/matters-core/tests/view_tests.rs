@@ -33,14 +33,20 @@ fn captured_task_lands_where_the_view_says() {
     let engine = QueryEngine::new(&db);
 
     for view in all_views("p1") {
-        let task = view.new_task(format!("t-{}", view.key()), "captured", today());
+        let id = format!("t-{}", view.key());
+        let Some(task) = view.new_task(id, "captured", today()) else {
+            // The Logbook and the Trash hold no new work.
+            assert!(matches!(view, View::Logbook | View::Trash), "{view:?} should accept new tasks");
+            assert!(!view.accepts_new_tasks());
+            continue;
+        };
+        assert!(view.accepts_new_tasks(), "{view:?}");
         db.create_task(&task).unwrap();
 
-        // Anytime lists only area/project tasks, the Logbook only finished
-        // ones and the Trash only trashed ones, so captures there are filed in
-        // the Inbox; every other view shows the task it was typed into.
+        // Anytime lists only area/project tasks, so captures there are filed
+        // in the Inbox; every other view shows the task it was typed into.
         let expected_home = match view {
-            View::Anytime | View::Logbook | View::Trash => View::Inbox,
+            View::Anytime => View::Inbox,
             ref other => other.clone(),
         };
         let listed = engine.tasks_in(&expected_home, today()).unwrap();

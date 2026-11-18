@@ -221,7 +221,10 @@ impl Ui {
                 if title.is_empty() {
                     return;
                 }
-                let mut task = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, local_today());
+                let Some(mut task) = ui.state.borrow().view.new_task(Uuid::new_v4().to_string(), title, local_today())
+                else {
+                    return; // the entry is hidden where tasks can't be captured
+                };
                 if ui.check(ui.db.add_task(&mut task)) {
                     entry.set_text("");
                 }
@@ -349,6 +352,7 @@ impl Ui {
         let today = local_today();
         self.state.borrow_mut().day.advance(today);
         let view = self.state.borrow().view.clone();
+        self.new_task_entry.set_visible(view.accepts_new_tasks());
 
         // Sidebar counts.
         if let Some(counts) = self.check_value(engine.counts(today)) {

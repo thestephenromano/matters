@@ -66,6 +66,9 @@ pub mod qobject {
         /// Whether the current view is arranged by hand
         /// (`View::is_reorderable`): reordering controls show only then.
         #[qproperty(bool, reorderable)]
+        /// Whether tasks can be captured in the current view
+        /// (`View::accepts_new_tasks`): not in the Logbook or the Trash.
+        #[qproperty(bool, accepts_new_tasks)]
         type AppController = super::AppControllerRust;
 
         #[qinvokable]
@@ -245,6 +248,7 @@ pub struct AppControllerRust {
     revision: i32,
     visit: i32,
     reorderable: bool,
+    accepts_new_tasks: bool,
 
     view: View,
     /// The date the sidebar and header were last built for.
@@ -274,6 +278,7 @@ impl Default for AppControllerRust {
             revision: 0,
             visit: 0,
             reorderable: view.is_reorderable(),
+            accepts_new_tasks: view.accepts_new_tasks(),
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -309,7 +314,9 @@ impl qobject::AppController {
         if title.is_empty() {
             return QString::default();
         }
-        let mut task = self.view.new_task(Uuid::new_v4().to_string(), title, local_today());
+        let Some(mut task) = self.view.new_task(Uuid::new_v4().to_string(), title, local_today()) else {
+            return QString::default(); // the Logbook and the Trash take no new tasks
+        };
         let result = self.db.add_task(&mut task);
         let id = if result.is_ok() { QString::from(task.id.as_str()) } else { QString::default() };
         self.finish(result);
@@ -461,6 +468,7 @@ impl qobject::AppController {
         self.as_mut()
             .set_current_project_id(QString::from(view.project_id().unwrap_or_default()));
         self.as_mut().set_reorderable(view.is_reorderable());
+        self.as_mut().set_accepts_new_tasks(view.accepts_new_tasks());
         self.as_mut().rust_mut().view = view;
         let visit = self.visit.wrapping_add(1);
         self.as_mut().set_visit(visit);

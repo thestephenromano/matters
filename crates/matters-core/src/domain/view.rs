@@ -125,28 +125,34 @@ impl View {
         }
     }
 
+    /// Whether a task can be captured while looking at this view. The
+    /// Logbook lists only finished tasks and the Trash only trashed ones, so
+    /// neither holds new work; frontends hide their quick-add field there.
+    pub fn accepts_new_tasks(&self) -> bool {
+        !matches!(self, View::Logbook | View::Trash)
+    }
+
     /// Build a new open task as if it was captured while looking at this view
-    /// (SPEC §3, "Capturing into a view").
+    /// (SPEC §3, "Capturing into a view"), or `None` where tasks can't be
+    /// captured ([`View::accepts_new_tasks`]).
     ///
     /// The task lands in the view it was typed into wherever the model allows:
     /// Today and Someday schedule it accordingly, Upcoming schedules it for
     /// tomorrow, a project view files it in that project. Anytime only lists
-    /// tasks that belong to an area or project, the Logbook only lists
-    /// finished tasks and the Trash only trashed ones, so captures there go to
-    /// the Inbox (SPEC §3.1: a task
-    /// created without an explicit project or date defaults to the Inbox).
-    pub fn new_task(&self, id: impl Into<String>, title: impl Into<String>, today: NaiveDate) -> Task {
-        let mut task = Task::new(id, title, 0.0);
+    /// tasks that belong to an area or project, so captures there go to the
+    /// Inbox (SPEC §3.1: a task created without an explicit project or date
+    /// defaults to the Inbox).
+    pub fn new_task(&self, id: impl Into<String>, title: impl Into<String>, today: NaiveDate) -> Option<Task> {
         let schedule = match self {
+            View::Logbook | View::Trash => return None,
             View::Today => Schedule::Today { evening: false },
             View::Upcoming => Schedule::Date(today.checked_add_days(Days::new(1)).unwrap_or(today)),
             View::Someday => Schedule::Someday,
-            View::Inbox | View::Anytime | View::Logbook | View::Trash | View::Project(_) => {
-                Schedule::None
-            }
+            View::Inbox | View::Anytime | View::Project(_) => Schedule::None,
         };
+        let mut task = Task::new(id, title, 0.0);
         task.apply_schedule(&schedule, today);
         task.project_id = self.project_id().map(str::to_string);
-        task
+        Some(task)
     }
 }

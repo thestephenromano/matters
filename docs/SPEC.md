@@ -121,10 +121,10 @@ A task typed into the quick-add field is placed where the current view can show 
 | Someday | When = Someday |
 | Project | Filed in that project, unscheduled |
 | Anytime | Inbox: Anytime only lists tasks filed under an area or project |
-| Logbook | Inbox: the Logbook only lists finished tasks |
-| Trash | Inbox: the Trash only lists trashed tasks |
+| Logbook | None: the Logbook holds only finished tasks, so it has no quick-add field |
+| Trash | None: the Trash holds only trashed tasks, so it has no quick-add field |
 
-This rule lives in `matters_core::View::new_task` and is shared by every frontend.
+This rule lives in `matters_core::View::new_task` (and `View::accepts_new_tasks`) and is shared by every frontend.
 
 ### Completing a task
 Ticking a task done (or not done) leaves it where it is in the current list, shown with its new state, until the user navigates away, including re-selecting the same view. This lets the user see what they finished and undo a misclick. Badge counts update immediately. Any other change that takes a task out of the view, such as rescheduling, moving, trashing or putting it back, applies at once. This rule lives in `matters_core::Visit`.
