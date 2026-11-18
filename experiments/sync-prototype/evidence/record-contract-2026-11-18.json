@@ -23,7 +23,7 @@
     "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md": "89973fc6fe9d9a1bae64c48010060ee0d6b6ce2a48d9e992e5a50dd53cefa842",
     "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md": "19a43b042517a212e1fce6eebb9c6f136c034032a7e983e4077fced2a592c77f",
     "experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md": "55feba116369cffef17b55203f41224ed0ecbdfe14d87d707ae186eb5c8a1f79",
-    "experiments/sync-prototype/baseline/Cargo.lock": "4017e18fb260b9f44603483dadaf041f71df87f5eb6e1cd6002099babf67eff9",
+    "experiments/sync-prototype/baseline/Cargo.lock": "bb8f9afc1717346517f8dd2cdeded0cf52213b548b8245c7c334c1a866a90acf",
     "experiments/sync-prototype/baseline/Cargo.toml": "1d81dd6fc4a4b8548ee1c570db0ac8b36d9a2bcb413e786d6e3263e92e9278ab",
     "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
     "experiments/sync-prototype/src/lib.rs": "befccf5d5072e8f7b151fe2409e0e0bd1c41e357f3f073807ab0f9b6882f5f17",
@@ -2318,5 +2318,24 @@
       "Replica admission rule (#114)",
       "Policies for invariants added by future commands, proven against the property test"
     ]
-  }
+  },
+  "baseline_lock_refreshes": [
+    {
+      "change": "#127 / #123: matters-core moves from chrono to jiff 0.2",
+      "command": "cargo update --manifest-path experiments/sync-prototype/baseline/Cargo.toml -p matters-core",
+      "sqlite_packages_changed": false,
+      "removed": [
+        "chrono 0.4.45 and its platform time-zone dependencies"
+      ],
+      "added": [
+        "jiff 0.2.46",
+        "jiff-core 0.1.8",
+        "jiff-static 0.2.46",
+        "jiff-tzdb 0.1.10",
+        "jiff-tzdb-platform 0.1.3"
+      ],
+      "previous_sha256": "4017e18fb260b9f44603483dadaf041f71df87f5eb6e1cd6002099babf67eff9",
+      "verification": "cargo test --locked --manifest-path baseline/Cargo.toml -- --nocapture: SQLite runtime 3.54.1, linked_sqlite_matches_approved_release ok"
+    }
+  ]
 }
