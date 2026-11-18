@@ -52,6 +52,10 @@ Item {
                 }
                 return true;
             }, 2000, "rows finish animating");
+            // Laid out (one pass), and, with motion on, done fading and
+            // sliding (#77). Not waitForRendering: with nothing changed no new
+            // frame comes, and it would wait out its whole timeout.
+            wait(view.reduceMotion ? 30 : 260);
         }
 
         function rowFor(title) {
@@ -82,6 +86,7 @@ Item {
             tryVerify(() => indexOf(title) >= 0, 2000, "row '" + title + "' should be listed");
             list.positionViewAtIndex(indexOf(title), ListView.Contain);
             tryVerify(() => rowFor(title) !== null, 2000, "row '" + title + "' should be shown");
+            settle();
             return rowFor(title);
         }
 
@@ -116,6 +121,9 @@ Item {
             verify(row.isExpanded);
             tryVerify(() => row.targetHeight > 48 && row.height === row.targetHeight, 2000,
                       "row finishes expanding");
+            // Its notes and controls are laid out, and in view, before anyone
+            // clicks them.
+            settle();
         }
 
         function test_typing_a_task_adds_it_to_the_current_view() {
@@ -1190,6 +1198,28 @@ Item {
             tryCompare(controller, "currentTitle", "New project name", 2000);
             tryVerify(() => JSON.parse(controller.projectsJson).some(p => p.title === "New project name"), 2000);
             tryVerify(() => !dialog.visible, 2000);
+        }
+
+        // ---- Motion (#77) -----------------------------------------------------
+
+        function test_motion_follows_the_reduced_motion_preference() {
+            const preference = view.reduceMotion;
+            view.reduceMotion = false;
+            verify(list.add.enabled && list.remove.enabled && list.displaced.enabled && list.move.enabled,
+                   "lists animate");
+            view.reduceMotion = true;
+            verify(!list.add.enabled && !list.remove.enabled && !list.displaced.enabled && !list.move.enabled,
+                   "and stand still with reduced motion");
+
+            // With reduced motion, an opened task is at full height at once.
+            const row = addToToday("still-row");
+            settle();
+            clickRowBody(row);
+            wait(0);
+            waitForRendering(view);
+            compare(row.height, row.targetHeight, "no height animation");
+            verify(row.targetHeight > 48);
+            view.reduceMotion = preference;
         }
 
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {

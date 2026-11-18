@@ -22,9 +22,14 @@ echo "::group::workspace tests"
 cargo test --workspace --locked
 echo "::endgroup::"
 
-# Qt Quick interaction tests (offscreen).
+# Qt Quick interaction tests (offscreen): with reduced motion, then with
+# animations on, so neither path can break unnoticed.
 echo "::group::Qt UI tests"
 cargo test -p matters-ui --features ui-tests --locked
+echo "::endgroup::"
+
+echo "::group::Qt UI tests with animations"
+MATTERS_UI_TEST_MOTION=1 cargo test -p matters-ui --features ui-tests --locked --test ui
 echo "::endgroup::"
 
 # Independently resolve the optional measurement helper against this app checkout.
