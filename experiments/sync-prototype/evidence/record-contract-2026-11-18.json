@@ -9,12 +9,12 @@
     "docs/SQLITE_REVIEW.md": "059792c1187aecea4484b75d732c4b67302a535de554cd60ad819d3046c99351",
     "docs/SQLITE_UPGRADE.md": "27ef2d121635390b369111155a274451dfcea73beacfe0131fd0647fef7eb3fd",
     "docs/SYNC_DESIGN.md": "e2ac4048c8b27a43d782ad43b9ed6833586f84ac12be952295688565a907c341",
-    "docs/SYNC_DURABLE_RECEIVE.md": "04afa548c4bded68f86b00e3c27ce2e5d04bcb16c562169581ce0f4cb00ec744",
+    "docs/SYNC_DURABLE_RECEIVE.md": "f6f1a49bf6c4d87ac1c6a13154af08c4a2e7ac0f6c7e4bfaf479b984786ea05e",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "8f5a89411579154be9370f320054a906392d1a4e411b02b617cecbd9f92c4de7",
-    "docs/SYNC_KEY_DISTRIBUTION.md": "fb9e9276bff845f049a19f2128eb70e5ba9d473d7fc62443469e943b655bb776",
+    "docs/SYNC_KEY_DISTRIBUTION.md": "53bdc75eeb3544cdab8ef37569f0cb5ce555f1e97a38bca7f095e18e02e2ed2d",
     "docs/SYNC_RECORD_CONTRACT.md": "c1e87734a2a1d817aeab0f8176fc0569fe2a597a19a841af89fa0cceace46eea",
     "docs/decisions/0002-post-quantum-sync.md": "ec465816e0e514e4b15f7258929ae615a3a1d4a6b4822b1ccb5db47feab24fea",
-    "docs/protocol/sync-key-distribution-v0.cddl": "2806d843c38345780e3fde7d1854f2be1133da8cc42b8ef1e99dbbe21b2c2e29",
+    "docs/protocol/sync-key-distribution-v0.cddl": "26b589c43fccd903c44d3114a787083c95cf25290c52d65bd23ef4c250733686",
     "docs/protocol/sync-record-v0.cddl": "fe3c16e53791efa6b7a25ae48f3be862cb61253b9b8df9c47617aadd7d1dfd18",
     "experiments/sync-prototype/.gitignore": "395fc2939d3e8df2f16cd3752e9501b85a47191f283fff07ed4bc4d9875013d9",
     "experiments/sync-prototype/Cargo.lock": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
@@ -29,29 +29,29 @@
     "experiments/sync-prototype/src/model.rs": "21ea2823fb40428eb65be105a099dcca2d1c174b939ac3458380e0dc4ec7ee98",
     "experiments/sync-prototype/src/replica.rs": "6c091c1366b49c267463365f2b528298d78f659070c62239ed35714cdcd38bce",
     "experiments/sync-prototype/src/wire.rs": "0291319a3e0563d0d91a50043537df5160e407abdf9bd793a37b93f45aabb549",
-    "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "17dec1eca7ad6660f011ab0ce82965fc1bc80a2f19ae4b03636c12b2b5cb2f42",
-    "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "98b39bffed6cf663b2ec71c2bc8c860ede1df2a0e62959c8744289c3ae86ff32",
+    "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "2b31c6e59e1254cd4894f2d40558ea4ed78f390cbe04bd67474c3d5bc5e59ffd",
+    "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "ca76b41fd4cbd3834e4496a2d9aceed698a99f4eb39bf578bf781ac7fff963ec",
     "experiments/sync-prototype/tests/crash.rs": "1dbe0d376a7411f88a843ec2dce1a645584d34aff21f48483f1fed13efae64f3",
-    "experiments/sync-prototype/tests/key_distribution.rs": "35d5bcd16f576442c1d8f28c88b571977206369ccd60fc4b13b62c731e42ee54",
+    "experiments/sync-prototype/tests/key_distribution.rs": "5c03d3e469784da9e4a7e6a2b3d2200a9d914f00e394e7f7144e1b8459c4f8c5",
     "experiments/sync-prototype/tests/record_contract.rs": "2ff9e6e1fb0bb1d4b5a2b788058750fa7bd94656497ab2a7141dc23fa246e4f7",
     "experiments/sync-prototype/tests/review_regressions.rs": "b0986babe1bc3af415d5fd91b0b4433948e966040745691100125384795324d9",
     "experiments/sync-prototype/tests/sqlite.rs": "7fa0bf70f839356c2326a81dd2ea18992aabbf32d0bb8099a6825fd7d33382b9",
-    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "4897e095211588277af51ad559605d3045fccf24fce5edbbef8ddafdb28a0f70",
+    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "c1dc891a0b90391096039d24a4321fc1feb345614a53ae43b7246511c4ee311f",
     "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "d55c3c349386a32e40ababcf7e8d586c47419fdad5825b940fed1eafd5bd190f",
-    "experiments/sync-prototype/tests/support/key_distribution.rs": "81b91ee08d45049955186665f8c3967ffb49623088b3da9f3d76baa2a7c3880e",
+    "experiments/sync-prototype/tests/support/key_distribution.rs": "bfc57ed3ae590832ff0bb18188077fc0b1ee8c3b679d2c668fc81838636b39c5",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
     "experiments/sync-prototype/tests/support/record_crypto.rs": "85f652231a86fb6cc3367a7677d88f6ed61c61ffacc56ca6ff7d0009b41ab8f2",
     "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "448f37f3653b5dc1d85fde4ec9046a070b314e44bfff1fc152603d2395170b53",
     "experiments/sync-prototype/tests/vectors/check_oracles.py": "041c17e18d1c1be220b1935c13992cf96e939b0660a8f820be01f3fc5d3bba7e",
-    "experiments/sync-prototype/tests/vectors/key-distribution/README.md": "eb2de80970524e9338628ee79fbda77171220bc9a6d2be6a4fdf20b3c41c5e96",
-    "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "b4468ee8117874a14e6c74d1914f9ce8c83961401715a98f333f418ce376dc5b",
-    "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "4bb36d74e83579238a9a00c79a57bf94855a8b5bda17daacdba02419a3b1ac87",
+    "experiments/sync-prototype/tests/vectors/key-distribution/README.md": "c2527c8b4d422251abf32d11c646612c680cddeb343b4a35e4a1dceb470e76a4",
+    "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "7abad7d7b28ea814acf1b2858503218f00691c11f2a5346ea1fc5cc6bda787e8",
+    "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "07f40cf2f2215015908348c898855734c5da3b392c18b17f6fa5ab08576770b4",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
     "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "3befca5b3ac54f0e30750351dc045393c43b8a730c5946f8406b4322625ed8cf",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6",
-    "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md": "24f4ca0fbda4d5e1abeacdb0f30042203e3a834a827459b49f1254cc45b4b5a1",
+    "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md": "4edd6c6bd6ad948ae2dda7b3df76ad0a2ba2b7c59d4bb82928afd7c16042d443",
     "experiments/sync-prototype/tests/convergence.rs": "c212f227c16d8647929b5e9c8f754ba7274c410a0f95a4b6e954547185101d39"
   },
   "host": {
@@ -2517,5 +2517,170 @@
         "cargo fmt --all --check; cargo clippy -p matters-sync-baseline --all-targets --locked -- -D warnings; RUSTDOCFLAGS=-D warnings cargo doc -p matters-sync-baseline --no-deps --locked; cargo deny --locked check: advisories, bans, licenses, sources ok"
       ]
     }
-  ]
+  ],
+  "epoch_key_commitment": {
+    "issue": 112,
+    "implementation_commit": "472318721afaf9b7163a5832c4542fc6327ceef5",
+    "construction": "SHA-384(CBOR([\"matters-sync/v0/epoch-key-commitment\", suite, app16, tenant16, collection16, generation, epoch, CEK32])) in genesis and membership bodies",
+    "alternatives_considered": {
+      "hkdf_confirmation_value": "MLS-style (RFC 9420) KDF-derived value; 128-bit collision resistance; the MAC is unnecessary because the admin signs the whole epoch message",
+      "key_committing_aead": "Commits each record to its sealer's key but does not make devices agree on one key; would change the record contract"
+    },
+    "decision": "Maintainer deferred to the recommendation (option A), 2026-11-18",
+    "enforcement": [
+      "wrap_key refuses non-matching keys",
+      "unwrap_key refuses admin-signed envelopes with non-matching keys (Error::KeyCommitment)",
+      "durable inbox quarantines authenticated-decryption failures"
+    ],
+    "fixtures": {
+      "key_commitments": [
+        {
+          "generation": 0,
+          "epoch": 0,
+          "key_hex": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+          "commitment_hex": "7c5dad16efddf804adcc194b174f3c2f237e7a3af96706a4edee4ae05d2966b7255fc0679702404190d4213b60080adc"
+        },
+        {
+          "generation": 0,
+          "epoch": 1,
+          "key_hex": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+          "commitment_hex": "7a21ed9d623f6151c5e1fbca67a9af4ce8424c32625fbaebc02082d442c5c789af0c54cd7d5b255ea571ae1f6504e14d"
+        }
+      ],
+      "max_genesis_bytes": 58899
+    },
+    "manual_mutations": {
+      "base": "472318721afaf9b7163a5832c4542fc6327ceef5",
+      "scope": "Five named substitutions, each compiled and caught by a named test; source restored after each. Not exhaustive.",
+      "results": [
+        {
+          "mutation": "unwrap_key skips the commitment check",
+          "file": "tests/support/key_distribution.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "malformed_but_admin_signed_key_plaintext"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test malformed_but_admin_signed_key_plaintext_is_rejected_after_hpke ... FAILED"
+          ]
+        },
+        {
+          "mutation": "wrap_key skips the commitment check",
+          "file": "tests/support/key_distribution.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "epoch_key_commitments_bind_each_epoch"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test epoch_key_commitments_bind_each_epoch_and_refuse_other_keys ... FAILED"
+          ]
+        },
+        {
+          "mutation": "commitment ignores the epoch",
+          "file": "tests/support/key_distribution.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "epoch_key_commitments_bind_each_epoch"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test epoch_key_commitments_bind_each_epoch_and_refuse_other_keys ... FAILED"
+          ]
+        },
+        {
+          "mutation": "commitment omits the route",
+          "file": "tests/support/key_distribution.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "epoch_key_commitments_bind_each_epoch"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test epoch_key_commitments_bind_each_epoch_and_refuse_other_keys ... FAILED"
+          ]
+        },
+        {
+          "mutation": "inbox leaves decryption failures pending",
+          "file": "tests/support/encrypted_inbox.rs",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "committed_epoch_key_makes_decryption_failure"
+          ],
+          "exit_code": 101,
+          "failed": [
+            "test inbox_cases::committed_epoch_key_makes_decryption_failure_a_verdict_on_the_record ... FAILED"
+          ]
+        }
+      ]
+    },
+    "final_gates": {
+      "commands": [
+        "cargo fmt --check",
+        "cargo clippy --locked --all-targets --features crypto-probe,record-contract -- -D warnings",
+        "cargo test --locked --features crypto-probe,record-contract",
+        "cargo test --locked --features crypto-probe,record-contract -- --include-ignored",
+        "python tests/vectors/record-contract/generate.py --check",
+        "python tests/vectors/key-distribution/generate.py --check",
+        "python -O tests/vectors/check_oracles.py",
+        "python tests/vectors/record-contract/check_evidence.py",
+        "python tests/vectors/check_evidence_guards.py"
+      ],
+      "normal_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.49s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+        "test result: ok. 59 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 4.02s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 43.37s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "include_ignored_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.48s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s",
+        "test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.28s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.79s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "note": "Suite results recorded before a Clippy-only refactor (collapsed if) in the implementation commit; key_distribution tests and Clippy rerun after it: 59 passed, Clippy exit 0"
+    },
+    "rebased_from": "97942c451316966d37b3294afde98c0b339aa20a"
+  }
 }
