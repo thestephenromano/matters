@@ -1,0 +1,6 @@
+# The toolchain for this repository, CI included (the sync prototype under
+# experiments/ inherits it). Update deliberately, with clippy and fmt clean.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
