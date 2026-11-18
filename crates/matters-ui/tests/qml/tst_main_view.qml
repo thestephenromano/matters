@@ -1105,6 +1105,40 @@ Item {
             compare(x(someday), todayX, "the checkbox column doesn't move between lists");
         }
 
+        // ---- An open task is a page ------------------------------------------
+
+        function test_an_open_task_keeps_when_and_deadline_in_its_corner() {
+            const row = addToToday("corner-task");
+            expandRow(row);
+            const when = findChild(row, "schedule-date");
+            const deadline = findChild(row, "schedule-deadline");
+            compare(when.text, "📅 Today");
+            compare(deadline.text, "⚑ Deadline");
+            verify(when.mapToItem(row, 0, 0).x > row.width / 2, "tucked to the right");
+
+            controller.setTaskDeadline(row.taskId, Qt.formatDate(new Date(), "yyyy-MM-dd"));
+            tryCompare(deadline, "text", "⚑ Due today", 2000);
+            controller.scheduleTask(row.taskId, "evening");
+            tryCompare(when, "text", "📅 This Evening", 2000);
+            controller.scheduleTask(row.taskId, "someday");
+            waitForNoRow("corner-task"); // left Today for Someday
+        }
+
+        function test_notes_grow_with_what_is_written() {
+            const row = addToToday("long-notes");
+            expandRow(row);
+            const notes = findChild(row, "notesInput");
+            const before = notes.height;
+            mouseClick(notes);
+            for (let i = 0; i < 5; ++i) {
+                typeText("line");
+                keyClick(Qt.Key_Return);
+            }
+            tryVerify(() => notes.height > before + 40, 2000, "the notes grew: " + before + " -> " + notes.height);
+            tryVerify(() => row.height === row.targetHeight, 2000, "and the card with them");
+            keyClick(Qt.Key_Escape);
+        }
+
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {
             focusList();
             keyClick(Qt.Key_N, Qt.ControlModifier);
@@ -1155,7 +1189,12 @@ Item {
         function test_when_button_reschedules_the_task() {
             const row = addToToday("defer-me");
             expandRow(row);
-            mouseClick(findChild(row, "schedule-someday"));
+            // The open task's When control opens the When popover.
+            mouseClick(findChild(row, "schedule-date"));
+            const popup = findChild(view, "whenPopup");
+            tryVerify(() => popup.opened, 1000);
+            waitForRendering(popup.contentItem);
+            mouseClick(findChild(popup.contentItem, "when-someday"));
             waitForNoRow("defer-me");
             controller.selectView("someday");
             waitForRow("defer-me");
