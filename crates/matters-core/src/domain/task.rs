@@ -4,6 +4,19 @@ use serde::{Deserialize, Serialize};
 use super::status::Status;
 use super::when::Schedule;
 
+/// Where a task stands against its deadline on a given day (#20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadlineStatus {
+    /// No deadline.
+    None,
+    /// A deadline still to come, or a finished task's deadline.
+    Set,
+    /// An open task due today.
+    DueToday,
+    /// An open task past its deadline.
+    Overdue,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -63,6 +76,18 @@ impl Task {
     pub fn clean_title(raw: &str) -> Option<String> {
         let title = raw.split_whitespace().collect::<Vec<_>>().join(" ");
         (!title.is_empty()).then_some(title)
+    }
+
+    /// Where this task stands against its deadline on `today`. Only open
+    /// tasks are due or overdue: a finished task's deadline is just shown.
+    pub fn deadline_status(&self, today: NaiveDate) -> DeadlineStatus {
+        match self.deadline {
+            None => DeadlineStatus::None,
+            Some(_) if self.status != Status::Open => DeadlineStatus::Set,
+            Some(d) if d < today => DeadlineStatus::Overdue,
+            Some(d) if d == today => DeadlineStatus::DueToday,
+            Some(_) => DeadlineStatus::Set,
+        }
     }
 
     pub fn is_trashed(&self) -> bool {
