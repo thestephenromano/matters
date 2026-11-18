@@ -6,6 +6,12 @@ use serde_json::Value;
 
 use crate::{invalid, Result};
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PROJECT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DEEP_METADATA_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Area,
@@ -42,7 +48,7 @@ pub enum Schedule {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
     Create {
         id: String,
@@ -132,6 +138,8 @@ pub struct Projection {
 }
 
 fn fields(doc: &LoroDoc, node: TreeID) -> Result<Value> {
+    #[cfg(test)]
+    DEEP_METADATA_READS.with(|n| n.set(n.get() + 1));
     Ok(doc
         .get_tree("home")
         .get_meta(node)?
@@ -155,20 +163,85 @@ fn put<T: Serialize>(map: &LoroMap, key: &str, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn lookup(doc: &LoroDoc, id: &str) -> Result<TreeID> {
-    for node in doc.get_tree("home").nodes() {
-        if fields(doc, node)?["id"].as_str() == Some(id) {
-            return Ok(node);
-        }
+/// Shallow identity metadata, maintained once per accepted document state.
+#[derive(Clone, Default)]
+pub(crate) struct Index(BTreeMap<String, (TreeID, Kind)>);
+
+fn metadata_string(map: &LoroMap, key: &str) -> Result<String> {
+    match map.get(key) {
+        Some(ValueOrContainer::Value(loro::LoroValue::String(value))) => Ok(value.to_string()),
+        _ => Err(invalid(format!("missing scalar metadata {key}"))),
     }
-    Err(invalid(format!("unknown entity {id}")))
 }
 
-fn live(doc: &LoroDoc, id: &str) -> Result<TreeID> {
-    if doc.get_map("purged").get(id).is_some() {
-        return Err(invalid("permanently deleted entity"));
+impl Index {
+    pub(crate) fn build(doc: &LoroDoc) -> Result<Self> {
+        let tree = doc.get_tree("home");
+        let mut index = Self::default();
+        for node in tree.nodes() {
+            let map = tree.get_meta(node)?;
+            let id = metadata_string(&map, "id")?;
+            uuid::Uuid::parse_str(&id)?;
+            let kind = serde_json::from_str(&metadata_string(&map, "kind")?)?;
+            if index.0.insert(id, (node, kind)).is_some() {
+                return Err(invalid("duplicate entity UUID"));
+            }
+        }
+        Ok(index)
     }
-    lookup(doc, id)
+
+    fn live(&self, doc: &LoroDoc, id: &str) -> Result<(TreeID, Kind)> {
+        if doc.get_map("purged").get(id).is_some() {
+            return Err(invalid("permanently deleted entity"));
+        }
+        self.0
+            .get(id)
+            .copied()
+            .ok_or_else(|| invalid(format!("unknown entity {id}")))
+    }
+}
+
+/// Removal is a command on the visible equivalence class, not one original UUID.
+fn remove_tag(doc: &LoroDoc, task: &str, tag: &str) -> Result<()> {
+    let tags = doc.get_map("tags");
+    let name = metadata_string(&tags, tag)?;
+    let memberships = doc.get_map("memberships");
+    let mut known = Vec::new();
+    memberships.for_each(|key, value| {
+        if matches!(value, ValueOrContainer::Value(loro::LoroValue::Bool(true))) {
+            known.push(key.to_owned());
+        }
+    });
+    for key in known {
+        let (owner, original): (String, String) = serde_json::from_str(&key)?;
+        if owner == task && metadata_string(&tags, &original)? == name {
+            memberships.insert(&key, false)?;
+        }
+    }
+    Ok(())
+}
+
+/// Translate a visible insertion slot to a raw list slot after removing the moving item.
+fn raw_move_slot(raw: &[String], visible: &[String], moving: &str, index: usize) -> Result<usize> {
+    let rest: Vec<_> = visible.iter().filter(|id| id.as_str() != moving).collect();
+    if index > rest.len() {
+        return Err(invalid("move index outside visible list"));
+    }
+    let raw_rest: Vec<_> = raw.iter().filter(|id| id.as_str() != moving).collect();
+    if let Some(next) = rest.get(index) {
+        return raw_rest
+            .iter()
+            .position(|id| id == next)
+            .ok_or_else(|| invalid("missing move anchor"));
+    }
+    if let Some(previous) = rest.last() {
+        return raw_rest
+            .iter()
+            .position(|id| id == previous)
+            .map(|i| i + 1)
+            .ok_or_else(|| invalid("missing move anchor"));
+    }
+    Ok(0)
 }
 
 fn ordered_nodes(doc: &LoroDoc) -> Vec<TreeID> {
@@ -186,6 +259,8 @@ fn ordered_nodes(doc: &LoroDoc) -> Vec<TreeID> {
 }
 
 pub(crate) fn project(doc: &LoroDoc) -> Result<Projection> {
+    #[cfg(test)]
+    PROJECT_CALLS.with(|n| n.set(n.get() + 1));
     let tree = doc.get_tree("home");
     let mut result = Projection::default();
     let purged = doc.get_map("purged").get_deep_value().to_json_value();
@@ -319,10 +394,8 @@ pub(crate) fn project(doc: &LoroDoc) -> Result<Projection> {
     Ok(result)
 }
 
-pub(crate) fn apply(doc: &LoroDoc, command: Command) -> Result<()> {
+pub(crate) fn apply(doc: &LoroDoc, identities: &mut Index, command: Command) -> Result<()> {
     let tree = doc.get_tree("home");
-    // Zero jitter makes fixture traces reproducible. Loro resolves equal positions by identity.
-    tree.enable_fractional_index(0);
     match command {
         Command::Create {
             id,
@@ -331,17 +404,20 @@ pub(crate) fn apply(doc: &LoroDoc, command: Command) -> Result<()> {
             title,
         } => {
             uuid::Uuid::parse_str(&id)?;
-            if lookup(doc, &id).is_ok() || doc.get_map("purged").get(&id).is_some() {
+            if identities.0.contains_key(&id) || doc.get_map("purged").get(&id).is_some() {
                 return Err(invalid("UUID already exists"));
             }
-            let parent = parent.as_deref().map(|p| live(doc, p)).transpose()?;
-            let parent_kind = parent
-                .map(|p| scalar::<Kind>(&fields(doc, p)?, "kind"))
+            let parent_entry = parent
+                .as_deref()
+                .map(|p| identities.live(doc, p))
                 .transpose()?;
+            let parent = parent_entry.map(|p| p.0);
+            let parent_kind = parent_entry.map(|p| p.1);
             if !kind.permits(parent_kind) {
                 return Err(invalid("invalid parent kind"));
             }
             let node = tree.create_at(parent, tree.children_num(parent).unwrap_or(0))?;
+            identities.0.insert(id.clone(), (node, kind));
             let map = tree.get_meta(node)?;
             map.insert("id", id.as_str())?;
             put(&map, "kind", &kind)?;
@@ -358,26 +434,57 @@ pub(crate) fn apply(doc: &LoroDoc, command: Command) -> Result<()> {
             }
         }
         Command::Move { id, parent, index } => {
-            let node = live(doc, &id)?;
-            let parent = parent.as_deref().map(|p| live(doc, p)).transpose()?;
-            let kind: Kind = scalar(&fields(doc, node)?, "kind")?;
-            let pk = parent
-                .map(|p| scalar::<Kind>(&fields(doc, p)?, "kind"))
+            let (node, kind) = identities.live(doc, &id)?;
+            let parent_entry = parent
+                .as_deref()
+                .map(|p| identities.live(doc, p))
                 .transpose()?;
-            if !kind.permits(pk) {
+            if !kind.permits(parent_entry.map(|p| p.1)) {
                 return Err(invalid("invalid parent kind"));
             }
-            tree.mov_to(node, parent, index)?;
+            let state = project(doc)?;
+            let mut siblings: Vec<_> = state
+                .entities
+                .values()
+                .filter(|e| {
+                    e.id != id
+                        && e.parent == parent
+                        && e.kind == kind
+                        && !e.effective_trash
+                        && !e.recovery_required
+                })
+                .collect();
+            siblings.sort_by_key(|e| e.rank);
+            if index > siblings.len() {
+                return Err(invalid("move index outside visible list"));
+            }
+            // Anchors also cover children projected through a permanently deleted heading/area.
+            // Same-kind siblings have compatible physical parents. The tombstoned ancestor
+            // remains invisible; the requested projected parent is preserved.
+            if let Some(next) = siblings.get(index) {
+                tree.mov_before(node, identities.live(doc, &next.id)?.0)?;
+            } else if let Some(previous) = siblings.last() {
+                tree.mov_after(node, identities.live(doc, &previous.id)?.0)?;
+            } else {
+                tree.mov_to(node, parent_entry.map(|p| p.0), 0)?;
+            }
         }
         Command::MoveToday { id, index } => {
-            live(doc, &id)?;
+            identities.live(doc, &id)?;
             let list = doc.get_movable_list("today");
-            let values = list.get_deep_value().to_json_value();
-            let from = values
-                .as_array()
-                .and_then(|v| v.iter().position(|x| x.as_str() == Some(id.as_str())))
+            let values = list.get_value().to_json_value();
+            let raw: Vec<String> = serde_json::from_value(values)?;
+            let from = raw
+                .iter()
+                .position(|v| v == &id)
                 .ok_or_else(|| invalid("not a Today reference"))?;
-            list.mov(from, index)?;
+            let visible: Vec<_> = raw
+                .iter()
+                .filter(|id| doc.get_map("purged").get(id).is_none())
+                .cloned()
+                .collect();
+            let to = raw_move_slot(&raw, &visible, &id, index)?;
+            list.mov(from, to)?;
         }
         Command::PurgeTrash => {
             for (id, entity) in project(doc)?.entities {
@@ -387,7 +494,7 @@ pub(crate) fn apply(doc: &LoroDoc, command: Command) -> Result<()> {
             }
         }
         Command::Delete { id } => {
-            let kind: Kind = scalar(&fields(doc, live(doc, &id)?)?, "kind")?;
+            let (_, kind) = identities.live(doc, &id)?;
             if !matches!(kind, Kind::Heading | Kind::Checklist) {
                 return Err(invalid("use trash before purge"));
             }
@@ -398,12 +505,16 @@ pub(crate) fn apply(doc: &LoroDoc, command: Command) -> Result<()> {
             doc.get_map("tags").insert(&id, name)?;
         }
         Command::TagMembership { task, tag, present } => {
-            let kind: Kind = scalar(&fields(doc, live(doc, &task)?)?, "kind")?;
+            let (_, kind) = identities.live(doc, &task)?;
             if kind != Kind::Task || doc.get_map("tags").get(&tag).is_none() {
                 return Err(invalid("invalid tag membership"));
             }
-            doc.get_map("memberships")
-                .insert(&serde_json::to_string(&(task, tag))?, present)?;
+            if present {
+                doc.get_map("memberships")
+                    .insert(&serde_json::to_string(&(task, tag))?, true)?;
+            } else {
+                remove_tag(doc, &task, &tag)?;
+            }
         }
         command => {
             let id = match &command {
@@ -416,8 +527,7 @@ pub(crate) fn apply(doc: &LoroDoc, command: Command) -> Result<()> {
                 | Command::Check { id, .. } => id,
                 _ => unreachable!(),
             };
-            let node = live(doc, id)?;
-            let kind: Kind = scalar(&fields(doc, node)?, "kind")?;
+            let (node, kind) = identities.live(doc, id)?;
             let allowed = match &command {
                 Command::Rename { .. } => true,
                 Command::Trash { .. } => matches!(kind, Kind::Area | Kind::Project | Kind::Task),
@@ -447,4 +557,47 @@ pub(crate) fn apply(doc: &LoroDoc, command: Command) -> Result<()> {
     }
     doc.commit();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_and_kind_lookup_never_materialize_notes() -> Result<()> {
+        let doc = LoroDoc::new();
+        let mut index = Index::build(&doc)?;
+        let id = uuid::Uuid::from_u128(1).to_string();
+        apply(
+            &doc,
+            &mut index,
+            Command::Create {
+                id: id.clone(),
+                kind: Kind::Task,
+                parent: None,
+                title: "title".into(),
+            },
+        )?;
+        apply(
+            &doc,
+            &mut index,
+            Command::InsertNotes {
+                id: id.clone(),
+                index: 0,
+                text: "x".repeat(1024 * 1024),
+            },
+        )?;
+        DEEP_METADATA_READS.with(|n| n.set(0));
+        let mut restored_index = Index::build(&doc)?;
+        apply(
+            &doc,
+            &mut restored_index,
+            Command::Rename {
+                id,
+                title: "renamed".into(),
+            },
+        )?;
+        DEEP_METADATA_READS.with(|n| assert_eq!(n.get(), 0));
+        Ok(())
+    }
 }

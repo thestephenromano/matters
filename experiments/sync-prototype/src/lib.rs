@@ -4,7 +4,7 @@ mod model;
 mod replica;
 
 pub use model::{Command, Entity, Kind, Projection, Schedule};
-pub use replica::{Fault, Record, Replica};
+pub use replica::{Admission, Fault, InboxEntry, Record, Replica, Request, RestoreStats};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

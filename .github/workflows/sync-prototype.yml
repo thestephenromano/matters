@@ -4,13 +4,11 @@ on:
   pull_request:
     paths:
       - experiments/sync-prototype/**
-      - crates/matters-core/**
       - .github/workflows/sync-prototype.yml
   push:
     branches: [main]
     paths:
       - experiments/sync-prototype/**
-      - crates/matters-core/**
       - .github/workflows/sync-prototype.yml
 
 permissions:

@@ -23,4 +23,3 @@ crypto-probe = ["dep:hpke-rs", "dep:hpke-rs-crypto", "dep:hpke-rs-libcrux", "dep
 
 [dev-dependencies]
 tempfile = "3"
-matters-core = { path = "../../crates/matters-core" }
