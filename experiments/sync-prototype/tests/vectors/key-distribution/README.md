@@ -6,7 +6,7 @@
 python tests/vectors/key-distribution/generate.py --check
 ```
 
-Without `--check`, the generator writes `golden.json`. CI runs the check on every matching change. The active [execution manifest](../../../evidence/record-contract-2026-11-18.json) binds the generator, output, schema and consuming tests to their source revision.
+Without `--check`, the generator writes `golden.json`. CI runs the check on every pull request and main push. Both fixture generators reject drift and wrong oracle versions even under `python -O`; `../check_oracles.py` executes those failure cases in isolated temporary directories. The active [execution manifest](../../../evidence/record-contract-2026-11-18.json) binds the generator, output, schema and consuming tests to their source revision.
 
 Four fixed arrays represent genesis, membership, writer-start and a key envelope. They include complete signed-input bytes and complete-record SHA-384 hashes, plus independently derived root/device IDs, recipient fingerprint, HPKE info/AAD and key plaintext. Ten negative cases splice the writer-start bytes. Rust tests also reject every truncated prefix of all four records, check the original signed slice points into input, validate CDDL using cddl-cat, and compare both length and SHA-384 of the independently generated 16-member genesis (58,849 bytes).
 

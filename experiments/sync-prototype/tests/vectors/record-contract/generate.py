@@ -16,8 +16,10 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF, HKDFExpand
 from cryptography.hazmat.primitives import hmac
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-assert importlib.metadata.version("cbor2") == "5.6.5"
-assert importlib.metadata.version("cryptography") == "46.0.3"
+if importlib.metadata.version("cbor2") != "5.6.5":
+    raise SystemExit("oracle requires cbor2 5.6.5")
+if importlib.metadata.version("cryptography") != "46.0.3":
+    raise SystemExit("oracle requires cryptography 46.0.3")
 enc = lambda value: cbor2.dumps(value, canonical=True)
 SUITE = "matters-sync-pq-v0"
 SIGNATURE = bytes(3309)
@@ -41,7 +43,8 @@ def vector(name, h, plain):
     mac.update(CEK)
     prk = mac.finalize()
     key = HKDFExpand(algorithm=hashes.SHA256(), length=32, info=info).derive(prk)
-    assert key == HKDF(algorithm=hashes.SHA256(), length=32, salt=h[11], info=info).derive(CEK)
+    if key != HKDF(algorithm=hashes.SHA256(), length=32, salt=h[11], info=info).derive(CEK):
+        raise SystemExit("independent HKDF derivations disagree")
     cipher = AESGCM(key).encrypt(bytes(12), plain, aad)
     b = base(h, cipher)
     return dict(name=name, kind=h[6], epoch=h[7], previous_hex=None if h[13] is None else h[13].hex(),
@@ -145,7 +148,8 @@ result = dict(schema="matters-sync-pq-v0/content-record/2026-11-18",
 path = Path(__file__).with_name("golden.json")
 output = json.dumps(result, indent=2) + "\n"
 if "--check" in sys.argv:
-    assert path.read_text() == output, "fixture drift: review before regenerating"
+    if path.read_text() != output:
+        raise SystemExit("fixture drift: review before regenerating")
 else:
     path.write_text(output)
 print(f"2 golden records; {len(negative)} rejection splices; max wire {len(max_wire)}; overhead {len(max_wire)-1048592}")

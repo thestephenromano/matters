@@ -266,17 +266,39 @@ fn two_valid_membership_successors_freeze_key_and_record_admission() {
     s.authority
         .apply_membership(&sign(&first, &s.a).unwrap())
         .unwrap();
+    let cek = random32().unwrap();
+    let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
+    let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
+    let inc = random32().unwrap();
+    let start = sign(&writer(&s.authority, &s.a, inc, 71, None), &s.a).unwrap();
+    s.authority.admit_writer(&start, DOC).unwrap();
+    let author = s.a.id().unwrap();
+    let manifest = s.authority.manifest();
+    let id = random32().unwrap();
+    let record = seal_fixture(
+        header(&s.authority, &author, &inc, &id, &manifest),
+        &cek,
+        &update(71),
+        &s.a,
+    )
+    .unwrap();
+    s.authority.open_first_data(&record, &key, &DOC).unwrap();
     assert_eq!(
         s.authority.apply_membership(&sign(&second, &s.a).unwrap()),
         Err(Error::Fork)
     );
     assert!(s.authority.is_forked());
+    assert_eq!(s.authority.admit_writer(&start, DOC), Err(Error::Fork));
+    assert_eq!(
+        s.authority.open_first_data(&record, &key, &DOC),
+        Err(Error::Fork)
+    );
     assert_eq!(
         s.authority.wrap_key(&s.a, s.a.id().unwrap(), &[1; 32]),
         Err(Error::Fork)
     );
     assert!(matches!(
-        s.authority.unwrap_key(&[], &s.b),
+        s.authority.unwrap_key(&envelope, &s.b),
         Err(Error::Fork)
     ));
 }
@@ -798,14 +820,187 @@ fn unsupported_roster_key_material_and_experiment_state_limits_fail_closed() {
         Err(Error::Limit)
     );
     for i in 0..16 {
-        let m = writer(&s.authority, &s.a, [i; 32], i as u64, None);
+        let previous = if i == 0 { None } else { Some([i - 1; 32]) };
+        let m = writer(&s.authority, &s.a, [i; 32], i as u64, previous);
         s.authority
             .admit_writer(&sign(&m, &s.a).unwrap(), DOC)
             .unwrap();
     }
-    let extra = writer(&s.authority, &s.a, [17; 32], 17, None);
+    let extra = writer(&s.authority, &s.a, [17; 32], 17, Some([15; 32]));
     assert_eq!(
         s.authority.admit_writer(&sign(&extra, &s.a).unwrap(), DOC),
         Err(Error::Limit)
     );
+}
+
+#[test]
+fn replacement_retires_old_writer_and_replay_does_not_reactivate_it() {
+    let mut s = setup();
+    let cek = random32().unwrap();
+    let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
+    let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
+    let author = s.a.id().unwrap();
+    let manifest = s.authority.manifest();
+    let old = [21; 32];
+    let next = [22; 32];
+    let start = sign(&writer(&s.authority, &s.a, old, 71, None), &s.a).unwrap();
+    s.authority.admit_writer(&start, DOC).unwrap();
+    let id = random32().unwrap();
+    let old_record = seal_fixture(
+        header(&s.authority, &author, &old, &id, &manifest),
+        &cek,
+        &update(71),
+        &s.a,
+    )
+    .unwrap();
+    s.authority
+        .open_first_data(&old_record, &key, &DOC)
+        .unwrap();
+    let replacement = sign(&writer(&s.authority, &s.a, next, 72, Some(old)), &s.a).unwrap();
+    s.authority.admit_writer(&replacement, DOC).unwrap();
+    assert_eq!(
+        s.authority.open_first_data(&old_record, &key, &DOC),
+        Err(Error::Stale)
+    );
+    assert_eq!(s.authority.admit_writer(&start, DOC), Ok(false));
+    // Observe the old retry before any newer retry could restore the right head.
+    assert_eq!(
+        s.authority.open_first_data(&old_record, &key, &DOC),
+        Err(Error::Stale)
+    );
+    assert_eq!(s.authority.admit_writer(&replacement, DOC), Ok(false));
+    assert_eq!(
+        s.authority.open_first_data(&old_record, &key, &DOC),
+        Err(Error::Stale)
+    );
+    let id = random32().unwrap();
+    let record = seal_fixture(
+        header(&s.authority, &author, &next, &id, &manifest),
+        &cek,
+        &update(72),
+        &s.a,
+    )
+    .unwrap();
+    s.authority.open_first_data(&record, &key, &DOC).unwrap();
+}
+
+#[test]
+fn competing_writer_successors_freeze_the_lineage_in_both_orders() {
+    for root_conflict in [false, true] {
+        for reversed in [false, true] {
+            let mut s = setup();
+            let cek = random32().unwrap();
+            let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
+            let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
+            let base = [20; 32];
+            if !root_conflict {
+                let m = sign(&writer(&s.authority, &s.a, base, 70, None), &s.a).unwrap();
+                s.authority.admit_writer(&m, DOC).unwrap();
+            }
+            let prev = if root_conflict { None } else { Some(base) };
+            let candidates = [([21; 32], 71), ([22; 32], 72)];
+            let (first_inc, first_actor) = candidates[usize::from(reversed)];
+            let (second_inc, second_actor) = candidates[usize::from(!reversed)];
+            let first = sign(
+                &writer(&s.authority, &s.a, first_inc, first_actor, prev),
+                &s.a,
+            )
+            .unwrap();
+            s.authority.admit_writer(&first, DOC).unwrap();
+            let second_message = writer(&s.authority, &s.a, second_inc, second_actor, prev);
+            assert_eq!(
+                s.authority
+                    .admit_writer(&sign(&second_message, &s.b).unwrap(), DOC),
+                Err(Error::Signature)
+            );
+            let author = s.a.id().unwrap();
+            let manifest = s.authority.manifest();
+            let id = random32().unwrap();
+            let record = seal_fixture(
+                header(&s.authority, &author, &first_inc, &id, &manifest),
+                &cek,
+                &update(first_actor),
+                &s.a,
+            )
+            .unwrap();
+            s.authority.open_first_data(&record, &key, &DOC).unwrap();
+            if !root_conflict {
+                // A delayed competitor of an older parent still freezes the chain.
+                let advance = sign(
+                    &writer(&s.authority, &s.a, [26; 32], 76, Some(first_inc)),
+                    &s.a,
+                )
+                .unwrap();
+                s.authority.admit_writer(&advance, DOC).unwrap();
+            }
+            let second = sign(&second_message, &s.a).unwrap();
+            assert_eq!(s.authority.admit_writer(&second, DOC), Err(Error::Fork));
+            assert_eq!(
+                s.authority.writer_fork(DOC, author),
+                Some((first.as_slice(), second.as_slice()))
+            );
+            assert_eq!(
+                s.authority.open_first_data(&record, &key, &DOC),
+                Err(Error::Fork)
+            );
+            assert_eq!(s.authority.admit_writer(&first, DOC), Err(Error::Fork));
+            let later = sign(
+                &writer(&s.authority, &s.a, [23; 32], 73, Some(first_inc)),
+                &s.a,
+            )
+            .unwrap();
+            assert_eq!(s.authority.admit_writer(&later, DOC), Err(Error::Fork));
+            // The freeze is scoped to this device/document, not all members.
+            let other = sign(&writer(&s.authority, &s.b, [24; 32], 74, None), &s.b).unwrap();
+            s.authority.admit_writer(&other, DOC).unwrap();
+            let mut other_doc = writer(&s.authority, &s.a, [25; 32], 75, None);
+            if let Body::Writer { document, .. } = &mut other_doc.body {
+                *document = [5; 16];
+            }
+            s.authority
+                .admit_writer(&sign(&other_doc, &s.a).unwrap(), [5; 16])
+                .unwrap();
+            s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
+        }
+    }
+}
+
+#[test]
+fn schema_and_parser_agree_on_structural_bootstrap_and_generation_values() {
+    let s = setup();
+    let schema = include_str!("../../../docs/protocol/sync-key-distribution-v0.cddl");
+    for change in 0..4 {
+        let mut message = if change == 3 {
+            transition(&s)
+        } else {
+            parse(&s.genesis).unwrap().message
+        };
+        match &mut message.body {
+            Body::Genesis {
+                generation,
+                epoch,
+                checkpoint,
+                ..
+            } => match change {
+                0 => *generation = u64::MAX,
+                1 => *epoch = u64::MAX,
+                _ => *checkpoint = Some([7; 48]),
+            },
+            Body::Membership { generation, .. } => *generation = u64::MAX,
+            _ => unreachable!(),
+        }
+        let bytes = sign(&message, if change == 3 { &s.a } else { &s.root }).unwrap();
+        parse(&bytes).unwrap();
+        cddl_cat::validate_cbor_bytes("control", schema, &bytes).unwrap();
+        if change == 3 {
+            let mut state = s.authority.clone();
+            assert_eq!(state.apply_membership(&bytes), Err(Error::Stale));
+            assert_eq!(state.manifest(), s.authority.manifest());
+        } else {
+            assert!(matches!(
+                Authority::bootstrap(&bytes, route(), s.root.signing.verification_key.as_slice()),
+                Err(Error::Unsupported)
+            ));
+        }
+    }
 }

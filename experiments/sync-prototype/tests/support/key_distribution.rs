@@ -1,8 +1,10 @@
 //! Test-only authority/key-distribution experiment. No application-facing API,
 //! durable identity store, enrollment ceremony, or recovery implementation.
+#[path = "record_crypto.rs"]
+mod record_crypto;
 use hpke_rs::{Hpke, HpkeKeyPair, HpkePublicKey, Mode};
 use hpke_rs_crypto::{
-    types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm, TwoStageKdfAlgorithm},
+    types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm},
     HpkeCrypto, TryRng,
 };
 use hpke_rs_libcrux::{HpkeLibcrux, HpkeLibcruxPrng};
@@ -114,7 +116,10 @@ impl Device {
         })
     }
     pub fn id(&self) -> Result<Hash> {
-        Ok(self.public(false)?.id)
+        device_id(
+            self.signing.verification_key.as_slice(),
+            self.kem.public_key().as_slice(),
+        )
     }
     pub fn root_id(&self) -> Result<Hash> {
         fingerprint("ML-DSA-65", self.signing.verification_key.as_slice())
@@ -479,11 +484,19 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
         signature,
     })
 }
-fn verify(parsed: &Parsed<'_>, pk: &[u8]) -> Result<()> {
+fn verify_signature(
+    pk: &[u8],
+    signed: &[u8],
+    context: &[u8],
+    signature: &[u8; wire::SIGNATURE_BYTES],
+) -> Result<()> {
     let pk = ml_dsa_65::MLDSA65VerificationKey::new(pk.try_into().map_err(|_| Error::Identity)?);
-    let sig = ml_dsa_65::MLDSA65Signature::new(*parsed.signature);
+    let sig = ml_dsa_65::MLDSA65Signature::new(*signature);
+    ml_dsa_65::verify(&pk, signed, context, &sig).map_err(|_| Error::Signature)
+}
+fn verify(parsed: &Parsed<'_>, pk: &[u8]) -> Result<()> {
     let ctx = format!("matters-sync/v0/{}", parsed.message.body.kind());
-    ml_dsa_65::verify(&pk, parsed.signed, ctx.as_bytes(), &sig).map_err(|_| Error::Signature)
+    verify_signature(pk, parsed.signed, ctx.as_bytes(), parsed.signature)
 }
 fn validate_roster(members: &[Member], admin: &Hash) -> Result<()> {
     if members.is_empty() || members.len() > MAX_DEVICES {
@@ -517,7 +530,13 @@ struct State {
 struct Writer {
     device: Hash,
     actor: u64,
-    signed_hash: Hash,
+    previous: Option<Id>,
+    signed_bytes: Vec<u8>,
+}
+#[derive(Clone)]
+struct WriterLineage {
+    head: Id,
+    fork_evidence: Option<(Vec<u8>, Vec<u8>)>,
 }
 #[derive(Clone)]
 pub struct Authority {
@@ -527,6 +546,7 @@ pub struct Authority {
     successors: BTreeMap<Hash, Vec<u8>>,
     fork_evidence: Option<(Vec<u8>, Vec<u8>)>,
     writers: BTreeMap<([u8; 16], Id), Writer>,
+    lineages: BTreeMap<([u8; 16], Hash), WriterLineage>,
 }
 impl Authority {
     pub fn route(&self) -> &Route {
@@ -572,6 +592,7 @@ impl Authority {
             successors: BTreeMap::new(),
             fork_evidence: None,
             writers: BTreeMap::new(),
+            lineages: BTreeMap::new(),
         })
     }
     fn active(&self) -> Result<&State> {
@@ -659,9 +680,7 @@ impl Authority {
             self.fork_evidence = Some((first.clone(), bytes.to_vec()));
             return Err(Error::Fork);
         }
-        if previous != &self.current {
-            return Err(Error::Stale);
-        }
+        // Every known non-head manifest already has a successor, handled above.
         if self.successors.len() >= MAX_TRANSITIONS {
             return Err(Error::Limit);
         }
@@ -678,6 +697,13 @@ impl Authority {
         self.successors.insert(*previous, bytes.to_vec());
         self.current = candidate;
         Ok(true)
+    }
+    pub fn writer_fork(&self, document: [u8; 16], device: Hash) -> Option<(&[u8], &[u8])> {
+        self.lineages
+            .get(&(document, device))?
+            .fork_evidence
+            .as_ref()
+            .map(|(first, second)| (first.as_slice(), second.as_slice()))
     }
     pub fn admit_writer(&mut self, bytes: &[u8], expected_document: [u8; 16]) -> Result<bool> {
         self.active()?;
@@ -706,10 +732,17 @@ impl Authority {
             return Err(Error::Identity);
         }
         verify(&p, &self.member(device)?.sig)?;
-        let signed_hash = hash(bytes);
+        let lineage = (*document, *device);
+        if self
+            .lineages
+            .get(&lineage)
+            .is_some_and(|l| l.fork_evidence.is_some())
+        {
+            return Err(Error::Fork);
+        }
         let index = (*document, *incarnation);
         if let Some(old) = self.writers.get(&index) {
-            if old.signed_hash == signed_hash {
+            if old.signed_bytes == bytes {
                 return Ok(false);
             }
             return Err(Error::Actor);
@@ -730,6 +763,20 @@ impl Authority {
                 return Err(Error::Actor);
             }
         }
+        // Null is also a predecessor: there is one root per device/document.
+        // Historical bindings are retained to detect competing successors even
+        // after later replacements. A valid fork freezes only this lineage.
+        if let Some((_, first)) = self
+            .writers
+            .iter()
+            .find(|((doc, _), w)| doc == document && w.device == *device && w.previous == *previous)
+        {
+            self.lineages
+                .get_mut(&lineage)
+                .ok_or(Error::Actor)?
+                .fork_evidence = Some((first.signed_bytes.clone(), bytes.to_vec()));
+            return Err(Error::Fork);
+        }
         if self.writers.len() >= MAX_WRITERS {
             return Err(Error::Limit);
         }
@@ -738,7 +785,15 @@ impl Authority {
             Writer {
                 device: *device,
                 actor: *actor,
-                signed_hash,
+                previous: *previous,
+                signed_bytes: bytes.to_vec(),
+            },
+        );
+        self.lineages.insert(
+            lineage,
+            WriterLineage {
+                head: *incarnation,
+                fork_evidence: None,
             },
         );
         Ok(true)
@@ -880,16 +935,22 @@ impl Authority {
         if writer.device != *h.author {
             return Err(Error::Actor);
         }
-        let pk = ml_dsa_65::MLDSA65VerificationKey::new(
-            author
-                .sig
-                .as_slice()
-                .try_into()
-                .map_err(|_| Error::Identity)?,
-        );
-        let sig = ml_dsa_65::MLDSA65Signature::new(*p.signature);
-        ml_dsa_65::verify(&pk, p.signed_bytes, h.kind.signature_context(), &sig)
-            .map_err(|_| Error::Signature)?;
+        let lineage = self
+            .lineages
+            .get(&(*document, *h.author))
+            .ok_or(Error::Actor)?;
+        if lineage.fork_evidence.is_some() {
+            return Err(Error::Fork);
+        }
+        if lineage.head != *h.incarnation {
+            return Err(Error::Stale);
+        }
+        verify_signature(
+            &author.sig,
+            p.signed_bytes,
+            h.kind.signature_context(),
+            p.signature,
+        )?;
         let derived = content_key(
             h.record_id,
             &key.key,
@@ -979,10 +1040,7 @@ pub fn envelope_aad(message: &Message) -> Result<Vec<u8>> {
     Ok(e.into_writer())
 }
 fn content_key(id: &Id, cek: &Id, info: &[u8]) -> Result<Vec<u8>> {
-    let prk = Provider::kdf_extract(TwoStageKdfAlgorithm::HkdfSha256, id, cek)
-        .map_err(|_| Error::Crypto)?;
-    Provider::kdf_expand(TwoStageKdfAlgorithm::HkdfSha256, &prk, info, 32)
-        .map_err(|_| Error::Crypto)
+    record_crypto::content_key(id, cek, info).map_err(|_| Error::Crypto)
 }
 /// Test fixture builder ONLY: each call supplies a fresh random record ID. No
 /// durable nonce reservation/outbox implementation or user-data sealing API.

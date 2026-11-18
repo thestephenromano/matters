@@ -10,7 +10,8 @@ from pathlib import Path
 import sys
 import cbor2
 
-assert importlib.metadata.version("cbor2") == "5.6.5"
+if importlib.metadata.version("cbor2") != "5.6.5":
+    raise SystemExit("oracle requires cbor2 5.6.5")
 encode = lambda x: cbor2.dumps(x, canonical=True)
 digest = lambda x: hashlib.sha384(x).digest()
 SUITE = "matters-sync-pq-v0"
@@ -68,6 +69,9 @@ for field,value,name in [(0,1,"future_version"),(1,"unknown","unknown_suite"),(2
 result=dict(provenance="cbor2 5.6.5 + Python hashlib SHA-384; patterned public keys and invalid zero signatures",root_id_hex=root_id.hex(),admin_id_hex=a[0].hex(),recipient_id_hex=b[0].hex(),recipient_key_fingerprint_hex=fp(KEM,b[2]).hex(),info_hex=encode(info).hex(),aad_hex=encode(aad).hex(),key_plaintext_hex=encode([0,bytes([14])*32,"whole-collection"]).hex(),vectors=vectors,rejection_splices=negative,max_genesis_bytes=len(max_bytes),max_genesis_sha384=digest(max_bytes).hex())
 output=json.dumps(result,indent=2)+"\n"
 path=Path(__file__).with_name("golden.json")
-if "--check" in sys.argv:assert path.read_text()==output,"key-distribution fixture drift"
-else:path.write_text(output)
+if "--check" in sys.argv:
+    if path.read_text() != output:
+        raise SystemExit("key-distribution fixture drift")
+else:
+    path.write_text(output)
 print(f"4 structural vectors; {len(negative)} rejection cases; 16-member genesis {len(max_bytes)} bytes")

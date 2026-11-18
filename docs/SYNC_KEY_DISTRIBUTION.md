@@ -10,7 +10,7 @@ The implementation lives exclusively in [integration-test support](../experiment
 
 ## Exact bytes and identities
 
-[CDDL](protocol/sync-key-distribution-v0.cddl) fixes the admitted experiment subset. The signature input is the original canonical input slice:
+[CDDL](protocol/sync-key-distribution-v0.cddl) fixes the structural message shapes. The authority rules below define the admitted experiment subset. The signature input is the original canonical input slice:
 
 ```text
 B = [0, "matters-sync-pq-v0", kind, app16, tenant16, collection16, signer48, body]
@@ -19,7 +19,7 @@ signature context = ASCII("matters-sync/v0/" + kind)
 manifest hash = SHA-384(complete canonical signed record)
 ```
 
-All arrays have definite, exact lengths. Integer and length encodings are shortest; identifiers are byte strings. No tags, indefinite lengths, floats, trailing data or unknown message kinds are accepted. Parsing uses typed fixed fields and checks the roster count before allocating it. After parsing, re-encoding the whole bounded control record must reproduce the input. The borrowed original `B` is verified, not a replacement transcript. Structural parsing is separate from authorization: for example, nonzero recovery generations parse but are unsupported by this experiment's authority state machine.
+All arrays have definite, exact lengths. Integer and length encodings are shortest; identifiers are byte strings. No tags, indefinite lengths, floats, trailing data or unknown message kinds are accepted. Parsing uses typed fixed fields and checks the roster count before allocating it. After parsing, re-encoding the whole bounded control record must reproduce the input. This intentionally differs from the content parser's field-width checks: content parsing borrows payloads up to its roughly 1 MiB wire cap without copying them, while whole-record comparison is confined to the 64 KiB control budget. Both strategies enforce the same deterministic-CBOR rules and have independent negative fixtures. The borrowed original `B` is verified, not a replacement transcript. Structural parsing is separate from authorization: for example, nonzero recovery generations parse but are unsupported by this experiment's authority state machine.
 
 Key fingerprints are `SHA-384(CBOR([algorithm_label, public_key_bytes]))`. Labels are exactly `ML-DSA-65` and `MLKEM768-P256/draft-ietf-hpke-pq-05`. A device ID is:
 
@@ -46,7 +46,9 @@ Two independently valid successors of one predecessor freeze authority: retain b
 
 Supported transitions are removal and epoch rotation with an empty closing frontier. Enrollment additions, admin transfer, nonempty historical frontiers, root recovery and recovery-recipient envelopes are explicitly unsupported. A fresh CEK is supplied by the test after rotation. Removed devices cannot be envelope recipients under the known current manifest, and old envelopes and old epoch-key handles fail after a transition. Rotation cannot erase old keys; a withheld transition is not detectable from a root pin alone. There is no globally latest membership or immediate offline-revocation guarantee.
 
-Writer admission indexes `(document, incarnation)` and prohibits reuse of an engine actor in that document. The signer must be the named current member. A predecessor incarnation must already belong to the same device and document; the new actor must be unused. Duplicate exact writer bytes are accepted idempotently while their manifest is current. An old-manifest writer-start replay is stale after rotation, although accepted actor bindings remain retained for authorized current members. Conflicting incarnation/actor claims return `Actor`; this does not implement durable quarantine or counter-range reconciliation.
+Writer admission retains bindings by `(document, incarnation)` and maintains one active chain per `(document, device)`. A null predecessor starts the chain once. A replacement names an existing incarnation of the same device/document, uses an unused engine actor, and becomes the active head; the replaced incarnation immediately becomes inadmissible for this first-record helper. Historical actor IDs stay reserved. Exact signed-byte retries are idempotent while their manifest is current and never reactivate retired heads. An old-manifest writer-start replay is stale after rotation; the active retained binding remains usable by a current member.
+
+Two distinct valid writer starts naming the same predecessor, including two null roots or a delayed competitor of an older parent, retain both signed byte strings and freeze that device/document chain. Neither delivery order nor the first accepted branch resolves it. Subsequent starts and content opening for that chain return `Fork`; other devices/documents and key distribution remain usable. Forged competitors do not freeze anything. Conflicting incarnation IDs or reused actor IDs return `Actor` before chain admission. Membership forks still freeze the whole authority. No durable quarantine, historical-record eligibility or reconciliation is implemented; retired historical data needs the later frontier/receive-chain work.
 
 ## Key envelope transcripts
 
@@ -75,10 +77,12 @@ The import gate accepts only a first `data` record with null predecessor, curren
 
 The experiment chooses 1..16 roster members, 64 KiB maximum control input, at most 16 membership transitions and 16 admitted writer incarnations per authority instance. These budgets bound test support and preserve inspectable histories; they are not production capacity promises. The independent 16-member genesis is 58,849 bytes. One additional member, transition or writer is explicitly rejected. Input is capped before decoding; fixed key lengths and roster count are checked before copying. The existing content-record cap remains separate. These controls do not establish a decompression, engine CPU, memory or total cryptographic-work bound for hostile signed Loro payloads.
 
-The [active execution evidence](../experiments/sync-prototype/evidence/record-contract-2026-11-18.json) binds source, schemas, documents and fixture generators to a source commit. CI checks its hashes, independently regenerates both fixture sets, and executes formatting, Clippy and the full prototype suite. The key-distribution tests cover forged signers, changed recipients/keys, stale epochs, malformed authenticated key plaintext, invalid roster material, actor collisions, unsupported ceremonies and competing valid membership successors.
+The [active execution evidence](../experiments/sync-prototype/evidence/record-contract-2026-11-18.json) binds source, schemas, documents and fixture generators to a source commit. CI runs on every pull request and main push, checks its hashes, independently regenerates both fixture sets, and executes formatting, Clippy and the full prototype suite. This avoids a separate path allowlist drifting from the evidence manifest. Generator guard tests exercise drift and version-pin rejection with and without Python optimization. The key-distribution tests cover forged signers, changed recipients/keys, stale epochs, malformed authenticated key plaintext, invalid roster material, actor collisions, unsupported ceremonies and competing valid membership successors.
 
 The control oracle uses patterned public bytes and invalid zero signatures. It proves CBOR/hash agreement, not valid cryptographic objects. Actual envelope tests use the selected provider on both sides: they do not establish independent interoperability of the exact hybrid suite. No timing claim, aarch64 run, fuzz campaign, side-channel claim, production usage-bound proof or independent security review follows from this experiment.
 
 ## Remaining implementation gates
 
 Before application integration: durable authenticated membership/fork evidence and writer state; secure local key storage; root/enrollment possession ceremonies; recovery envelopes and all-devices-lost recovery; historical frontier admission; receive-chain/idempotency/quarantine semantics; crash-safe encrypted outbox and immutable retry bytes; restore/clone safety; task-domain import validation; aggregate crypto and hostile-import resource budgets; cross-target execution and independent review. The generic service API, acknowledged failure domain, transport/storage adoption and relay conformance remain with #34. The existing SQLite-backed task app remains unchanged.
+
+The [review record](../experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md) maps the review findings to their owning invariants and regression evidence.

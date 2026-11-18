@@ -248,6 +248,10 @@ fn route_context_must_be_supplied_independently() {
 }
 
 #[cfg(feature = "crypto-probe")]
+#[path = "support/record_crypto.rs"]
+mod record_crypto;
+
+#[cfg(feature = "crypto-probe")]
 mod crypto {
     use super::*;
     use hpke_rs_crypto::{
@@ -258,15 +262,7 @@ mod crypto {
     use libcrux_ml_dsa::ml_dsa_65;
 
     fn record_key(h: Header<'_>, cek: &[u8]) -> Vec<u8> {
-        let prk =
-            Provider::kdf_extract(TwoStageKdfAlgorithm::HkdfSha256, h.record_id, cek).unwrap();
-        Provider::kdf_expand(
-            TwoStageKdfAlgorithm::HkdfSha256,
-            &prk,
-            &wire::record_key_info(h).unwrap(),
-            32,
-        )
-        .unwrap()
+        record_crypto::content_key(h.record_id, cek, &wire::record_key_info(h).unwrap()).unwrap()
     }
 
     #[test]
@@ -290,6 +286,15 @@ mod crypto {
             )
             .unwrap();
             assert_eq!(key, bytes(v, "key_hex"));
+            assert_eq!(
+                record_crypto::content_key(
+                    parsed.header.record_id,
+                    &cek,
+                    &parsed.record_key_info().unwrap()
+                )
+                .unwrap(),
+                key
+            );
             let plain = bytes(v, "plaintext_hex");
             assert_eq!(
                 Provider::aead_seal(
