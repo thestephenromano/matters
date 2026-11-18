@@ -439,14 +439,14 @@ Item {
         if (key === "")
             return "";
         if (key === "evening")
-            return "🌙 This Evening";
+            return "This Evening";
         const colon = key.indexOf(":");
         const kind = key.slice(0, colon);
         const rest = key.slice(colon + 1);
         if (kind === "project" || kind === "area") {
             // <id>:<title>; the title may itself contain colons.
             const title = rest.slice(rest.indexOf(":") + 1);
-            return (kind === "project" ? "📁 " : "") + title;
+            return title;
         }
         if (kind === "done" && rest === "")
             return "Earlier";
@@ -577,9 +577,10 @@ Item {
                         anchors.rightMargin: 10
                         spacing: 8
 
-                        Text {
-                            text: "🔍"
-                            font.pixelSize: 12
+                        Icon {
+                            name: "search"
+                            size: 14
+                            color: root.colTextSecondary
                         }
 
                         Text {
@@ -606,13 +607,13 @@ Item {
 
                     Repeater {
                         model: [
-                            { id: "inbox", title: "Inbox", icon: "📥", count: controller.inboxCount, color: "#339AF0" },
-                            { id: "today", title: "Today", icon: "⭐", count: controller.todayCount, color: "#FCC419" },
-                            { id: "upcoming", title: "Upcoming", icon: "📅", count: controller.upcomingCount, color: "#FF6B6B" },
-                            { id: "anytime", title: "Anytime", icon: "📦", count: controller.anytimeCount, color: "#20C997" },
-                            { id: "someday", title: "Someday", icon: "🗃️", count: controller.somedayCount, color: "#FAB005" },
-                            { id: "logbook", title: "Logbook", icon: "📓", count: controller.logbookCount, color: "#51CF66" },
-                            { id: "trash", title: "Trash", icon: "🗑️", count: 0, color: "#868E96" }
+                            { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: "#339AF0" },
+                            { id: "today", title: "Today", icon: "today", count: controller.todayCount, color: "#FCC419" },
+                            { id: "upcoming", title: "Upcoming", icon: "upcoming", count: controller.upcomingCount, color: "#FF6B6B" },
+                            { id: "anytime", title: "Anytime", icon: "anytime", count: controller.anytimeCount, color: "#20C997" },
+                            { id: "someday", title: "Someday", icon: "someday", count: controller.somedayCount, color: "#FAB005" },
+                            { id: "logbook", title: "Logbook", icon: "logbook", count: controller.logbookCount, color: "#51CF66" },
+                            { id: "trash", title: "Trash", icon: "trash", count: 0, color: "#868E96" }
                         ]
 
                         delegate: Rectangle {
@@ -630,9 +631,10 @@ Item {
                                 anchors.rightMargin: 8
                                 spacing: 10
 
-                                Text {
-                                    text: navItem.modelData.icon
-                                    font.pixelSize: 14
+                                Icon {
+                                    name: navItem.modelData.icon
+                                    color: navItem.modelData.color
+                                    size: 16
                                 }
 
                                 Text {
@@ -695,8 +697,14 @@ Item {
 
                     ToolButton {
                         objectName: "newContainerButton"
-                        text: "+"
-                        font.pixelSize: 14
+                        icon.width: 16
+                        contentItem: Icon {
+                            name: "plus"
+                            size: 16
+                            color: root.colTextSecondary
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: "New Project or Area"
                         onClicked: newContainerMenu.popup()
 
                         Menu {
@@ -759,9 +767,10 @@ Item {
                                             anchors.rightMargin: 8
                                             spacing: 8
 
-                                            Text {
-                                                text: "🗂"
-                                                font.pixelSize: 12
+                                            Icon {
+                                                name: "area"
+                                                size: 15
+                                                color: areaRow.isSelected ? root.colAccent : root.colTextSecondary
                                             }
                                             Text {
                                                 text: areaBlock.modelData.title
@@ -906,10 +915,10 @@ Item {
                                 height: parent.height
                                 opacity: projMouse.containsMouse || projDrag.active ? 1 : 0
 
-                                Text {
+                                Icon {
                                     anchors.centerIn: parent
-                                    text: "⠿"
-                                    font.pixelSize: 13
+                                    name: "grip"
+                                    size: 14
                                     color: root.colTextSecondary
                                 }
                                 HoverHandler { cursorShape: Qt.OpenHandCursor }
@@ -1017,8 +1026,11 @@ Item {
                     ToolButton {
                         id: containerMenuButton
                         objectName: "containerMenuButton"
-                        text: "⋯"
-                        font.pixelSize: 18
+                        contentItem: Icon {
+                            name: "more"
+                            size: 20
+                            color: root.colTextSecondary
+                        }
                         visible: controller.currentView === "project" || controller.currentView === "area"
                         ToolTip.visible: hovered
                         ToolTip.text: controller.currentView === "area" ? "Area actions" : "Project actions"
@@ -1121,7 +1133,13 @@ Item {
                         }
 
                         ToolButton {
-                            text: "✕"
+                            contentItem: Icon {
+                                name: "close"
+                                size: 14
+                                color: root.isDark ? "#FFA8A8" : "#C92A2A"
+                            }
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Dismiss"
                             visible: controller.errorMessage !== ""
                             onClicked: controller.clearError()
                         }
@@ -1145,9 +1163,9 @@ Item {
                         anchors.rightMargin: 12
                         spacing: 10
 
-                        Text {
-                            text: "+"
-                            font.pixelSize: 20
+                        Icon {
+                            name: "plus"
+                            size: 16
                             color: root.colAccent
                         }
 
@@ -1207,8 +1225,14 @@ Item {
                                 anchors.rightMargin: 8
                                 spacing: 8
 
+                                Icon {
+                                    name: "area"
+                                    size: 16
+                                    color: root.colTextSecondary
+                                }
+
                                 Text {
-                                    text: "🗂 " + trashedArea.modelData.title
+                                    text: trashedArea.modelData.title
                                     color: root.colTextPrimary
                                     font.pixelSize: 14
                                     elide: Text.ElideRight
@@ -1252,8 +1276,14 @@ Item {
                                 anchors.rightMargin: 8
                                 spacing: 8
 
+                                Icon {
+                                    name: "project"
+                                    size: 16
+                                    color: root.colTextSecondary
+                                }
+
                                 Text {
-                                    text: "📁 " + trashedProject.modelData.title
+                                    text: trashedProject.modelData.title
                                     color: root.colTextPrimary
                                     font.pixelSize: 14
                                     elide: Text.ElideRight
@@ -1324,8 +1354,23 @@ Item {
                             height: shown ? 40 : 0
                             visible: shown
 
-                            Text {
+                            // This Evening, a project or an area gets its icon.
+                            Icon {
+                                id: headingIcon
+                                visible: name !== ""
+                                name: sectionHeading.kind === "evening" ? "evening"
+                                    : sectionHeading.kind === "project" ? "project"
+                                    : sectionHeading.kind === "area" ? "area" : ""
+                                color: sectionHeading.kind === "evening" ? root.colEvening : root.colTextSecondary
+                                size: 16
                                 anchors.left: parent.left
+                                anchors.leftMargin: 8
+                                anchors.verticalCenter: headingText.verticalCenter
+                            }
+
+                            Text {
+                                id: headingText
+                                anchors.left: headingIcon.visible ? headingIcon.right : parent.left
                                 anchors.leftMargin: 8
                                 anchors.bottom: parent.bottom
                                 anchors.bottomMargin: 8
@@ -1535,10 +1580,10 @@ Item {
                                         Layout.preferredHeight: 24
                                         opacity: enabled && (rowHover.hovered || gripDrag.active) ? 1 : 0
 
-                                        Text {
+                                        Icon {
                                             anchors.centerIn: parent
-                                            text: "⠿"
-                                            font.pixelSize: 14
+                                            name: "grip"
+                                            size: 16
                                             color: root.colTextSecondary
                                         }
                                         HoverHandler { cursorShape: Qt.OpenHandCursor }
@@ -1561,12 +1606,12 @@ Item {
                                         border.color: taskRow.done ? root.colAccent : (checkMouse.containsMouse ? root.colAccent : root.colTextSecondary)
                                         border.width: 1.5
 
-                                        Text {
+                                        Icon {
                                             anchors.centerIn: parent
-                                            text: "✓"
+                                            name: "check"
+                                            size: 14
+                                            strokeWidth: 2.6
                                             color: "#FFFFFF"
-                                            font.pixelSize: 11
-                                            font.weight: Font.Bold
                                             visible: taskRow.done
                                         }
 
@@ -1645,14 +1690,26 @@ Item {
                                         objectName: "eveningBadge"
                                         visible: taskRow.evening && controller.currentView !== "today"
                                         Layout.preferredHeight: 20
-                                        Layout.preferredWidth: eveningLabel.contentWidth + 12
+                                        Layout.preferredWidth: eveningLabel.contentWidth + 28
                                         radius: 4
                                         color: root.isDark ? "#382D16" : "#FFF3BF"
 
+                                        Icon {
+                                            id: eveningIcon
+                                            name: "evening"
+                                            size: 12
+                                            color: root.colEvening
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: 6
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+
                                         Text {
                                             id: eveningLabel
-                                            anchors.centerIn: parent
-                                            text: "🌙 Evening"
+                                            anchors.left: eveningIcon.right
+                                            anchors.leftMargin: 4
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: "Evening"
                                             font.pixelSize: 11
                                             font.weight: Font.DemiBold
                                             color: root.colEvening
@@ -1686,15 +1743,27 @@ Item {
                                             || taskRow.deadlineStatus === "overdue"
                                         visible: taskRow.deadline !== ""
                                         Layout.preferredHeight: 20
-                                        Layout.preferredWidth: deadlineLabel.contentWidth + 12
+                                        Layout.preferredWidth: deadlineLabel.contentWidth + 28
                                         radius: 4
                                         color: urgent ? (root.isDark ? "#3B1F1F" : "#FFE3E3") : (root.isDark ? "#2C2E33" : "#E9ECEF")
+
+                                        Icon {
+                                            id: deadlineIcon
+                                            name: "deadline"
+                                            size: 12
+                                            color: deadlineLabel.color
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: 6
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
 
                                         Text {
                                             id: deadlineLabel
                                             objectName: "deadlineLabel"
-                                            anchors.centerIn: parent
-                                            text: "⚑ " + root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
+                                            anchors.left: deadlineIcon.right
+                                            anchors.leftMargin: 4
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
                                             font.pixelSize: 11
                                             font.weight: parent.urgent ? Font.DemiBold : Font.Normal
                                             color: parent.urgent ? (root.isDark ? "#FFA8A8" : "#C92A2A") : root.colTextSecondary
@@ -1706,9 +1775,12 @@ Item {
                                     ToolButton {
                                         objectName: "deleteButton"
                                         focusPolicy: Qt.NoFocus
-                                        text: "✕"
+                                        contentItem: Icon {
+                                            name: "close"
+                                            size: 14
+                                            color: root.colTextSecondary
+                                        }
                                         visible: rowHover.hovered && controller.currentView !== "trash"
-                                        font.pixelSize: 11
                                         ToolTip.visible: hovered
                                         ToolTip.text: "Move to Trash"
                                         onClicked: {
@@ -1841,23 +1913,51 @@ Item {
                                         Item { Layout.fillWidth: true }
 
                                         ToolButton {
+                                            id: whenControl
                                             objectName: "schedule-date"
                                             focusPolicy: Qt.NoFocus
                                             flat: true
                                             font.pixelSize: 12
-                                            text: "📅 " + root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                            text: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                            contentItem: RowLayout {
+                                                spacing: 6
+                                                Icon {
+                                                    name: "calendar"
+                                                    size: 14
+                                                    color: root.colTextSecondary
+                                                }
+                                                Text {
+                                                    text: whenControl.text
+                                                    font: whenControl.font
+                                                    color: root.colTextPrimary
+                                                }
+                                            }
                                             ToolTip.visible: hovered
                                             ToolTip.text: "When (Ctrl+S)"
                                             onClicked: root.openWhenFor(taskRow.taskId)
                                         }
 
                                         ToolButton {
+                                            id: deadlineControl
                                             objectName: "schedule-deadline"
                                             focusPolicy: Qt.NoFocus
                                             flat: true
                                             font.pixelSize: 12
-                                            text: "⚑ " + (taskRow.deadline === "" ? "Deadline"
-                                                : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus))
+                                            text: taskRow.deadline === "" ? "Deadline"
+                                                : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
+                                            contentItem: RowLayout {
+                                                spacing: 6
+                                                Icon {
+                                                    name: "deadline"
+                                                    size: 14
+                                                    color: root.colTextSecondary
+                                                }
+                                                Text {
+                                                    text: deadlineControl.text
+                                                    font: deadlineControl.font
+                                                    color: root.colTextPrimary
+                                                }
+                                            }
                                             ToolTip.visible: hovered
                                             ToolTip.text: "Deadline (Ctrl+D)"
                                             onClicked: root.openDeadlineFor(taskRow.taskId)
