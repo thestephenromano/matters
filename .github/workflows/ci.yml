@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: clippy and tests
+    runs-on: ubuntu-24.04
+    # Qt 6.8+ and current GTK/libadwaita come from Fedora's packages, the
+    # same system the app is developed on.
+    container: fedora:44
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: bash ci/fedora-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy and tests
+        run: bash ci/check.sh
