@@ -1,4 +1,4 @@
-"""Independent public-data oracle. Requires cbor2==5.6.5, cryptography==46.0.3.
+"""Independent public-data oracle. Requires cbor2==5.6.5, cryptography==50.0.0.
 
 Run with --check to compare against committed bytes; regeneration is explicit.
 Zero signatures are STRUCTURAL placeholders, not valid signed records.
@@ -18,8 +18,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 if importlib.metadata.version("cbor2") != "5.6.5":
     raise SystemExit("oracle requires cbor2 5.6.5")
-if importlib.metadata.version("cryptography") != "46.0.3":
-    raise SystemExit("oracle requires cryptography 46.0.3")
+if importlib.metadata.version("cryptography") != "50.0.0":
+    raise SystemExit("oracle requires cryptography 50.0.0")
 enc = lambda value: cbor2.dumps(value, canonical=True)
 SUITE = "matters-sync-pq-v0"
 SIGNATURE = bytes(3309)
@@ -138,7 +138,7 @@ for outer, inner in [(3, 2), (4, 3), (5, 4)]:
 max_h = header("snapshot", 2**64-1, bytes([10])*48)
 max_wire = enc([base(max_h, bytes(1048592)), SIGNATURE])
 result = dict(schema="matters-sync-pq-v0/content-record/2026-11-18",
-              provenance={"cbor2": "5.6.5", "cryptography": "46.0.3", "signature": "all-zero structural placeholder; never an authenticated vector"},
+              provenance={"cbor2": "5.6.5", "cryptography": "50.0.0", "signature": "all-zero structural placeholder; never an authenticated vector"},
               max_wire_bytes=len(max_wire), max_overhead_bytes=len(max_wire)-1048592,
               max_wire_sha256=hashlib.sha256(max_wire).hexdigest(),
               vectors=vectors,
