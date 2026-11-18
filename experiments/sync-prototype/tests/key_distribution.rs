@@ -1,4 +1,6 @@
 #![cfg(all(feature = "crypto-probe", feature = "record-contract"))]
+#[path = "support/record_crypto.rs"]
+mod record_crypto;
 #[path = "support/key_distribution.rs"]
 mod support;
 use loro::{ExportMode, LoroDoc, VersionVector};
@@ -1004,3 +1006,8 @@ fn schema_and_parser_agree_on_structural_bootstrap_and_generation_values() {
         }
     }
 }
+
+#[path = "support/encrypted_outbox.rs"]
+mod encrypted_outbox;
+#[path = "cases/encrypted_outbox.rs"]
+mod outbox_cases;

@@ -58,9 +58,11 @@ ciphertext = AES-256-GCM.Seal(K, nonce, plaintext, AAD = CBOR(H))
 
 CEK is 32 OS-random bytes distributed under the approved post-quantum recipient-envelope scheme. One derived key is used for exactly one sealing invocation. All header fields, including the application, manifest, record kind and predecessor, influence both the KDF transcript and AAD. The receiver builds KDF info from the validated original H slice; the sender encodes a newly constructed Header. Both paths must match the same independent golden bytes. The signature additionally covers ciphertext and repeated clear context. The fixtures cross-check KDF and AES output with a different library stack; they do not establish independent interoperability of the selected hybrid HPKE suite or safety of the complete lifecycle. [HKDF](https://www.rfc-editor.org/rfc/rfc5869.html), [GCM](https://csrc.nist.gov/pubs/sp/800/38/d/final)
 
-The selected HPKE suite remains Base mode, MLKEM768-P256 / HKDF-SHA256 / AES-256-GCM from [draft-ietf-hpke-pq-05](https://datatracker.ietf.org/doc/html/draft-ietf-hpke-pq-05). This patch does not define canonical key-envelope, enrollment or recovery bytes; those cannot be inferred from content-record fixtures. No classical-only fallback is permitted.
+The selected HPKE suite remains Base mode, MLKEM768-P256 / HKDF-SHA256 / AES-256-GCM from [draft-ietf-hpke-pq-05](https://datatracker.ietf.org/doc/html/draft-ietf-hpke-pq-05). The [key-distribution experiment](SYNC_KEY_DISTRIBUTION.md) defines the bounded key-envelope slice; complete enrollment and recovery bytes remain separate gates. No classical-only fallback is permitted.
 
 ## Local sealing state machine and budgets
+
+The [encrypted-outbox experiment](SYNC_ENCRYPTED_OUTBOX.md) exercises the local reservation, immutable retry and crash boundaries below in a separate SQLite database. It does not implement relay durability, epoch resealing or application integration.
 
 | Durable state | Allowed next action | Crash/retry invariant |
 | --- | --- | --- |

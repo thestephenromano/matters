@@ -1,7 +1,6 @@
 //! Test-only authority/key-distribution experiment. No application-facing API,
 //! durable identity store, enrollment ceremony, or recovery implementation.
-#[path = "record_crypto.rs"]
-mod record_crypto;
+use crate::record_crypto;
 use hpke_rs::{Hpke, HpkeKeyPair, HpkePublicKey, Mode};
 use hpke_rs_crypto::{
     types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm},
@@ -1042,8 +1041,9 @@ pub fn envelope_aad(message: &Message) -> Result<Vec<u8>> {
 fn content_key(id: &Id, cek: &Id, info: &[u8]) -> Result<Vec<u8>> {
     record_crypto::content_key(id, cek, info).map_err(|_| Error::Crypto)
 }
-/// Test fixture builder ONLY: each call supplies a fresh random record ID. No
-/// durable nonce reservation/outbox implementation or user-data sealing API.
+/// Test fixture builder ONLY: each call supplies a fresh random record ID.
+/// This helper owns no reservation/retry state; the outbox harness supplies
+/// committed reservations. It is not an application sealing API.
 pub fn seal_fixture(
     h: wire::Header<'_>,
     cek: &Id,

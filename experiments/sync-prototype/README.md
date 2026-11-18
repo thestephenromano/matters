@@ -81,3 +81,7 @@ The opt-in `record-contract` feature exposes a bounded minicbor adapter for the 
 ## Key-distribution contract experiment
 
 The [key-distribution contract](../../docs/SYNC_KEY_DISTRIBUTION.md) and [independent fixtures](tests/vectors/key-distribution/README.md) specify pinned-root genesis, device-key fingerprints, removal/rotation, writer-start and signed recipient envelopes. With both crypto features enabled, the integration tests distribute a real CEK between two devices through hybrid HPKE, then authenticate, decrypt and import the admitted actor's first Loro update. All authority and secrets remain in test memory. The support module is not an application API or a durable encrypted journal; enrollment, recovery, historical admission and crash-safe sealing remain open.
+
+## Encrypted-outbox persistence experiment
+
+The [outbox contract](../../docs/SYNC_ENCRYPTED_OUTBOX.md) and test-only SQLite component implement committed record-ID/header reservations, immutable signed ciphertext, writer-head commits and local ACK bookkeeping. The harness verifies a real encrypted Loro update and nine abrupt process-exit boundaries. Reopen fences older handles, keeps pending work and allocates a fresh local writer. This uses a separate rollback-journal database; the earlier Replica remains unchanged. Pending plaintext stays local and unencrypted at rest. Transport, secret storage, historical admission and domain-journal integration remain separate gates. The ignored `outbox_crash_worker` runs nine times through its parent test.
