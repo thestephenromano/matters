@@ -31,8 +31,8 @@ The root signer ID is its signing-key fingerprint. Device IDs bind both keys; ro
 
 | Kind | Exact body | Authority and supported subset |
 | --- | --- | --- |
-| `genesis` | `[root_key1952, recovery_kem_key1249, generation, roster, admin48, epoch, checkpoint48_or_null]` | Root signature, independently supplied expected route and pinned root public key; generation 0, epoch 0, null checkpoint only. |
-| `membership` | `[generation, sequence, previous_manifest48, roster, admin48, epoch, recovery_kem_key1249, []]` | Previous manifest's admin; generation 0; sequence and epoch each advance by exactly one; same admin/recovery keys; unchanged or reduced roster only. |
+| `genesis` | `[root_key1952, recovery_kem_key1249, generation, roster, admin48, epoch, checkpoint48_or_null, key_commitment48]` | Root signature, independently supplied expected route and pinned root public key; generation 0, epoch 0, null checkpoint only. Commits to the epoch-0 content key. |
+| `membership` | `[generation, sequence, previous_manifest48, roster, admin48, epoch, recovery_kem_key1249, [], key_commitment48]` | Previous manifest's admin; generation 0; sequence and epoch each advance by exactly one; same admin/recovery keys; unchanged or reduced roster only. Commits to the new epoch's content key. |
 | `writer_start` | `[manifest48, document16, device48, incarnation32, actor_u64, predecessor_incarnation32_or_null]` | Current roster device signs as itself; document is independently expected; actor and incarnation admission described below. |
 | `key_envelope` | `[manifest48, epoch, recipient48, recipient_key_fingerprint48, "content-key", encapsulation1153, ciphertext, authority48]` | Current admin signs and is the authority; recipient must be in the current verified roster. |
 
@@ -44,7 +44,20 @@ A transition is verified using its named predecessor's admin, including when che
 
 Two independently valid successors of one predecessor freeze authority: retain both signed byte strings as fork evidence and reject further key distribution, writer admission and content opening. Neither timestamps nor relay arrival order resolves the fork. Signatures use fresh randomness; signing the same membership body again produces a distinct signed record and can constitute a fork. Retry must retain exact existing bytes. This experiment has no durable receipt/outbox implementation.
 
-Supported transitions are removal and epoch rotation with an empty closing frontier. Enrollment additions, admin transfer, nonempty historical frontiers, root recovery and recovery-recipient envelopes are explicitly unsupported. A fresh CEK is supplied by the test after rotation. Removed devices cannot be envelope recipients under the known current manifest, and old envelopes and old epoch-key handles fail after a transition. Rotation cannot erase old keys; a withheld transition is not detectable from a root pin alone. There is no globally latest membership or immediate offline-revocation guarantee.
+Supported transitions are removal and epoch rotation with an empty closing frontier. Enrollment additions, admin transfer, nonempty historical frontiers, root recovery and recovery-recipient envelopes are explicitly unsupported. The admin chooses the next epoch's CEK before signing the transition, because the transition commits to it (see below). Removed devices cannot be envelope recipients under the known current manifest, and old envelopes and old epoch-key handles fail after a transition. Rotation cannot erase old keys; a withheld transition is not detectable from a root pin alone. There is no globally latest membership or immediate offline-revocation guarantee.
+
+## Epoch content-key commitment
+
+Each epoch is defined by exactly one signed genesis or membership message, and that message commits to the epoch's content key ([#112](https://github.com/thestephenromano/matters/issues/112)):
+
+```text
+key_commitment = SHA-384(CBOR(["matters-sync/v0/epoch-key-commitment", suite,
+                               app16, tenant16, collection16, generation, epoch, CEK32]))
+```
+
+`wrap_key` refuses a key that does not match the current epoch's commitment, and `unwrap_key` refuses an admin-signed envelope whose key does not match (`KeyCommitment`). An `EpochKey` handle therefore exists only for the committed key, so an admin cannot give different devices different keys for one epoch, and a receiver that cannot open a signed record knows the record is at fault. Envelopes stay per-recipient; the recipient-key fingerprint in an envelope binds the recipient, not the content key.
+
+Binding rests on SHA-384 collision resistance (192-bit classical). The CEK is 256 uniformly random bits, so the published commitment reveals nothing usable about it, including to removed devices and the relay. This is a plain hash commitment rather than an [MLS](https://www.rfc-editor.org/rfc/rfc9420.html)-style confirmation MAC, because the admin signs the whole epoch message, and rather than a key-committing AEAD, which would commit each device's records to that device's key without making devices agree. Once every receiver holds the same committed CEK, every receiver derives the same per-record key, so record encryption needs no further commitment. Independent fixtures cover the commitment bytes for two epochs.
 
 Writer admission retains bindings by `(document, incarnation)` and maintains one active chain per `(document, device)`. A null predecessor starts the chain once. A replacement names an existing incarnation of the same device/document, uses an unused engine actor, and becomes the active head; the replaced incarnation immediately becomes inadmissible for this first-record helper. Historical actor IDs stay reserved. Exact signed-byte retries are idempotent while their manifest is current and never reactivate retired heads. An old-manifest writer-start replay is stale after rotation; the active retained binding remains usable by a current member.
 

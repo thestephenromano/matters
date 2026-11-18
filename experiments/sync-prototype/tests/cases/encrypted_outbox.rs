@@ -84,7 +84,7 @@ fn durable_bytes_round_trip_through_admitted_writer_and_survive_restart() -> Tes
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("queue.db");
     let bind = binding(&s);
-    let cek = rng()?;
+    let cek = epoch_key(0);
     let mut queue = Outbox::open(&path, bind.clone(), rng)?;
     eprintln!("encrypted-outbox SQLite runtime: {}", rusqlite::version());
     assert_eq!(

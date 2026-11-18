@@ -4,9 +4,14 @@ control = [genesis / membership / writer-start / key-envelope, signature: bstr .
 prefix = (version: 0, suite: "matters-sync-pq-v0")
 route = (application: id16, tenant: id16, collection: id16)
 genesis = [prefix, "genesis", route, signer: hash48,
-  [root-key: sig-key, recovery-key: kem-key, generation: u64, roster, admin: hash48, epoch: u64, checkpoint: hash48 / null]]
+  [root-key: sig-key, recovery-key: kem-key, generation: u64, roster, admin: hash48, epoch: u64, checkpoint: hash48 / null,
+   key-commitment: hash48]]
 membership = [prefix, "membership", route, signer: hash48,
-  [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key, []]]
+  [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key, [],
+   key-commitment: hash48]]
+; key-commitment = SHA-384(canonical CBOR of
+;   ["matters-sync/v0/epoch-key-commitment", "matters-sync-pq-v0", application, tenant, collection,
+;    generation, epoch, content-key32])
 writer-start = [prefix, "writer_start", route, signer: hash48,
   [manifest: hash48, document: id16, device: hash48, incarnation: id32, actor: u64, previous: id32 / null]]
 key-envelope = [prefix, "key_envelope", route, signer: hash48,

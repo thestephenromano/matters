@@ -40,6 +40,8 @@ pub enum Error {
     Unsupported,
     Actor,
     Crypto,
+    /// The content key does not match the epoch's signed commitment.
+    KeyCommitment,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -158,6 +160,8 @@ pub enum Body {
         admin: Hash,
         epoch: u64,
         checkpoint: Option<Hash>,
+        /// Commitment to this epoch's content key (`key_commitment`).
+        key_commitment: Hash,
     },
     Membership {
         generation: u64,
@@ -167,6 +171,8 @@ pub enum Body {
         admin: Hash,
         epoch: u64,
         recovery: Vec<u8>,
+        /// Commitment to the new epoch's content key (`key_commitment`).
+        key_commitment: Hash,
     }, // empty closing frontier only
     Writer {
         manifest: Hash,
@@ -244,11 +250,13 @@ pub fn signing_bytes(message: &Message) -> Result<Vec<u8>> {
             admin,
             epoch,
             checkpoint,
+            key_commitment,
         } => {
-            e.array(7)?.bytes(root)?.bytes(recovery)?.u64(*generation)?;
+            e.array(8)?.bytes(root)?.bytes(recovery)?.u64(*generation)?;
             roster(&mut e, members)?;
             e.bytes(admin)?.u64(*epoch)?;
             optional(&mut e, checkpoint)?;
+            e.bytes(key_commitment)?;
         }
         Body::Membership {
             generation,
@@ -258,13 +266,18 @@ pub fn signing_bytes(message: &Message) -> Result<Vec<u8>> {
             admin,
             epoch,
             recovery,
+            key_commitment,
         } => {
-            e.array(8)?
+            e.array(9)?
                 .u64(*generation)?
                 .u64(*sequence)?
                 .bytes(previous)?;
             roster(&mut e, members)?;
-            e.bytes(admin)?.u64(*epoch)?.bytes(recovery)?.array(0)?;
+            e.bytes(admin)?
+                .u64(*epoch)?
+                .bytes(recovery)?
+                .array(0)?
+                .bytes(key_commitment)?;
         }
         Body::Writer {
             manifest,
@@ -401,7 +414,7 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
     let signer = r.fixed()?;
     let body = match kind {
         "genesis" => {
-            r.array(7)?;
+            r.array(8)?;
             Body::Genesis {
                 root: r.key(SIG_PK)?,
                 recovery: r.key(KEM_PK)?,
@@ -410,21 +423,29 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
                 admin: r.fixed()?,
                 epoch: r.0.u64()?,
                 checkpoint: r.optional()?,
+                key_commitment: r.fixed()?,
             }
         }
         "membership" => {
-            r.array(8)?;
-            let b = Body::Membership {
-                generation: r.0.u64()?,
-                sequence: r.0.u64()?,
-                previous: r.fixed()?,
-                roster: r.roster()?,
-                admin: r.fixed()?,
-                epoch: r.0.u64()?,
-                recovery: r.key(KEM_PK)?,
-            };
+            r.array(9)?;
+            let generation = r.0.u64()?;
+            let sequence = r.0.u64()?;
+            let previous = r.fixed()?;
+            let roster = r.roster()?;
+            let admin = r.fixed()?;
+            let epoch = r.0.u64()?;
+            let recovery = r.key(KEM_PK)?;
             r.array(0)?;
-            b
+            Body::Membership {
+                generation,
+                sequence,
+                previous,
+                roster,
+                admin,
+                epoch,
+                recovery,
+                key_commitment: r.fixed()?,
+            }
         }
         "writer_start" => {
             r.array(6)?;
@@ -521,7 +542,9 @@ fn validate_roster(members: &[Member], admin: &Hash) -> Result<()> {
 #[derive(Clone)]
 struct State {
     sequence: u64,
+    generation: u64,
     epoch: u64,
+    key_commitment: Hash,
     roster: Vec<Member>,
     admin: Hash,
     recovery: Vec<u8>,
@@ -565,6 +588,7 @@ impl Authority {
             admin,
             epoch,
             checkpoint,
+            key_commitment,
         } = &p.message.body
         else {
             return Err(Error::Unsupported);
@@ -580,7 +604,9 @@ impl Authority {
         let current = hash(bytes);
         let state = State {
             sequence: 0,
+            generation: 0,
             epoch: 0,
+            key_commitment: *key_commitment,
             roster: roster.clone(),
             admin: *admin,
             recovery: recovery.clone(),
@@ -643,6 +669,7 @@ impl Authority {
             admin,
             epoch,
             recovery,
+            key_commitment,
         } = &p.message.body
         else {
             return Err(Error::Unsupported);
@@ -688,7 +715,9 @@ impl Authority {
             candidate,
             State {
                 sequence: *sequence,
+                generation: *generation,
                 epoch: *epoch,
+                key_commitment: *key_commitment,
                 roster: roster.clone(),
                 admin: *admin,
                 recovery: recovery.clone(),
@@ -803,6 +832,7 @@ impl Authority {
             return Err(Error::Unauthorized);
         }
         let member = self.member(&recipient)?;
+        self.check_key_commitment(key)?;
         let mut message = Message {
             route: self.route.clone(),
             signer: self.admin()?,
@@ -898,12 +928,23 @@ impl Authority {
         if e.into_writer() != plaintext {
             return Err(Error::NonCanonical);
         }
+        // Every member checks the same signed commitment, so an admin cannot
+        // hand different devices different content keys for one epoch.
+        self.check_key_commitment(&key)?;
         Ok(EpochKey {
             route: self.route.clone(),
             manifest: *manifest,
             epoch: *epoch,
             key,
         })
+    }
+    fn check_key_commitment(&self, key: &Id) -> Result<()> {
+        let state = self.active()?;
+        if key_commitment(&self.route, state.generation, state.epoch, key)? != state.key_commitment
+        {
+            return Err(Error::KeyCommitment);
+        }
+        Ok(())
     }
     pub fn check_epoch_key(&self, key: &EpochKey) -> Result<()> {
         let state = self.active()?;
@@ -1040,6 +1081,26 @@ pub struct EpochKey {
     manifest: Hash,
     epoch: u64,
     key: Id,
+}
+pub const KEY_COMMITMENT_LABEL: &str = "matters-sync/v0/epoch-key-commitment";
+/// Commitment to an epoch content key, carried in the signed genesis or
+/// membership message that defines the epoch:
+/// SHA-384(CBOR([label, suite, app16, tenant16, collection16, generation,
+/// epoch, key32])). Binding rests on SHA-384 collision resistance; the key
+/// is 256 uniformly random bits, so publishing the commitment reveals nothing
+/// usable about it.
+pub fn key_commitment(route: &Route, generation: u64, epoch: u64, key: &Id) -> Result<Hash> {
+    let mut e = Encoder::new(Vec::new());
+    e.array(8)?
+        .str(KEY_COMMITMENT_LABEL)?
+        .str(wire::SUITE)?
+        .bytes(&route.app)?
+        .bytes(&route.tenant)?
+        .bytes(&route.collection)?
+        .u64(generation)?
+        .u64(epoch)?
+        .bytes(key)?;
+    Ok(hash(&e.into_writer()))
 }
 pub fn envelope_info(message: &Message) -> Result<Vec<u8>> {
     let Body::Envelope { key_fp, .. } = &message.body else {

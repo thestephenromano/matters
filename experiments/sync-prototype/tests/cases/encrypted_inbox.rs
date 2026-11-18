@@ -44,7 +44,7 @@ impl Harness {
             genesis: s.genesis.clone(),
             writers: starts,
         };
-        let cek = random32().unwrap();
+        let cek = epoch_key(0);
         let envelope = s.authority.wrap_key(&s.a, s.b.id().unwrap(), &cek).unwrap();
         let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
         Self {
@@ -691,33 +691,34 @@ fn record_may_not_introduce_a_merge_repair_in_its_own_causal_past() -> TestResul
 }
 
 #[test]
-fn review_wrong_same_epoch_key_is_not_recorded_as_a_verdict_on_input() -> TestResult<()> {
+fn committed_epoch_key_makes_decryption_failure_a_verdict_on_the_record() -> TestResult<()> {
+    // #112: the epoch key handle can only hold the committed key, so a wrong
+    // key cannot be supplied locally ...
     let h = Harness::new();
-    let wrong = h.s.authority.unwrap_key(
-        &h.s.authority.wrap_key(&h.s.a, h.s.b.id()?, &random32()?)?,
-        &h.s.b,
-    )?;
+    assert!(h
+        .s
+        .authority
+        .wrap_key(&h.s.a, h.s.b.id()?, &random32()?)
+        .is_err());
+    // ... and a signed record the receiver cannot open is the record's fault.
     let dir = tempfile::tempdir()?;
     let mut a = source(71);
-    let first = h.seal(71, None, &create(&mut a));
-    let child = h.seal(71, Some(hash(&first)), &notes(&mut a, "later"));
+    let author = h.s.a.id()?;
+    let manifest = h.s.authority.manifest();
+    let id = random32()?;
+    let header = header(&h.s.authority, &author, &[71; 32], &id, &manifest);
+    let sealed_elsewhere = seal_fixture(header, &random32()?, &create(&mut a), &h.s.a)?;
+    let child = h.seal(71, Some(hash(&sealed_elsewhere)), &notes(&mut a, "later"));
     let mut inbox = h.inbox(&dir.path().join("inbox.db"));
-    inbox.receive(GENERATION, 1, &first, okay)?;
+    inbox.receive(GENERATION, 1, &sealed_elsewhere, okay)?;
     inbox.receive(GENERATION, 2, &child, okay)?;
-    inbox.process(&wrong, okay)?;
-    let rows = inbox.entries()?;
-    assert!(rows.iter().all(|r| r.status != "quarantined"), "{rows:?}");
-    assert_eq!(rows[0].status, "undecryptable");
-    assert_eq!(rows[1].reason, "blocked-by-undecryptable-predecessor");
     inbox.process(&h.key, okay)?;
-    assert!(inbox.entries()?.iter().all(|r| r.status == "applied"));
-    // Once history is accepted, a key that cannot open it is an operational
-    // error and changes nothing.
-    let later = h.seal(71, Some(hash(&child)), &notes(&mut a, " more"));
-    inbox.receive(GENERATION, 3, &later, okay)?;
-    let before = inbox.entries()?;
-    assert!(inbox.process(&wrong, okay).is_err());
-    assert_eq!(inbox.entries()?, before);
+    let rows = inbox.entries()?;
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].reason.as_str()),
+        ("quarantined", "authenticated-decryption")
+    );
+    assert_eq!(rows[1].reason, "blocked-by-rejected-predecessor");
     Ok(())
 }
 
@@ -761,11 +762,11 @@ fn review_processing_does_not_repeat_authentication_or_staging_for_settled_histo
     inbox.receive(GENERATION, 6, &next, okay)?;
     take_work();
     inbox.process(&h.key, okay)?;
-    // New row: facts + decrypt, plus one key check against accepted history.
+    // New row: one authentication for its facts and one to decrypt it.
     assert_eq!(
         take_work(),
         Work {
-            authentications: 3,
+            authentications: 2,
             stagings: 1
         }
     );

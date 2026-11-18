@@ -354,10 +354,8 @@ impl Inbox {
         }
 
         let mut plain: BTreeMap<usize, std::result::Result<Vec<u8>, ()>> = BTreeMap::new();
-        let mut key_checked = false;
         // Payload rejections depend only on the record and its causal past, so
-        // an earlier call's verdict stands. Undecryptable is key-relative and
-        // is retried; fork evidence still overrides any stored verdict.
+        // an earlier call's verdict stands; fork evidence still overrides it.
         let mut settled: BTreeSet<usize> = candidates
             .iter()
             .map(|(i, _)| *i)
@@ -386,22 +384,6 @@ impl Inbox {
                     row.reason = "predecessor-not-applied".into();
                     continue;
                 }
-                if !key_checked {
-                    key_checked = true;
-                    // With accepted history, the supplied key must open it.
-                    if let Some((_, last, _)) = accepted.last() {
-                        if decrypt(
-                            &self.authority,
-                            &self.config.document,
-                            &rows[*last].entry.bytes,
-                            key,
-                        )?
-                        .is_err()
-                        {
-                            return Err(error("supplied epoch key does not open accepted history"));
-                        }
-                    }
-                }
                 let row = &mut rows[*index].entry;
                 if !plain.contains_key(index) {
                     plain.insert(
@@ -410,10 +392,10 @@ impl Inbox {
                     );
                 }
                 let Ok(bytes) = &plain[index] else {
-                    // The protocol does not commit to the epoch content key, so
-                    // this is a verdict on (record, supplied key), not on input.
-                    row.status = "undecryptable".into();
-                    row.reason = "authenticated-decryption-with-supplied-key".into();
+                    // The epoch key handle can only hold the key its signed
+                    // epoch commits to (#112), so authenticated-decryption
+                    // failure is a verdict on the record.
+                    reject(row, "authenticated-decryption");
                     settled.insert(*index);
                     continue;
                 };
@@ -443,22 +425,16 @@ impl Inbox {
         }
         // Explicitly distinguish descendants of retained bad/forked records from
         // records whose predecessors have simply not arrived.
-        let mut blocked = BTreeMap::new();
-        for row in &rows {
-            let reason = match row.entry.status.as_str() {
-                "quarantined" | "fork" => "blocked-by-rejected-predecessor",
-                "undecryptable" => "blocked-by-undecryptable-predecessor",
-                _ => continue,
-            };
-            blocked.insert(hash(&row.entry.bytes), reason);
-        }
+        let blocked: BTreeSet<Hash> = rows
+            .iter()
+            .filter(|r| matches!(r.entry.status.as_str(), "quarantined" | "fork"))
+            .map(|r| hash(&r.entry.bytes))
+            .collect();
         for (index, facts) in &candidates {
             let row = &mut rows[*index].entry;
             row.record_id_conflict = shared_ids.contains(&facts.record_id);
-            if row.status == "waiting" {
-                if let Some(reason) = facts.previous.and_then(|p| blocked.get(&p)) {
-                    row.reason = (*reason).into();
-                }
+            if row.status == "waiting" && facts.previous.is_some_and(|p| blocked.contains(&p)) {
+                row.reason = "blocked-by-rejected-predecessor".into();
             }
         }
         for row in &rows {
