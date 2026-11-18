@@ -140,7 +140,7 @@ fn rejected_record_is_retained_for_diagnosis() -> Result<()> {
     assert!(r.receive(&bad).is_err());
     drop(r);
     let c = rusqlite::Connection::open(path)?;
-    let tables: usize = c.query_row(
+    let tables: i64 = c.query_row(
         "SELECT count(*) FROM sqlite_master WHERE name='inbox'",
         [],
         |r| r.get(0),

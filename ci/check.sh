@@ -26,3 +26,9 @@ echo "::endgroup::"
 echo "::group::Qt UI tests"
 cargo test -p matters-ui --features ui-tests --locked
 echo "::endgroup::"
+
+# Independently resolve the optional measurement helper against this app checkout.
+# Its lockfile stays local; it must not enter the sync prototype dependency graph.
+echo "::group::measurement baseline SQLite runtime"
+cargo test --manifest-path experiments/sync-prototype/baseline/Cargo.toml -- --nocapture
+echo "::endgroup::"

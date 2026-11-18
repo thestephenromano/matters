@@ -121,7 +121,7 @@ fn refuses_an_existing_application_database() -> Result<()> {
             "CREATE TABLE {name}(id TEXT PRIMARY KEY); INSERT INTO {name} VALUES ('keep');"
         ))?;
         assert!(Replica::open(&path).is_err());
-        let tables: usize = connection.query_row(
+        let tables: i64 = connection.query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table'",
             [],
             |r| r.get(0),

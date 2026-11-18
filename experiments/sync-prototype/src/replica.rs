@@ -374,9 +374,10 @@ impl Replica {
         Ok(records)
     }
     pub fn journal_len(&self) -> Result<usize> {
-        Ok(self
+        let count: i64 = self
             .conn
-            .query_row("SELECT count(*) FROM journal", [], |r| r.get(0))?)
+            .query_row("SELECT count(*) FROM journal", [], |r| r.get(0))?;
+        Ok(count.try_into()?)
     }
     pub fn frontier(&self) -> loro::Frontiers {
         self.doc.oplog_frontiers()
@@ -426,7 +427,7 @@ fn write_projection(tx: &Transaction<'_>, projection: &Projection) -> Result<()>
     Ok(())
 }
 fn initialize(conn: &mut Connection) -> Result<()> {
-    let tables: usize = conn.query_row(
+    let tables: i64 = conn.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'",
         [],
         |r| r.get(0),

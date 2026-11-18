@@ -218,8 +218,8 @@ impl Outbox {
         binding.validate()?;
         let mut conn = Connection::open(path)?;
         validate_database(&conn)?;
-        // The pinned SQLite 3.46.0 has the upstream WAL-reset issue. This
-        // bounded experiment uses rollback journaling; WAL needs an upgrade.
+        // Keep this bounded experiment on rollback journaling: its contention
+        // fixtures and durability contract are defined for DELETE/FULL.
         let mode: String = conn.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))?;
         if mode != "delete" {
             return Err(error("persistent rollback journal required"));
