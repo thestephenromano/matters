@@ -1,0 +1,5 @@
+# Tool versions the gates are pinned to: CI installs exactly these, and the
+# gate scripts refuse to run with a different local version.
+cargo-deny=0.20.2
+cargo-mutants=27.1.0
+cargo-llvm-cov=0.8.7

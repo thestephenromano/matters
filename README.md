@@ -38,7 +38,7 @@ Planned synchronization requirements and evaluation gates are recorded in the [e
 
 ## Building and Testing
 
-Matters needs Qt 6.8 or later, GTK 4 with libadwaita 1.5 or later, and the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it). On Fedora, `sudo ci/fedora-deps.sh` installs the system packages; cargo-deny is pinned in `ci/cargo-deny-version`.
+Matters needs Qt 6.8 or later, GTK 4 with libadwaita 1.5 or later, and the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it). On Fedora, `sudo ci/fedora-deps.sh` installs the system packages; the cargo tools the gates use (cargo-deny, cargo-mutants, cargo-llvm-cov) are pinned in `ci/tool-versions`.
 
 ```sh
 cargo run -p matters-ui     # the Qt app
@@ -53,10 +53,12 @@ Each gate is a script in `ci/` that runs the same locally and in CI. A gate that
 - `ci/workspace-tests.sh`: the core tests, a `qmllint` check of the QML against the generated bridge types, and GTK widget tests on a headless Broadway display.
 - `ci/ui-lane.sh reduced|animations`: the Qt Quick interaction tests, offscreen, with animations off or on. The lane checks that every test in `tests/qml` ran, keeps to a time budget, and writes a JUnit report. Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch the tests run.
 - `ci/style-check.sh`: Matters' control style holds under the desktop's Qt platform theme, COSMIC's included.
+- `ci/coverage.sh`: matters-core's line coverage, held to a floor set just under the measured figure. It writes an lcov report.
+- `ci/mutants.sh`: mutation testing of the matters-core code a branch changes, relative to `origin/main`. Every mutant must be caught. `ci/mutants.sh --all` mutates the whole crate.
 
 Matters skips its animations when the desktop asks for reduced motion (KDE's instant animation speed, or GNOME's animations turned off). `MATTERS_REDUCE_MOTION=1` or `=0` overrides that.
 
-CI (`.github/workflows/ci.yml`) runs these scripts as parallel jobs in a `fedora:44` container on every pull request and every push to `main`. The required check, "clippy and tests", passes only when every job passes.
+CI (`.github/workflows/ci.yml`) runs these scripts as parallel jobs in a `fedora:44` container on every pull request and every push to `main`. The required check, "clippy and tests", passes only when every job passes. A weekly workflow (`.github/workflows/weekly.yml`) checks main's dependencies against new advisories and runs each UI lane three times to catch tests that pass only sometimes.
 
 ## License
 

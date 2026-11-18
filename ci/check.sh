@@ -12,3 +12,5 @@ ci/workspace-tests.sh
 ci/ui-lane.sh reduced
 ci/ui-lane.sh animations
 ci/style-check.sh
+ci/coverage.sh
+ci/mutants.sh

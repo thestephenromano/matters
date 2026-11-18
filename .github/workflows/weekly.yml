@@ -1,0 +1,52 @@
+name: Weekly
+
+# Checks whose result can change without a change to the code: new security
+# advisories against main's dependencies, and UI tests that pass only
+# sometimes (each lane runs three times).
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    name: dependency policy on main
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    timeout-minutes: 20
+    steps:
+      - run: dnf -y install --setopt=install_weak_deps=False git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          tools: cargo-deny
+      - run: ci/deny.sh
+
+  ui-repeat:
+    name: Qt UI tests (${{ matrix.lane }}, run ${{ matrix.run }})
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [reduced, animations]
+        run: [1, 2, 3]
+    steps:
+      - run: dnf -y install --setopt=install_weak_deps=False git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: ci/ui-lane.sh ${{ matrix.lane }} target/ui-reports
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: weekly-ui-${{ matrix.lane }}-${{ matrix.run }}
+          path: target/ui-reports/
+          retention-days: 30
+          if-no-files-found: warn
