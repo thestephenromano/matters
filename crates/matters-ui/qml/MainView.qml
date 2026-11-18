@@ -88,13 +88,96 @@ Item {
     property string pendingRevealId: ""
 
     function reloadTasks() {
+        // A new visit (navigation) starts with nothing selected.
+        if (controller.visit !== loadedVisit) {
+            loadedVisit = controller.visit;
+            taskListView.selectedTaskId = "";
+        }
         taskModel.load(controller.currentView, controller.currentProjectId, controller.visit);
         if (pendingRevealId !== "") {
             const row = taskModel.rowOf(pendingRevealId);
-            if (row >= 0)
+            if (row >= 0) {
+                taskListView.selectedTaskId = pendingRevealId;
                 taskListView.positionViewAtIndex(row, ListView.Contain);
+            }
             pendingRevealId = "";
         }
+    }
+
+    // Scroll the task's row fully into view, if the list shows it. Call it
+    // directly or deferred, never from a row's handler during a list layout.
+    function scrollToTask(id) {
+        const row = taskModel.rowOf(id);
+        if (row >= 0)
+            taskListView.positionViewAtIndex(row, ListView.Contain);
+    }
+
+    property int loadedVisit: -1
+
+    // Capture a task into the current view. When the view lists it, the new
+    // task is selected and scrolled into view, so it never appears off-screen.
+    function captureTask(title) {
+        const id = controller.addTask(title);
+        if (id !== "")
+            pendingRevealId = id;
+        return id;
+    }
+
+    // =========================================================================
+    // KEYBOARD COMMANDS on the selected task (SPEC §4)
+    // =========================================================================
+
+    function selectRow(row) {
+        const id = taskModel.idAt(row);
+        if (id === "")
+            return;
+        taskListView.selectedTaskId = id;
+        taskListView.positionViewAtIndex(row, ListView.Contain);
+    }
+
+    // Move the selection by `step` rows; with nothing selected, Down selects
+    // the first task and Up the last.
+    function moveSelection(step) {
+        const count = taskListView.count;
+        if (count === 0)
+            return;
+        const current = taskModel.rowOf(taskListView.selectedTaskId);
+        const row = current < 0 ? (step > 0 ? 0 : count - 1)
+                                : Math.max(0, Math.min(count - 1, current + step));
+        selectRow(row);
+    }
+
+    function toggleSelectedExpansion() {
+        const id = taskListView.selectedTaskId;
+        if (taskModel.rowOf(id) < 0)
+            return;
+        taskListView.expandedTaskId = taskListView.expandedTaskId === id ? "" : id;
+    }
+
+    // Move the selected task to the Trash and select its neighbour, so
+    // repeated presses work through the list.
+    function trashSelected() {
+        const id = taskListView.selectedTaskId;
+        const row = taskModel.rowOf(id);
+        if (row < 0)
+            return;
+        showUndo("task", id, taskModel.titleAt(row));
+        taskListView.selectedTaskId = taskModel.idAt(row + 1) || taskModel.idAt(row - 1);
+        controller.trashTask(id);
+    }
+
+    function openWhenMenu() {
+        const id = taskListView.selectedTaskId;
+        const row = taskModel.rowOf(id);
+        if (row < 0)
+            return;
+        taskListView.positionViewAtIndex(row, ListView.Contain);
+        whenMenu.taskId = id;
+        const item = taskListView.itemAtIndex(row);
+        if (item)
+            whenMenu.popup(item, 32, 40);
+        else
+            whenMenu.popup();
     }
 
     Component.onCompleted: reloadTasks()
@@ -488,9 +571,13 @@ Item {
 
                             Keys.onReturnPressed: {
                                 if (text.trim().length > 0) {
-                                    controller.addTask(text);
+                                    root.captureTask(text);
                                     text = "";
                                 }
+                            }
+                            Keys.onEscapePressed: {
+                                text = "";
+                                taskListView.forceActiveFocus();
                             }
                         }
                     }
@@ -546,15 +633,57 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
+                    // Rows always fit the width. Some styles (Material) draw a
+                    // horizontal bar over the last row's controls otherwise.
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
                     ListView {
                         id: taskListView
                         spacing: 6
                         model: taskModel
 
-                        // Expansion is keyed by task id and kept here, outside the
-                        // delegates, so it survives list updates and scrolling.
+                        // Expansion and selection are keyed by task id and kept
+                        // here, outside the delegates, so they survive list updates
+                        // and scrolling.
                         property string expandedTaskId: ""
+                        property string selectedTaskId: ""
+
+                        // Arrow keys are handled below, by task id; ListView's own
+                        // current-index navigation is not used.
+                        keyNavigationEnabled: false
+                        activeFocusOnTab: true
+
+                        // Keys typed into a row's editors (notes) are handled there
+                        // and never reach this handler, except Escape.
+                        Keys.onPressed: (event) => {
+                            if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
+                                return;
+                            switch (event.key) {
+                            case Qt.Key_Down:
+                                root.moveSelection(1);
+                                break;
+                            case Qt.Key_Up:
+                                root.moveSelection(-1);
+                                break;
+                            case Qt.Key_Space:
+                                root.toggleSelectedExpansion();
+                                break;
+                            case Qt.Key_Delete:
+                            case Qt.Key_Backspace:
+                                root.trashSelected();
+                                break;
+                            case Qt.Key_Escape:
+                                if (taskListView.expandedTaskId !== "")
+                                    taskListView.expandedTaskId = "";
+                                else
+                                    taskListView.selectedTaskId = "";
+                                taskListView.forceActiveFocus();
+                                break;
+                            default:
+                                return;
+                            }
+                            event.accepted = true;
+                        }
 
                         // Empty State
                         Text {
@@ -581,6 +710,7 @@ Item {
                             required property int index
 
                             readonly property bool isExpanded: taskListView.expandedTaskId === taskId
+                            readonly property bool isSelected: taskListView.selectedTaskId === taskId
 
                             // The content keeps its natural height, pinned to the top;
                             // the row grows to reveal it and clips the rest, so the
@@ -591,16 +721,21 @@ Item {
                             clip: true
 
                             // Once expanded, scroll the whole row into view, so its
-                            // notes and When buttons don't open below the fold.
+                            // notes and When buttons don't open below the fold. This
+                            // can fire while the ListView is laying out (a row created
+                            // already expanded), and repositioning the view from inside
+                            // its own layout crashes Qt, so the scroll is deferred.
                             onHeightChanged: {
                                 if (isExpanded && height === targetHeight)
-                                    taskListView.positionViewAtIndex(index, ListView.Contain);
+                                    Qt.callLater(root.scrollToTask, taskId);
                             }
 
                             Rectangle {
                                 anchors.fill: parent
                                 radius: 8
-                                color: rowHover.hovered || taskRow.isExpanded ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                color: taskRow.isSelected
+                                    ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
+                                    : rowHover.hovered || taskRow.isExpanded ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
                                 border.color: taskRow.isExpanded ? root.colBorder : "transparent"
                                 border.width: 1
                             }
@@ -618,7 +753,11 @@ Item {
                             // receives clicks that none of them accept.
                             MouseArea {
                                 anchors.fill: parent
-                                onClicked: taskListView.expandedTaskId = taskRow.isExpanded ? "" : taskRow.taskId
+                                onClicked: {
+                                    taskListView.selectedTaskId = taskRow.taskId;
+                                    taskListView.expandedTaskId = taskRow.isExpanded ? "" : taskRow.taskId;
+                                    taskListView.forceActiveFocus();
+                                }
                             }
 
                             ColumnLayout {
@@ -715,6 +854,7 @@ Item {
                                     // destroyed until the Trash is emptied.
                                     ToolButton {
                                         objectName: "deleteButton"
+                                        focusPolicy: Qt.NoFocus
                                         text: "✕"
                                         visible: rowHover.hovered && controller.currentView !== "trash"
                                         font.pixelSize: 11
@@ -729,6 +869,7 @@ Item {
                                     // In the Trash, each task can be put back.
                                     ToolButton {
                                         objectName: "restoreButton"
+                                        focusPolicy: Qt.NoFocus
                                         text: "Put Back"
                                         visible: controller.currentView === "trash"
                                         font.pixelSize: 11
@@ -749,6 +890,8 @@ Item {
                                     TextArea {
                                         id: notesInput
                                         objectName: "notesInput"
+                                        // Editing a task's notes selects that task.
+                                        onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 60
                                         placeholderText: "Notes (Markdown supported)..."
@@ -808,6 +951,7 @@ Item {
                                             delegate: Button {
                                                 required property var modelData
                                                 objectName: "schedule-" + modelData.when
+                                                focusPolicy: Qt.NoFocus
                                                 text: modelData.label
                                                 font.pixelSize: 11
                                                 onClicked: controller.scheduleTask(taskRow.taskId, modelData.when)
@@ -1000,6 +1144,7 @@ Item {
 
     Dialog {
         id: newProjectDialog
+        objectName: "newProjectDialog"
         title: "Create New Project"
         standardButtons: Dialog.Ok | Dialog.Cancel
         x: (parent.width - width) / 2
@@ -1032,5 +1177,38 @@ Item {
     Shortcut {
         sequence: "/"
         onActivated: quickFindDialog.open()
+    }
+    Shortcut {
+        sequence: "Ctrl+N"
+        onActivated: newTaskInput.forceActiveFocus()
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+N"
+        onActivated: newProjectDialog.open()
+    }
+    Shortcut {
+        sequence: "Ctrl+S"
+        enabled: taskListView.selectedTaskId !== ""
+        onActivated: root.openWhenMenu()
+    }
+    // Text editors keep Ctrl+Z for their own undo.
+    Shortcut {
+        sequence: StandardKey.Undo
+        enabled: root.undoKind !== ""
+        onActivated: root.undo()
+    }
+
+    // When popover (Ctrl+S) for the selected task.
+    Menu {
+        id: whenMenu
+        objectName: "whenMenu"
+        property string taskId: ""
+
+        MenuItem { objectName: "when-today"; text: "Today"; onTriggered: controller.scheduleTask(whenMenu.taskId, "today") }
+        MenuItem { objectName: "when-evening"; text: "This Evening"; onTriggered: controller.scheduleTask(whenMenu.taskId, "evening") }
+        MenuItem { objectName: "when-someday"; text: "Someday"; onTriggered: controller.scheduleTask(whenMenu.taskId, "someday") }
+        MenuItem { objectName: "when-none"; text: "Clear"; onTriggered: controller.scheduleTask(whenMenu.taskId, "none") }
+
+        onClosed: taskListView.forceActiveFocus()
     }
 }

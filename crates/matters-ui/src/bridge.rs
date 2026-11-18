@@ -70,7 +70,9 @@ pub mod qobject {
         #[qinvokable]
         fn select_project(self: Pin<&mut AppController>, project_id: &QString);
         #[qinvokable]
-        fn add_task(self: Pin<&mut AppController>, title: &QString);
+        /// Capture a task in the current view; returns its id, or an empty
+        /// string when nothing was created.
+        fn add_task(self: Pin<&mut AppController>, title: &QString) -> QString;
         #[qinvokable]
         fn toggle_task(self: Pin<&mut AppController>, task_id: &QString);
         /// Move a task to the Trash (recoverable until the Trash is emptied).
@@ -125,6 +127,12 @@ pub mod qobject {
         /// Row of the task with this id, or -1.
         #[qinvokable]
         fn row_of(self: &TaskListModel, task_id: &QString) -> i32;
+        /// Id of the task at `row`, or an empty string when out of range.
+        #[qinvokable]
+        fn id_at(self: &TaskListModel, row: i32) -> QString;
+        /// Title of the task at `row`, or an empty string when out of range.
+        #[qinvokable]
+        fn title_at(self: &TaskListModel, row: i32) -> QString;
     }
 
     #[auto_cxx_name]
@@ -276,14 +284,16 @@ impl qobject::AppController {
     }
 
     /// Capture a task in the current view (placement rules: `View::new_task`).
-    pub fn add_task(self: Pin<&mut Self>, title: &QString) {
+    pub fn add_task(self: Pin<&mut Self>, title: &QString) -> QString {
         let title = String::from(title).trim().to_string();
         if title.is_empty() {
-            return;
+            return QString::default();
         }
         let task = self.view.new_task(Uuid::new_v4().to_string(), title, local_today());
         let result = self.db.create_task(&task);
+        let id = if result.is_ok() { QString::from(task.id.as_str()) } else { QString::default() };
         self.finish(result);
+        id
     }
 
     pub fn toggle_task(self: Pin<&mut Self>, task_id: &QString) {
@@ -581,6 +591,18 @@ impl qobject::TaskListModel {
             .iter()
             .position(|t| t.id == id)
             .map_or(-1, qt_row)
+    }
+
+    pub fn id_at(&self, row: i32) -> QString {
+        self.task_at(row).map_or_else(QString::default, |task| QString::from(task.id.as_str()))
+    }
+
+    pub fn title_at(&self, row: i32) -> QString {
+        self.task_at(row).map_or_else(QString::default, |task| QString::from(task.title.as_str()))
+    }
+
+    fn task_at(&self, row: i32) -> Option<&Task> {
+        usize::try_from(row).ok().and_then(|r| self.rows.get(r))
     }
 
     pub fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
