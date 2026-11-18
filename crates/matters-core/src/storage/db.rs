@@ -5,12 +5,16 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
 use crate::error::{MattersError, Result};
-use super::schema::{MIGRATION_V2, MIGRATION_V3, SCHEMA_V1};
+use super::schema::{MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, SCHEMA_V1};
+use super::trash;
 
 /// Columns read by [`Database::map_task_row`], in its expected order.
 pub(crate) const TASK_COLUMNS: &str = "id, area_id, project_id, heading_id, title, notes, start_date,
      time_of_day, is_someday, deadline, status, completed_at, sort_order,
      created_at, updated_at, trashed_at";
+
+/// Columns read by [`Database::map_area_row`], in its expected order.
+pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
 
 /// Columns read by [`Database::map_project_row`], in its expected order.
 pub(crate) const PROJECT_COLUMNS: &str = "id, area_id, title, notes, start_date, time_of_day, is_someday,
@@ -73,7 +77,7 @@ impl Database {
 
         let version: i64 =
             conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))?;
-        for (target, migration) in [(2, MIGRATION_V2), (3, MIGRATION_V3)] {
+        for (target, migration) in [(2, MIGRATION_V2), (3, MIGRATION_V3), (4, MIGRATION_V4)] {
             if version < target {
                 let tx = conn.transaction()?;
                 tx.execute_batch(migration)?;
@@ -102,30 +106,38 @@ impl Database {
     pub fn create_area(&self, area: &Area) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO areas (id, title, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![area.id, area.title, area.sort_order, area.created_at, area.updated_at],
+            "INSERT INTO areas (id, title, sort_order, created_at, updated_at, trashed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![area.id, area.title, area.sort_order, area.created_at, area.updated_at, area.trashed_at],
         )?;
         Ok(())
     }
 
     pub fn get_area(&self, id: &str) -> Result<Option<Area>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, title, sort_order, created_at, updated_at FROM areas WHERE id = ?1")?;
+        let mut stmt = conn.prepare(&format!("SELECT {AREA_COLUMNS} FROM areas WHERE id = ?1"))?;
         let area = stmt.query_row(params![id], Self::map_area_row).optional()?;
         Ok(area)
     }
 
+    /// Areas not in the Trash, in sidebar order.
     pub fn list_areas(&self) -> Result<Vec<Area>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, title, sort_order, created_at, updated_at FROM areas ORDER BY sort_order ASC")?;
-        let rows = stmt.query_map([], Self::map_area_row)?;
-        let mut areas = Vec::new();
-        for row in rows {
-            areas.push(row?);
-        }
-        Ok(areas)
+        self.select_areas(&format!("{} ORDER BY sort_order ASC, created_at ASC, id ASC", trash::LIVE_AREA))
     }
 
+    /// Trashed areas, most recently trashed first.
+    pub fn list_trashed_areas(&self) -> Result<Vec<Area>> {
+        self.select_areas(&format!("{} ORDER BY trashed_at DESC, id ASC", trash::TRASHED_AREA))
+    }
+
+    fn select_areas(&self, filter_and_order: &str) -> Result<Vec<Area>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!("SELECT {AREA_COLUMNS} FROM areas WHERE {filter_and_order}"))?;
+        let rows = stmt.query_map([], Self::map_area_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Rename or reorder an area; never changes its trash state.
     pub fn update_area(&self, area: &Area) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();
@@ -136,9 +148,28 @@ impl Database {
         Ok(())
     }
 
-    pub fn delete_area(&self, id: &str) -> Result<()> {
+    /// Move an area to the Trash, taking its projects and tasks with it: they
+    /// leave every view, and the Trash lists the area in their place. Its
+    /// contents keep their own state, so Put Back restores them as they were.
+    pub fn trash_area(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM areas WHERE id = ?1", params![id])?;
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE areas SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
+            params![now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Put a trashed area back with its projects and tasks. Anything trashed
+    /// on its own before the area stays in the Trash.
+    pub fn restore_area(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE areas SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
+            params![now, id],
+        )?;
         Ok(())
     }
 
@@ -184,14 +215,22 @@ impl Database {
         Ok(project)
     }
 
-    /// Projects not in the Trash, in sidebar order.
+    /// Projects not in the Trash (themselves or through their area), in
+    /// sidebar order.
     pub fn list_projects(&self) -> Result<Vec<Project>> {
-        self.select_projects("trashed_at IS NULL ORDER BY sort_order ASC, created_at ASC, id ASC")
+        self.select_projects(&format!(
+            "{} ORDER BY sort_order ASC, created_at ASC, id ASC",
+            trash::LIVE_PROJECT
+        ))
     }
 
-    /// Trashed projects, most recently trashed first.
+    /// Projects the Trash lists, most recently trashed first. A project in a
+    /// trashed area is represented by the area (`list_trashed_areas`).
     pub fn list_trashed_projects(&self) -> Result<Vec<Project>> {
-        self.select_projects("trashed_at IS NOT NULL ORDER BY trashed_at DESC, id ASC")
+        self.select_projects(&format!(
+            "{} ORDER BY trashed_at DESC, id ASC",
+            trash::LISTED_TRASHED_PROJECT
+        ))
     }
 
     fn select_projects(&self, filter_and_order: &str) -> Result<Vec<Project>> {
@@ -426,19 +465,19 @@ impl Database {
         Ok(())
     }
 
-    /// Permanently delete everything in the Trash: trashed tasks, and trashed
-    /// projects with all their headings and tasks, along with the tasks'
-    /// checklist items and tags. This is the only way a task or project is
-    /// destroyed. Returns how many tasks were deleted.
+    /// Permanently delete everything in the Trash: trashed tasks, trashed
+    /// projects and trashed areas, with everything inside them (headings,
+    /// tasks, and the tasks' checklist items and tags). This is the only way
+    /// a task, project or area is destroyed. Returns how many tasks were
+    /// deleted.
     pub fn empty_trash(&self) -> Result<usize> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let tasks = tx.execute(
-            "DELETE FROM tasks WHERE trashed_at IS NOT NULL
-                OR project_id IN (SELECT id FROM projects WHERE trashed_at IS NOT NULL)",
-            [],
-        )?;
-        tx.execute("DELETE FROM projects WHERE trashed_at IS NOT NULL", [])?;
+        // Innermost first: each pass reads the trash state of the containers
+        // that later passes delete.
+        let tasks = tx.execute(&format!("DELETE FROM tasks WHERE {}", trash::ANY_TRASHED_TASK), [])?;
+        tx.execute(&format!("DELETE FROM projects WHERE {}", trash::ANY_TRASHED_PROJECT), [])?;
+        tx.execute(&format!("DELETE FROM areas WHERE {}", trash::TRASHED_AREA), [])?;
         tx.commit()?;
         Ok(tasks)
     }
@@ -500,13 +539,14 @@ impl Database {
     // Row Mappers
     // =========================================================================
 
-    fn map_area_row(row: &Row) -> rusqlite::Result<Area> {
+    pub(crate) fn map_area_row(row: &Row) -> rusqlite::Result<Area> {
         Ok(Area {
             id: row.get(0)?,
             title: row.get(1)?,
             sort_order: row.get(2)?,
             created_at: row.get(3)?,
             updated_at: row.get(4)?,
+            trashed_at: row.get(5)?,
         })
     }
 

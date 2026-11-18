@@ -7,6 +7,11 @@ pub struct Area {
     pub sort_order: f64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// When the area was moved to the Trash, taking its projects and tasks
+    /// with it; `None` while it is not trashed. Only `Database::trash_area`
+    /// and `Database::restore_area` change it.
+    #[serde(default)]
+    pub trashed_at: Option<i64>,
 }
 
 impl Area {
@@ -18,6 +23,11 @@ impl Area {
             sort_order,
             created_at: now,
             updated_at: now,
+            trashed_at: None,
         }
+    }
+
+    pub fn is_trashed(&self) -> bool {
+        self.trashed_at.is_some()
     }
 }

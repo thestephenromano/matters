@@ -4,7 +4,8 @@ use rusqlite::params;
 
 use crate::domain::{Area, Project, ProjectProgress, Task, View};
 use crate::error::Result;
-use crate::storage::db::{Database, PROJECT_COLUMNS, TASK_COLUMNS};
+use crate::storage::db::{Database, AREA_COLUMNS, PROJECT_COLUMNS, TASK_COLUMNS};
+use crate::storage::trash::{self, LISTED_TRASHED_TASK as TRASH_WHERE, LIVE_TASK as LIVE};
 
 #[derive(Debug, Clone, Default)]
 pub struct TodayView {
@@ -49,21 +50,8 @@ pub struct ViewCounts {
 // These rules apply to live tasks only: `select_live` and `counts` exclude the
 // Trash, whose tasks belong to no other view.
 
-/// Not in a trashed project. A trashed project takes its tasks out of every
-/// view, and the Trash lists the project in their place.
-macro_rules! outside_trashed_projects {
-    () => {
-        "(project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE trashed_at IS NOT NULL))"
-    };
-}
-
-/// Live tasks: not trashed, and not in a trashed project.
-const LIVE: &str = concat!("trashed_at IS NULL AND ", outside_trashed_projects!());
-
-/// TRASH: tasks trashed on their own, whatever their status. Tasks of a
-/// trashed project are represented by the project
-/// (`Database::list_trashed_projects`).
-const TRASH_WHERE: &str = concat!("trashed_at IS NOT NULL AND ", outside_trashed_projects!());
+// `LIVE` and `TRASH_WHERE` (the tasks the Trash lists one by one) come from
+// `storage::trash`, which defines trash membership for every query.
 
 /// INBOX: unassigned tasks with no project, area, date, or Someday flag.
 const INBOX_WHERE: &str = "status = 'open'
@@ -287,31 +275,24 @@ impl<'a> QueryEngine<'a> {
             // 2. Search Projects
             let mut proj_stmt = conn.prepare(&format!(
                 "SELECT {PROJECT_COLUMNS} FROM projects
-                 WHERE trashed_at IS NULL AND status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
-                 ORDER BY sort_order ASC LIMIT 10"
+                 WHERE {} AND status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
+                 ORDER BY sort_order ASC LIMIT 10",
+                trash::LIVE_PROJECT
             ))?;
             let projects = proj_stmt
                 .query_map(params![pattern], Database::map_project_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             // 3. Search Areas
-            let mut area_stmt = conn.prepare(
-                "SELECT id, title, sort_order, created_at, updated_at
-                 FROM areas
-                 WHERE title LIKE ?1
+            let mut area_stmt = conn.prepare(&format!(
+                "SELECT {AREA_COLUMNS} FROM areas
+                 WHERE {} AND title LIKE ?1
                  ORDER BY sort_order ASC LIMIT 10",
-            )?;
-            let mut areas = Vec::new();
-            let mut rows = area_stmt.query(params![pattern])?;
-            while let Some(row) = rows.next()? {
-                areas.push(Area {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    sort_order: row.get(2)?,
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
-                });
-            }
+                trash::LIVE_AREA
+            ))?;
+            let areas = area_stmt
+                .query_map(params![pattern], Database::map_area_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             Ok(QuickFindResult {
                 tasks,

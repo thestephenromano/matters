@@ -110,3 +110,9 @@ UPDATE projects
  WHERE status = 'trashed';
 CREATE INDEX IF NOT EXISTS idx_projects_trashed ON projects(trashed_at);
 "#;
+
+/// v4: areas can be trashed, taking their projects and tasks with them.
+pub const MIGRATION_V4: &str = r#"
+ALTER TABLE areas ADD COLUMN trashed_at INTEGER;
+CREATE INDEX IF NOT EXISTS idx_areas_trashed ON areas(trashed_at);
+"#;
