@@ -170,6 +170,45 @@ impl Database {
         Ok(())
     }
 
+    /// Rename an area. The name is cleaned like a task title
+    /// ([`Task::clean_title`]); a blank name is refused.
+    pub fn rename_area(&self, id: &str, title: &str) -> Result<()> {
+        let Some(title) = Task::clean_title(title) else {
+            return Err(MattersError::Validation("an area needs a name".into()));
+        };
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let changed = conn.execute(
+            "UPDATE areas SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now, id],
+        )?;
+        if changed == 0 {
+            return Err(MattersError::NotFound { entity: "area", id: id.to_string() });
+        }
+        Ok(())
+    }
+
+    /// File a project in an area, or take it out of one (`None`). The area
+    /// must exist and not be in the Trash.
+    pub fn set_project_area(&self, project_id: &str, area_id: Option<&str>) -> Result<()> {
+        if let Some(area_id) = area_id {
+            match self.get_area(area_id)? {
+                Some(area) if !area.is_trashed() => {}
+                _ => return Err(MattersError::NotFound { entity: "area", id: area_id.to_string() }),
+            }
+        }
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let changed = conn.execute(
+            "UPDATE projects SET area_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![area_id, now, project_id],
+        )?;
+        if changed == 0 {
+            return Err(MattersError::NotFound { entity: "project", id: project_id.to_string() });
+        }
+        Ok(())
+    }
+
     /// Move an area to the Trash, taking its projects and tasks with it: they
     /// leave every view, and the Trash lists the area in their place. Its
     /// contents keep their own state, so Put Back restores them as they were.

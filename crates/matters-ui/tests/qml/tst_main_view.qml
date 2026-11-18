@@ -26,9 +26,14 @@ Item {
 
         function init() {
             // Styles that animate popups (Material) may still be closing the
-            // previous test's popover; opening it then does nothing.
-            const popup = findChild(view, "whenPopup");
-            tryVerify(() => !popup.visible, 2000, "the When popover has closed");
+            // previous test's popover or dialog; while one is, it catches
+            // clicks, and opening it again does nothing.
+            for (const name of ["whenPopup", "newAreaDialog", "renameAreaDialog", "newProjectDialog",
+                                "emptyTrashDialog", "quickFindDialog"]) {
+                const popup = findChild(view, name);
+                if (popup)
+                    tryVerify(() => !popup.visible, 2000, name + " has closed");
+            }
             view.hideUndo();
             controller.selectView("today");
             list.expandedTaskId = "";
@@ -932,6 +937,134 @@ Item {
             controller.toggleTask(row.taskId);
             controller.selectView("logbook");
             headedBy("finish-me", "Today");
+        }
+
+        // ---- Areas (#15) -----------------------------------------------------
+
+        // Depth-first search of the visual tree under `item`.
+        function findVisual(item, test) {
+            if (!item)
+                return null;
+            if (test(item))
+                return item;
+            for (const child of item.children) {
+                const found = findVisual(child, test);
+                if (found)
+                    return found;
+            }
+            return null;
+        }
+
+        function sidebarArea(title) {
+            return findVisual(view, i => i.objectName === "areaItem" && i.areaTitle === title && i.visible);
+        }
+
+        function sidebarAreaProject(title) {
+            return findVisual(view, i => i.objectName === "areaProjectItem" && i.projectTitle === title && i.visible);
+        }
+
+        function createArea(title) {
+            const id = controller.createArea(title);
+            verify(id !== "", "area created");
+            tryVerify(() => sidebarArea(title) !== null, 2000, "'" + title + "' in the sidebar");
+            return id;
+        }
+
+        function test_an_area_is_created_from_the_sidebar_and_opened() {
+            const plus = findChild(view, "newContainerButton");
+            mouseClick(plus);
+            // Menu items live in the window's overlay, not under the view; the
+            // menu belongs to the + button.
+            const item = findChild(plus, "newAreaItem");
+            verify(item !== null, "the + menu has New Area");
+            tryVerify(() => item.visible, 1000, "the + menu is open");
+            mouseClick(item);
+            const dialog = findChild(view, "newAreaDialog");
+            tryVerify(() => dialog.opened, 1000);
+            typeText("Home Base");
+            dialog.accept();
+            tryVerify(() => !dialog.visible, 1000);
+            compare(controller.currentView, "area");
+            compare(controller.currentTitle, "Home Base");
+            tryVerify(() => sidebarArea("Home Base") !== null && sidebarArea("Home Base").isSelected, 2000);
+
+            view.captureTask("area-task");
+            waitForRow("area-task");
+            controller.selectView("inbox");
+            waitForNoRow("area-task");
+            mouseClick(sidebarArea("Home Base"));
+            compare(controller.currentView, "area");
+            waitForRow("area-task");
+        }
+
+        function test_a_project_is_filed_in_an_area() {
+            createArea("Filing Area");
+            controller.createProject("Filed Project");
+            const project = JSON.parse(controller.projectsJson).find(p => p.title === "Filed Project");
+            controller.selectProject(project.id);
+            const picker = findChild(view, "projectAreaPicker");
+            verify(picker.visible, "a project's header shows its area");
+            compare(picker.currentText, "No Area");
+            const index = picker.choices.findIndex(a => a.title === "Filing Area");
+            picker.activated(index); // the user's choice
+            tryCompare(picker, "currentText", "Filing Area", 2000);
+            tryVerify(() => sidebarAreaProject("Filed Project") !== null, 2000, "listed under its area");
+            const top = findChild(view, "projectsList");
+            verify(!top.model.some(p => p.title === "Filed Project"), "no longer among projects without an area");
+        }
+
+        function test_an_area_goes_to_the_trash_and_comes_back() {
+            const id = createArea("Spare Area");
+            controller.selectArea(id);
+            clickWhenShown(findChild(view, "trashAreaButton"));
+            compare(controller.currentView, "inbox", "the Inbox shows instead");
+            tryVerify(() => sidebarArea("Spare Area") === null, 2000, "gone from the sidebar");
+
+            const toast = findChild(view, "undoToast");
+            verify(toast.visible);
+            mouseClick(findChild(toast, "undoButton"));
+            compare(controller.currentView, "area");
+            compare(controller.currentAreaId, id);
+            tryVerify(() => sidebarArea("Spare Area") !== null, 2000, "Undo puts it back");
+
+            clickWhenShown(findChild(view, "trashAreaButton"));
+            controller.selectView("trash");
+            const trashed = findVisual(view, i => i.objectName === "trashedArea" && i.visible);
+            verify(trashed !== null, "the Trash lists the area");
+            verify(findChild(view, "emptyTrashButton").visible);
+            mouseClick(findChild(trashed, "restoreAreaButton"));
+            tryVerify(() => sidebarArea("Spare Area") !== null, 2000, "Put Back restores it");
+        }
+
+        // Click a control that has just appeared, once the window is laid out.
+        function clickWhenShown(item) {
+            tryVerify(() => item.visible && item.width > 0, 1000);
+            waitForRendering(view);
+            mouseClick(item);
+        }
+
+        function test_an_area_is_renamed() {
+            const id = createArea("Old Name");
+            controller.selectArea(id);
+            clickWhenShown(findChild(view, "renameAreaButton"));
+            const dialog = findChild(view, "renameAreaDialog");
+            tryVerify(() => dialog.opened, 1000);
+            const input = findChild(dialog, "renameAreaInput");
+            compare(input.text, "Old Name");
+            input.text = "New Name";
+            dialog.accept();
+            tryCompare(controller, "currentTitle", "New Name", 2000);
+            tryVerify(() => sidebarArea("New Name") !== null, 2000);
+
+            // A blank name is refused.
+            tryVerify(() => !dialog.visible, 1000);
+            clickWhenShown(findChild(view, "renameAreaButton"));
+            tryVerify(() => dialog.opened, 1000);
+            findChild(dialog, "renameAreaInput").text = "   ";
+            dialog.accept();
+            tryVerify(() => !dialog.visible, 2000);
+            compare(controller.currentTitle, "New Name");
+            compare(controller.errorMessage, "");
         }
 
         function test_ctrl_n_adds_a_task_and_ctrl_shift_n_a_project() {

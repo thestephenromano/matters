@@ -17,6 +17,8 @@ pub enum View {
     Logbook,
     Trash,
     Project(String),
+    /// The tasks filed directly in an area (not in its projects).
+    Area(String),
 }
 
 impl View {
@@ -44,11 +46,13 @@ impl View {
             View::Logbook => "logbook",
             View::Trash => "trash",
             View::Project(_) => "project",
+            View::Area(_) => "area",
         }
     }
 
-    /// Inverse of [`View::key`]. A project view needs a non-empty project id.
-    pub fn from_key(key: &str, project_id: Option<&str>) -> Option<View> {
+    /// Inverse of [`View::key`]. A project or area view needs the non-empty
+    /// id of its project or area in `container_id`.
+    pub fn from_key(key: &str, container_id: Option<&str>) -> Option<View> {
         Some(match key {
             "inbox" => View::Inbox,
             "today" => View::Today,
@@ -57,16 +61,20 @@ impl View {
             "someday" => View::Someday,
             "logbook" => View::Logbook,
             "trash" => View::Trash,
-            "project" => match project_id {
+            "project" => match container_id {
                 Some(id) if !id.is_empty() => View::Project(id.to_string()),
+                _ => return None,
+            },
+            "area" => match container_id {
+                Some(id) if !id.is_empty() => View::Area(id.to_string()),
                 _ => return None,
             },
             _ => return None,
         })
     }
 
-    /// Display title. A project's title lives in the database, so this returns
-    /// a generic label for [`View::Project`].
+    /// Display title. Project and area titles live in the database, so this
+    /// returns a generic label for [`View::Project`] and [`View::Area`].
     pub fn title(&self) -> &'static str {
         match self {
             View::Inbox => "Inbox",
@@ -77,6 +85,7 @@ impl View {
             View::Logbook => "Logbook",
             View::Trash => "Trash",
             View::Project(_) => "Project",
+            View::Area(_) => "Area",
         }
     }
 
@@ -85,7 +94,7 @@ impl View {
     /// finished or trashed. Anytime and Someday mix tasks from several areas
     /// and projects, so they wait for grouped sections (#25).
     pub fn is_reorderable(&self) -> bool {
-        matches!(self, View::Inbox | View::Today | View::Project(_))
+        matches!(self, View::Inbox | View::Today | View::Project(_) | View::Area(_))
     }
 
     pub fn project_id(&self) -> Option<&str> {
@@ -95,12 +104,24 @@ impl View {
         }
     }
 
+    pub fn area_id(&self) -> Option<&str> {
+        match self {
+            View::Area(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The id of the project or area this view shows, if any.
+    pub fn container_id(&self) -> Option<&str> {
+        self.project_id().or(self.area_id())
+    }
+
     /// The view to open to show `task`, as a search result for example.
     ///
     /// Trashed tasks are only in the Trash. Otherwise a project's tasks live
     /// in the project; finished tasks in the Logbook;
     /// otherwise the task's schedule decides (Someday, Upcoming, Today), then
-    /// whether it is filed under an area (Anytime) or not (Inbox). An undated
+    /// whether it is filed in an area (that area) or not (Inbox). An undated
     /// task with a due deadline is shown in Today even when it is also listed
     /// in the Inbox.
     pub fn containing(task: &Task, today: NaiveDate) -> View {
@@ -120,8 +141,10 @@ impl View {
             Some(date) if date > today => View::Upcoming,
             Some(_) => View::Today,
             None if task.deadline.is_some_and(|d| d <= today) => View::Today,
-            None if task.area_id.is_some() => View::Anytime,
-            None => View::Inbox,
+            None => match &task.area_id {
+                Some(area_id) => View::Area(area_id.clone()),
+                None => View::Inbox,
+            },
         }
     }
 
@@ -139,7 +162,7 @@ impl View {
     ///
     /// The task lands in the view it was typed into wherever the model allows:
     /// Today and Someday schedule it accordingly, Upcoming schedules it for
-    /// tomorrow, a project view files it in that project. Anytime only lists
+    /// tomorrow, a project or area view files it there. Anytime only lists
     /// tasks that belong to an area or project, so captures there go to the
     /// Inbox (SPEC §3.1: a task created without an explicit project or date
     /// defaults to the Inbox).
@@ -150,11 +173,12 @@ impl View {
             View::Today => Schedule::Today { evening: false },
             View::Upcoming => Schedule::Date(today.checked_add_days(Days::new(1)).unwrap_or(today)),
             View::Someday => Schedule::Someday,
-            View::Inbox | View::Anytime | View::Project(_) => Schedule::None,
+            View::Inbox | View::Anytime | View::Project(_) | View::Area(_) => Schedule::None,
         };
         let mut task = Task::new(id, title, 0.0);
         task.apply_schedule(&schedule, today);
         task.project_id = self.project_id().map(str::to_string);
+        task.area_id = self.area_id().map(str::to_string);
         Some(task)
     }
 }

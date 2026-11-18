@@ -81,6 +81,10 @@ const LOGBOOK_WHERE: &str = "status IN ('completed', 'canceled')";
 /// ring counts). `?1` is the project id.
 const PROJECT_WHERE: &str = "project_id = ?1 AND status IN ('open', 'completed')";
 
+/// AREA: the tasks filed directly in an area, done or not; its projects'
+/// tasks belong to the projects. `?1` is the area id.
+const AREA_WHERE: &str = "area_id = ?1 AND project_id IS NULL AND status IN ('open', 'completed')";
+
 /// Stable order for manually sorted lists; `id` breaks exact ties.
 const MANUAL_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
 
@@ -138,6 +142,7 @@ impl<'a> QueryEngine<'a> {
             View::Logbook => self.select_live(LOGBOOK_WHERE, LOGBOOK_ORDER, [])?,
             View::Trash => self.trash()?,
             View::Project(id) => self.project_tasks(id)?,
+            View::Area(id) => self.select_live(AREA_WHERE, MANUAL_ORDER, params![id])?,
         })
     }
 
@@ -283,7 +288,9 @@ impl<'a> QueryEngine<'a> {
                     format!("done:{}", day.unwrap_or_default())
                 })
                 .collect(),
-            View::Inbox | View::Someday | View::Trash | View::Project(_) => vec![String::new(); tasks.len()],
+            View::Inbox | View::Someday | View::Trash | View::Project(_) | View::Area(_) => {
+                vec![String::new(); tasks.len()]
+            }
         })
     }
 
