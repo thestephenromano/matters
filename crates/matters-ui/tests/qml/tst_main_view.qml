@@ -54,22 +54,27 @@ Item {
             return null;
         }
 
+        // Row of the task titled `title` in the model, whether or not its
+        // delegate exists (rows far outside the view have none).
         function indexOf(title) {
             for (let i = 0; i < list.count; ++i) {
-                const item = list.itemAtIndex(i);
-                if (item && item.title === title)
+                if (list.model.titleAt(i) === title)
                     return i;
             }
             return -1;
         }
 
+        // Wait for the task to be listed, scroll it into view as a user would,
+        // and return its row.
         function waitForRow(title) {
-            tryVerify(() => rowFor(title) !== null, 2000, "row '" + title + "' should be listed");
+            tryVerify(() => indexOf(title) >= 0, 2000, "row '" + title + "' should be listed");
+            list.positionViewAtIndex(indexOf(title), ListView.Contain);
+            tryVerify(() => rowFor(title) !== null, 2000, "row '" + title + "' should be shown");
             return rowFor(title);
         }
 
         function waitForNoRow(title) {
-            tryVerify(() => rowFor(title) === null, 2000, "row '" + title + "' should not be listed");
+            tryVerify(() => indexOf(title) < 0, 2000, "row '" + title + "' should not be listed");
         }
 
         // Capture a task the way the quick-add field does.
@@ -632,6 +637,71 @@ Item {
             typeText("renamed");
             keyClick(Qt.Key_Return);
             tryVerify(() => row.title === "renamed", 2000);
+        }
+
+        // ---- Enter: a new task below the selection --------------------------
+
+        function newBelowField() {
+            for (let i = 0; i < list.count; ++i) {
+                const item = list.itemAtIndex(i);
+                const field = item ? findChild(item, "newBelowInput") : null;
+                if (field && field.visible)
+                    return field;
+            }
+            return null;
+        }
+
+        function test_enter_types_new_tasks_below_the_selection() {
+            openFreshProject("enter-proj", ["p-a", "p-b"]);
+            focusList();
+            keyClick(Qt.Key_Down);
+            compare(selectedTitle(), "p-a");
+            const before = list.count;
+
+            keyClick(Qt.Key_Return);
+            tryVerify(() => newBelowField() !== null && newBelowField().activeFocus, 2000, "a field opens under p-a");
+            typeText("p-new1");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => titlesInOrder() === "p-a,p-new1,p-b", 2000, "added right below: " + titlesInOrder());
+            tryVerify(() => newBelowField() !== null && newBelowField().activeFocus, 2000, "the field moves on");
+            typeText("p-new2");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => titlesInOrder() === "p-a,p-new1,p-new2,p-b", 2000, titlesInOrder());
+
+            // An empty Enter closes the field without creating anything.
+            tryVerify(() => newBelowField() !== null && newBelowField().activeFocus, 2000);
+            keyClick(Qt.Key_Return);
+            tryVerify(() => newBelowField() === null, 2000, "closed");
+            compare(list.count, before + 2, "no blank task");
+            verify(list.activeFocus);
+            compare(selectedTitle(), "p-new2");
+        }
+
+        function test_escape_closes_the_new_task_field_without_adding() {
+            openFreshProject("esc-proj", ["q-a"]);
+            focusList();
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Return);
+            tryVerify(() => newBelowField() !== null && newBelowField().activeFocus, 2000);
+            typeText("never");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => newBelowField() === null, 2000);
+            wait(100);
+            compare(titlesInOrder(), "q-a", "nothing was added");
+            verify(list.activeFocus);
+        }
+
+        function test_enter_elsewhere_goes_to_the_quick_add_field() {
+            controller.selectView("someday");
+            view.captureTask("sd-enter");
+            waitForRow("sd-enter");
+            settle();
+            focusList();
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Return);
+            verify(findChild(view, "newTaskInput").activeFocus, "Someday is not arranged by hand");
+            verify(newBelowField() === null);
+            keyClick(Qt.Key_Escape);
         }
 
         function test_ctrl_s_opens_the_when_menu_for_the_selection() {

@@ -97,6 +97,28 @@ fn move_in_today(db: &Database, today: NaiveDate, id: &str, step: isize) -> Resu
     Ok(()) // already at the top of Today or the bottom of This Evening
 }
 
+/// Add a captured task (from `View::new_task`) right below `below` in
+/// `view` (Enter on a selected task, SPEC §4). In Today the new task joins
+/// `below`'s section, so a task added below an evening task is scheduled for
+/// This Evening too. `below` must be listed in `view`, which must be arranged
+/// by hand; nothing is created otherwise.
+pub fn add_task_below(db: &Database, view: &View, today: NaiveDate, task: &mut Task, below: &str) -> Result<()> {
+    if !view.is_reorderable() {
+        return Err(invalid(format!("{} is not arranged by hand", view.title())));
+    }
+    let list = QueryEngine::new(db).tasks_in(view, today)?;
+    let Some(anchor) = list.iter().find(|t| t.id == below) else {
+        return Err(invalid(format!("task '{below}' is not in {}", view.title())));
+    };
+    let evening = anchor.is_evening();
+    db.add_task(task)?;
+    if *view == View::Today {
+        place_in_today(db, today, &task.id, evening, Some(below))
+    } else {
+        place_task(db, view, today, &task.id, Some(below))
+    }
+}
+
 /// Put a Today task in the daytime section or This Evening, right after
 /// `after` within that section (first when `None`). Changing section changes
 /// only This Evening: the task's date is kept, so an overdue task stays

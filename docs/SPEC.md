@@ -137,7 +137,7 @@ Matters is designed to be operated with minimal mouse reliance.
 
 | Shortcut | Context | Action |
 | :--- | :--- | :--- |
-| `Enter` | Selected task | Creates a new task directly below the selected item |
+| `Enter` | Selected task | Opens a field for a new task directly below the selected item (in the Inbox, Today and projects; elsewhere it focuses the quick-add field). `Enter` again saves it and opens the next; `Escape` or an empty `Enter` closes the field. In Today the new task joins the selected task's section |
 | `Space` | Selected task | Toggles inline expansion (notes + checklist) |
 | `F2` | Selected task | Opens the task with its title selected for editing; `Enter` saves and moves to the notes, `Escape` abandons the edit |
 | `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, date picker) |
@@ -298,7 +298,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [ ] **Partly:** core views Inbox, Today, Upcoming, Anytime, Someday, Logbook and Trash all exist. Each is one flat list; the This Evening section, date groups in Upcoming, area and project groups in Anytime, and date groups in the Logbook are missing (#25).
 - [ ] **Partly:** When vs. Deadline. The core schedules both. The app sets When to Today, This Evening or Someday, but has no date picker and can't set a deadline (#20).
 - [ ] **Partly:** inline task expansion. Title, notes and When are edited in place; checklists aren't shown (#21).
-- [ ] **Partly:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find and `Ctrl+S` (When menu, no date picker yet) work. Missing: `Enter` for a new task below and `Ctrl+Shift+M` (#19), `Ctrl+D` (#20).
+- [ ] **Partly:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find and `Ctrl+S` (When menu, no date picker yet) work. Missing: `Ctrl+Shift+M` (#19, with #54) and `Ctrl+D` (#20).
 - [ ] **Partly:** project progress. Shown as a filling circle, not yet a ring (#28).
 - [ ] **Partly:** Quick Find popover. Finds tasks; projects and areas are found by the core but not shown (#26).
 - [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.
