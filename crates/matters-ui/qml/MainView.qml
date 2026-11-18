@@ -149,12 +149,135 @@ Item {
 
     function moveSelected(step) {
         const id = taskListView.selectedTaskId;
-        if (taskModel.rowOf(id) < 0 || !controller.canReorder())
+        if (taskModel.rowOf(id) < 0 || !controller.reorderable)
             return;
         controller.moveTask(id, step);
         // The list reloads on the next turn of the event loop; keep the
         // moved task in view once it has.
         Qt.callLater(root.scrollToTask, id);
+    }
+
+    // ---- Drag and drop (#53) -------------------------------------------
+    // Rows are dragged by their grip. While dragging, a line shows where the
+    // item will land; dropping asks the core to place it there.
+
+    // Where an item dragged from row `from` of `list` would land with the
+    // pointer at `scenePos`: { afterId, y } (y is the gap's position in the
+    // list's content), or null when it would stay where it is or the slot
+    // is not allowed. `idAt(i)` gives row ids; `mayNeighbour(i)` says whether
+    // the dragged item may sit next to row i (Today keeps This Evening apart).
+    function dropSlot(list, from, idAt, mayNeighbour, scenePos) {
+        const count = list.count;
+        const p = list.contentItem.mapFromItem(null, scenePos.x, scenePos.y);
+        // The drop goes before the first row whose middle is below the pointer.
+        let k = count;
+        for (let i = 0; i < count; ++i) {
+            const item = list.itemAtIndex(i);
+            if (item && p.y < item.y + item.height / 2) {
+                k = i;
+                break;
+            }
+        }
+        if (k === from || k === from + 1)
+            return null;
+        let above = k - 1;
+        if (above === from)
+            above--;
+        let below = k;
+        if (below === from)
+            below++;
+        const aboveOk = above >= 0 && mayNeighbour(above);
+        const belowOk = below < count && mayNeighbour(below);
+        if (!aboveOk && !belowOk)
+            return null;
+        // Next to a row of another section only from its far side: the item
+        // goes first in its own section.
+        const afterId = aboveOk ? idAt(above) : "";
+
+        const spacing = list.spacing / 2;
+        let y;
+        if (k < count && list.itemAtIndex(k)) {
+            y = list.itemAtIndex(k).y - spacing;
+        } else {
+            const last = list.itemAtIndex(count - 1);
+            y = last ? last.y + last.height + spacing : 0;
+        }
+        return { afterId: afterId, y: y };
+    }
+
+    property string dragTaskId: ""
+    property var taskDrop: null
+    property point taskDragPos
+
+    function beginTaskDrag(id) {
+        dragTaskId = id;
+        taskDrop = null;
+        taskListView.selectedTaskId = id;
+    }
+
+    function updateTaskDrag(scenePos) {
+        taskDragPos = scenePos;
+        const from = taskModel.rowOf(dragTaskId);
+        if (from < 0) {
+            taskDrop = null;
+            return;
+        }
+        const evening = taskModel.eveningAt(from);
+        const sectioned = controller.currentView === "today";
+        taskDrop = dropSlot(taskListView, from, row => taskModel.idAt(row),
+                            row => !sectioned || taskModel.eveningAt(row) === evening, scenePos);
+    }
+
+    function endTaskDrag() {
+        const id = dragTaskId;
+        const drop = taskDrop;
+        dragTaskId = "";
+        taskDrop = null;
+        if (drop && id !== "") {
+            controller.placeTask(id, drop.afterId);
+            Qt.callLater(root.scrollToTask, id);
+        }
+    }
+
+    property string dragProjectId: ""
+    property var projectDrop: null
+
+    function updateProjectDrag(scenePos) {
+        const projects = projectsList.model;
+        const from = projects.findIndex(p => p.id === dragProjectId);
+        projectDrop = from < 0 ? null
+            : dropSlot(projectsList, from, row => projects[row].id, row => true, scenePos);
+    }
+
+    function endProjectDrag() {
+        const id = dragProjectId;
+        const drop = projectDrop;
+        dragProjectId = "";
+        projectDrop = null;
+        if (drop && id !== "")
+            controller.placeProject(id, drop.afterId);
+    }
+
+    // Scroll the task list while a dragged task is held near its top or
+    // bottom edge.
+    Timer {
+        interval: 30
+        repeat: true
+        running: root.dragTaskId !== ""
+        onTriggered: {
+            const p = taskListView.mapFromItem(null, root.taskDragPos.x, root.taskDragPos.y);
+            const edge = 40;
+            const maxY = Math.max(0, taskListView.contentHeight - taskListView.height);
+            let y = taskListView.contentY;
+            if (p.y < edge)
+                y = Math.max(0, y - 12);
+            else if (p.y > taskListView.height - edge)
+                y = Math.min(maxY, y + 12);
+            if (y !== taskListView.contentY) {
+                taskListView.contentY = y;
+                root.updateTaskDrag(root.taskDragPos);
+            }
+        }
     }
 
     function toggleSelectedExpansion() {
@@ -366,7 +489,21 @@ Item {
 
                     ListView {
                         id: projectsList
+                        objectName: "projectsList"
                         spacing: 2
+
+                        // Where a dragged project will land.
+                        Rectangle {
+                            objectName: "projectDropIndicator"
+                            visible: root.dragProjectId !== "" && root.projectDrop !== null
+                            z: 10
+                            x: 4
+                            width: projectsList.width - 8
+                            height: 2
+                            radius: 1
+                            y: root.projectDrop ? root.projectDrop.y - 1 : 0
+                            color: root.colAccent
+                        }
                         model: {
                             try {
                                 return JSON.parse(controller.projectsJson);
@@ -386,7 +523,7 @@ Item {
 
                             RowLayout {
                                 anchors.fill: parent
-                                anchors.leftMargin: 8
+                                anchors.leftMargin: 22
                                 anchors.rightMargin: 8
                                 spacing: 8
 
@@ -416,6 +553,39 @@ Item {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: controller.selectProject(projItem.modelData.id)
+                            }
+
+                            // Drag grip, above the row's click area so it sees the
+                            // press first; reorders projects in the sidebar. On the
+                            // left: the sidebar's scroll bar covers the right edge.
+                            Item {
+                                objectName: "projectGrip"
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 20
+                                height: parent.height
+                                opacity: projMouse.containsMouse || projDrag.active ? 1 : 0
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "⠿"
+                                    font.pixelSize: 13
+                                    color: root.colTextSecondary
+                                }
+                                HoverHandler { cursorShape: Qt.OpenHandCursor }
+                                DragHandler {
+                                    id: projDrag
+                                    target: null
+                                    onActiveChanged: {
+                                        if (active) {
+                                            root.dragProjectId = projItem.modelData.id;
+                                            root.projectDrop = null;
+                                        } else {
+                                            root.endProjectDrag();
+                                        }
+                                    }
+                                    onCentroidChanged: if (active) root.updateProjectDrag(centroid.scenePosition)
+                                }
                             }
                         }
                     }
@@ -703,6 +873,19 @@ Item {
                             event.accepted = true;
                         }
 
+                        // Where a dragged task will land.
+                        Rectangle {
+                            objectName: "dropIndicator"
+                            visible: root.dragTaskId !== "" && root.taskDrop !== null
+                            z: 10
+                            x: 4
+                            width: taskListView.width - 8
+                            height: 2
+                            radius: 1
+                            y: root.taskDrop ? root.taskDrop.y - 1 : 0
+                            color: root.colAccent
+                        }
+
                         // Empty State
                         Text {
                             anchors.centerIn: parent
@@ -793,6 +976,31 @@ Item {
                                     Layout.preferredHeight: 32
                                     Layout.maximumHeight: 32
                                     spacing: 12
+
+                                    // Drag grip: reorders the task (lists arranged by
+                                    // hand only). Dragging takes over from the row's
+                                    // click once the pointer moves.
+                                    Item {
+                                        objectName: "dragGrip"
+                                        visible: controller.reorderable
+                                        Layout.preferredWidth: 12
+                                        Layout.preferredHeight: 24
+                                        opacity: rowHover.hovered || gripDrag.active ? 1 : 0
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "⠿"
+                                            font.pixelSize: 14
+                                            color: root.colTextSecondary
+                                        }
+                                        HoverHandler { cursorShape: Qt.OpenHandCursor }
+                                        DragHandler {
+                                            id: gripDrag
+                                            target: null
+                                            onActiveChanged: active ? root.beginTaskDrag(taskRow.taskId) : root.endTaskDrag()
+                                            onCentroidChanged: if (active) root.updateTaskDrag(centroid.scenePosition)
+                                        }
+                                    }
 
                                     // Circular checkbox
                                     Rectangle {

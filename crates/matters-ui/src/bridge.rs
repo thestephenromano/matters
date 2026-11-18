@@ -63,6 +63,9 @@ pub mod qobject {
         /// Incremented on every navigation; a new value starts a new visit
         /// for the task list (`matters_core::Visit`).
         #[qproperty(i32, visit)]
+        /// Whether the current view is arranged by hand
+        /// (`View::is_reorderable`): reordering controls show only then.
+        #[qproperty(bool, reorderable)]
         type AppController = super::AppControllerRust;
 
         #[qinvokable]
@@ -85,9 +88,14 @@ pub mod qobject {
         /// view, if the view is arranged by hand (`View::is_reorderable`).
         #[qinvokable]
         fn move_task(self: Pin<&mut AppController>, task_id: &QString, step: i32);
-        /// Whether the current view is arranged by hand.
+        /// Move a task in the current view so it follows `after_id`, or comes
+        /// first when `after_id` is empty (drag and drop).
         #[qinvokable]
-        fn can_reorder(self: &AppController) -> bool;
+        fn place_task(self: Pin<&mut AppController>, task_id: &QString, after_id: &QString);
+        /// Move a project in the sidebar so it follows `after_id`, or comes
+        /// first when `after_id` is empty.
+        #[qinvokable]
+        fn place_project(self: Pin<&mut AppController>, project_id: &QString, after_id: &QString);
         /// Permanently delete everything in the Trash.
         #[qinvokable]
         fn empty_trash(self: Pin<&mut AppController>);
@@ -140,6 +148,9 @@ pub mod qobject {
         /// Title of the task at `row`, or an empty string when out of range.
         #[qinvokable]
         fn title_at(self: &TaskListModel, row: i32) -> QString;
+        /// Whether the task at `row` is scheduled for This Evening.
+        #[qinvokable]
+        fn evening_at(self: &TaskListModel, row: i32) -> bool;
     }
 
     #[auto_cxx_name]
@@ -233,6 +244,7 @@ pub struct AppControllerRust {
     error_message: QString,
     revision: i32,
     visit: i32,
+    reorderable: bool,
 
     view: View,
     /// The date the sidebar and header were last built for.
@@ -261,6 +273,7 @@ impl Default for AppControllerRust {
             error_message: QString::default(),
             revision: 0,
             visit: 0,
+            reorderable: view.is_reorderable(),
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -317,8 +330,29 @@ impl qobject::AppController {
         self.finish(result);
     }
 
-    pub fn can_reorder(&self) -> bool {
-        self.view.is_reorderable()
+    pub fn place_task(self: Pin<&mut Self>, task_id: &QString, after_id: &QString) {
+        if !self.view.is_reorderable() {
+            return;
+        }
+        let after = String::from(after_id);
+        let result = matters_core::ordering::place_task(
+            &self.db,
+            &self.view,
+            self.day.day(),
+            &String::from(task_id),
+            (!after.is_empty()).then_some(after.as_str()),
+        );
+        self.finish(result);
+    }
+
+    pub fn place_project(self: Pin<&mut Self>, project_id: &QString, after_id: &QString) {
+        let after = String::from(after_id);
+        let result = matters_core::ordering::place_project(
+            &self.db,
+            &String::from(project_id),
+            (!after.is_empty()).then_some(after.as_str()),
+        );
+        self.finish(result);
     }
 
     pub fn toggle_task(self: Pin<&mut Self>, task_id: &QString) {
@@ -426,6 +460,7 @@ impl qobject::AppController {
         self.as_mut().set_current_view(QString::from(view.key()));
         self.as_mut()
             .set_current_project_id(QString::from(view.project_id().unwrap_or_default()));
+        self.as_mut().set_reorderable(view.is_reorderable());
         self.as_mut().rust_mut().view = view;
         let visit = self.visit.wrapping_add(1);
         self.as_mut().set_visit(visit);
@@ -624,6 +659,10 @@ impl qobject::TaskListModel {
 
     pub fn title_at(&self, row: i32) -> QString {
         self.task_at(row).map_or_else(QString::default, |task| QString::from(task.title.as_str()))
+    }
+
+    pub fn evening_at(&self, row: i32) -> bool {
+        self.task_at(row).is_some_and(Task::is_evening)
     }
 
     fn task_at(&self, row: i32) -> Option<&Task> {
