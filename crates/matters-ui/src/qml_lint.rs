@@ -113,3 +113,66 @@ fn qml_uses_matters_icons_not_emoji() {
     }
     assert!(found.is_empty(), "emoji in QML (use Icon instead):\n{}", found.join("\n"));
 }
+
+/// A control that draws its own `contentItem` must not also set `text`: some
+/// styles paint the text themselves, outside `contentItem` (the KDE desktop
+/// style's ToolButton draws it in its native background, with an access-key
+/// underline), so the label would appear twice. Such a control keeps its
+/// label in its own property and gives it to `Accessible.name`.
+#[test]
+fn qml_custom_content_controls_leave_text_to_their_content() {
+    const CONTROLS: &[&str] = &[
+        "Button",
+        "CheckBox",
+        "DelayButton",
+        "ItemDelegate",
+        "MenuItem",
+        "RadioButton",
+        "RoundButton",
+        "Switch",
+        "TabButton",
+        "ToolButton",
+    ];
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("qml");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "qml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (start, line) in lines.iter().enumerate() {
+            let Some(name) = line.trim().strip_suffix('{').map(str::trim) else {
+                continue;
+            };
+            if !CONTROLS.contains(&name) {
+                continue;
+            }
+            // Walk the control's block, looking only at its own members
+            // (brace depth 1), not at those of the items inside it.
+            let (mut depth, mut content, mut text_line) = (0i32, false, None);
+            for (n, member) in lines.iter().enumerate().skip(start) {
+                let m = member.trim();
+                if depth == 1 {
+                    content |= m.starts_with("contentItem:");
+                    if m.starts_with("text:") {
+                        text_line = Some(n);
+                    }
+                }
+                depth += member.matches('{').count() as i32 - member.matches('}').count() as i32;
+                if depth <= 0 && n > start {
+                    break;
+                }
+            }
+            if let (true, Some(n)) = (content, text_line) {
+                found.push(format!("{}:{}: {}", path.display(), n + 1, lines[n].trim()));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a control with its own contentItem sets text (styles may paint it twice):\n{}",
+        found.join("\n")
+    );
+}
