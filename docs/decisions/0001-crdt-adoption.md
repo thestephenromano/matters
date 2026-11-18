@@ -1,6 +1,8 @@
 # ADR 0001: adopt Loro for the local sync prototype
 
-Date: 2026-11-18. Status: **proposed; maintainer decision pending**. Tracks [#32](https://github.com/thestephenromano/matters/issues/32); implementation belongs to [#35](https://github.com/thestephenromano/matters/issues/35).
+Date: 2026-11-18. Status: **approved for bounded prototype evaluation on 2026-11-18**. Tracks [#32](https://github.com/thestephenromano/matters/issues/32); implementation belongs to [#35](https://github.com/thestephenromano/matters/issues/35).
+
+The maintainer approved Loro 1.18 and the proposed hybrid HPKE/ML-DSA stack for prototype evaluation in the project conversation on 2026-11-18. This authorizes implementation of the experiment; production adoption and issue closure still require the evidence below.
 
 ## Recommendation and evidence
 
@@ -117,4 +119,4 @@ Proposed prototype budgets, subject to approval:
 - Replay: 10,000-task bootstrap below 5 s on the named development host; 100,000 operations of catch-up below 10 s with visible progress. These are prototype usability targets, not service SLAs.
 - Retention: record all history/pending bytes; no destructive compaction. Measure storage growth and establish a quota before pilot. No storage-cost claim is justified yet.
 
-If these gates fail, first determine whether the engine, adapter or workload budget owns the failure. Compare the same fixture/trace with Automerge before inventing infrastructure. Approval authorizes a bounded prototype, not production adoption. Record the maintainer's decision and evidence links here before closing #32.
+If these gates fail, first determine whether the engine, adapter or workload budget owns the failure. Compare the same fixture/trace with Automerge before inventing infrastructure. Approval authorizes a bounded prototype, not production adoption. The prototype decision is approved; record the remaining evidence links here before closing #32.

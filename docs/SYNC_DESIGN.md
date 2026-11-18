@@ -8,7 +8,7 @@
 
 Matters will retain local SQLite storage and offline operation while gaining post-quantum end-to-end encrypted synchronization. The client and service boundaries must support eventual use by other applications. Adopt existing CRDT and cryptographic implementations; build the application integration and service lifecycle around them.
 
-The recommended evaluation starts with Loro for CRDT state, SQLite for local persistence and query projections, and an opaque relay for encrypted records. Select the cryptographic protocol before selecting its implementation. The alternatives and decision gates below precede infrastructure code. No sync engine, cryptographic suite or hosting provider is selected by this record.
+The recommended evaluation starts with Loro for CRDT state, SQLite for local persistence and query projections, and an opaque relay for encrypted records. Select the cryptographic protocol before selecting its implementation. The alternatives and decision gates below precede infrastructure code. The decision records below select prototype candidates; production adoption and hosting remain separate decisions.
 
 ## Decision work in progress
 
@@ -16,7 +16,7 @@ The recommended evaluation starts with Loro for CRDT state, SQLite for local per
 - [ADR 0002: post-quantum protocol](decisions/0002-post-quantum-sync.md) proposes exact recipient-envelope/signature choices, authenticated messages, authority, recovery and adversarial checks for [#33](https://github.com/thestephenromano/matters/issues/33).
 - [Dependency evidence](evidence/README.md) records the inspected versions, checksums and source limitations. No prototype, benchmark or independent security review has run.
 
-Both ADRs are proposed and await the component decisions required before infrastructure code. They refine the options below; they do not turn planned security properties into demonstrated behavior.
+Both ADRs were approved for bounded prototype evaluation on 2026-11-18. They refine the options below; approval does not turn planned security properties into demonstrated behavior.
 
 ## Agreed product requirements
 

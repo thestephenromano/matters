@@ -1,6 +1,8 @@
 # ADR 0002: post-quantum recipient envelopes and signed sync records
 
-Date: 2026-11-18. Status: **proposed protocol for evaluation; not approved or production-ready**. Tracks [#33](https://github.com/thestephenromano/matters/issues/33). Implements no cryptography. The application composition below needs interoperability evidence and independent review, even though its cryptographic constructions come from existing specifications.
+Date: 2026-11-18. Status: **approved for bounded prototype evaluation on 2026-11-18; not production-ready**. Tracks [#33](https://github.com/thestephenromano/matters/issues/33). Implements no cryptography. The application composition below needs interoperability evidence and independent review, even though its cryptographic constructions come from existing specifications.
+
+The maintainer approved the proposed hybrid HPKE/ML-DSA stack for prototype evaluation in the project conversation on 2026-11-18. Approval covers the experiment and draft-wire-format exposure; it does not waive interoperability, usage-bound or independent-review gates.
 
 ## Recommendation
 
@@ -127,4 +129,4 @@ Independent protocol review must cover the composition, authority/recovery state
 | Secret boundary | Keyring locked/absent, log/crash artifact scans, service storage inspection and restore rehearsal; #37/#43. |
 | Production release | Quantified key/AEAD/verification budgets; authenticated snapshot coverage; full independent protocol/implementation review with resolved release blockers; #43/#45. |
 
-The implementation may proceed only after the component adoption decision. Production still requires the separate gates above. Replacing the hybrid, codec, KDF construction or authority model is a protocol change needing a new reviewed decision, not a dependency bump disguised as maintenance.
+The approved component decision authorizes the bounded implementation experiment. Production still requires the separate gates above. Replacing the hybrid, codec, KDF construction or authority model is a protocol change needing a new reviewed decision, not a dependency bump disguised as maintenance.
