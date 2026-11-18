@@ -542,3 +542,214 @@ fn record_identity_rejects_conflicting_bytes() -> Result<()> {
     assert_eq!(p.b.projection()?.entities[&id(3)].title, "one");
     Ok(())
 }
+
+fn copies_of(state: &matters_sync_prototype::Projection, original: &str) -> Vec<String> {
+    state
+        .entities
+        .values()
+        .filter(|e| e.identity_conflict.as_deref() == Some(original))
+        .map(|e| e.id.clone())
+        .collect()
+}
+
+#[test]
+fn c18_concurrent_creates_under_one_uuid_keep_an_original_and_a_conflict_copy() -> Result<()> {
+    for reverse in [false, true] {
+        let mut p = Pair::new()?;
+        p.a.execute(&Request::new(create(9, Kind::Project, None)))?;
+        p.a.execute(&Request::new(create(10, Kind::Task, Some(9))))?;
+        p.b.execute(&Request::new(create(9, Kind::Project, None)))?;
+        p.b.execute(&Request::new(rename(9, "b's project")))?;
+        p.b.execute(&Request::new(create(11, Kind::Task, Some(9))))?;
+        p.exchange(reverse)?;
+        let state = p.a.projection()?;
+        // The smaller tree ID (peer 10) keeps the UUID; B's node is a copy
+        // with its own title and child, so neither writer's edits vanish.
+        let copies = copies_of(&state, &id(9));
+        assert_eq!(copies.len(), 1);
+        let copy = &state.entities[&copies[0]];
+        assert_eq!(state.entities[&id(9)].title, "entity 9");
+        assert_eq!(copy.title, "b's project");
+        assert_eq!(copy.kind, Kind::Project);
+        assert_eq!(state.entities[&id(10)].parent, Some(id(9)));
+        assert_eq!(state.entities[&id(11)].parent, Some(copy.id.clone()));
+        assert!(state
+            .repairs
+            .contains(&format!("identity-copy:{}", copy.id)));
+        // The copy is an ordinary entity under its derived identity.
+        p.b.execute(&Request::new(C::Rename {
+            id: copy.id.clone(),
+            title: "kept".into(),
+        }))?;
+        p.b.execute(&Request::new(C::Trash {
+            id: copy.id.clone(),
+            trashed: true,
+        }))?;
+        p.exchange(!reverse)?;
+        let state = p.a.projection()?;
+        assert_eq!(state.entities[&copies[0]].title, "kept");
+        assert!(state.entities[&copies[0]].explicit_trash);
+        // The UUID stays taken locally.
+        assert!(p
+            .a
+            .execute(&Request::new(create(9, Kind::Task, None)))
+            .is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn c19_today_keeps_the_first_task_reference_and_skips_non_tasks() -> Result<()> {
+    for reverse in [false, true] {
+        let mut p = Pair::new()?;
+        p.a.execute(&Request::new(create(9, Kind::Task, None)))?;
+        p.b.execute(&Request::new(create(9, Kind::Task, None)))?;
+        p.a.execute(&Request::new(create(12, Kind::Project, None)))?;
+        p.b.execute(&Request::new(create(12, Kind::Task, None)))?;
+        p.exchange(reverse)?;
+        let state = p.a.projection()?;
+        assert_eq!(state.today_order.iter().filter(|t| **t == id(9)).count(), 1);
+        assert!(state
+            .repairs
+            .contains(&format!("today-duplicate:{}", id(9))));
+        // A's project keeps UUID 12, so B's Today reference names a project.
+        assert_eq!(state.entities[&id(12)].kind, Kind::Project);
+        assert!(!state.today_order.contains(&id(12)));
+        assert!(state
+            .repairs
+            .contains(&format!("today-non-task:{}", id(12))));
+    }
+    Ok(())
+}
+
+#[test]
+fn c20_derived_identities_are_reserved() -> Result<()> {
+    let mut r = Replica::open_in_memory()?;
+    let reserved = "00000000-0000-8000-8000-000000000001";
+    assert!(r
+        .execute(&Request::new(C::Create {
+            id: reserved.into(),
+            kind: Kind::Task,
+            parent: None,
+            title: "claim".into(),
+        }))
+        .is_err());
+    assert!(r.projection()?.entities.is_empty());
+    Ok(())
+}
+
+/// Seeded concurrent histories with UUIDs drawn from a small pool, so
+/// collisions are common. Projection must always succeed, agree across
+/// delivery orders, and create exactly one copy per extra node per UUID.
+#[test]
+fn c21_merged_valid_histories_always_project_and_agree() -> Result<()> {
+    struct Rng(u64);
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+    const KINDS: [Kind; 5] = [
+        Kind::Area,
+        Kind::Project,
+        Kind::Heading,
+        Kind::Task,
+        Kind::Checklist,
+    ];
+    let mut collisions = 0;
+    for seed in 1..=40u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut replicas = Vec::new();
+        for peer in 0..3 {
+            let mut r = Replica::open_in_memory()?;
+            r.set_test_peer(10 + peer)?;
+            replicas.push(r);
+        }
+        let pick = |rng: &mut Rng, pool: usize| id(1 + rng.below(pool) as u128);
+        for _ in 0..80 {
+            let r = rng.below(3);
+            let command = match rng.below(9) {
+                0..=2 => C::Create {
+                    id: pick(&mut rng, 6),
+                    kind: KINDS[rng.below(5)],
+                    parent: (rng.below(3) != 0).then(|| pick(&mut rng, 6)),
+                    title: "t".into(),
+                },
+                3 => C::Move {
+                    id: pick(&mut rng, 6),
+                    parent: (rng.below(3) != 0).then(|| pick(&mut rng, 6)),
+                    index: 0,
+                },
+                4 => C::MoveToday {
+                    id: pick(&mut rng, 6),
+                    index: 0,
+                },
+                5 => C::Trash {
+                    id: pick(&mut rng, 6),
+                    trashed: rng.below(2) == 0,
+                },
+                6 if rng.below(2) == 0 => C::PurgeTrash,
+                6 => C::Delete {
+                    id: pick(&mut rng, 6),
+                },
+                7 => C::Rename {
+                    id: pick(&mut rng, 6),
+                    title: format!("{seed}"),
+                },
+                _ => {
+                    let from = rng.below(3);
+                    if from != r {
+                        for record in replicas[from].outbox()? {
+                            let _ = replicas[r].receive(&record);
+                        }
+                    }
+                    continue;
+                }
+            };
+            let _ = replicas[r].execute(&Request::new(command));
+        }
+        let mut records = Vec::new();
+        for r in &replicas {
+            records.extend(r.outbox()?.into_iter().map(|record| record.bytes));
+        }
+        let mut views = Vec::new();
+        for reverse in [false, true] {
+            let doc = loro::LoroDoc::new();
+            let mut ordered = records.clone();
+            if reverse {
+                ordered.reverse();
+            }
+            for bytes in &ordered {
+                doc.import(bytes)?;
+            }
+            let view = matters_sync_prototype::project_document(&doc)?;
+            let tree = doc.get_tree("home");
+            let mut per_uuid = std::collections::BTreeMap::<String, usize>::new();
+            for node in tree.nodes() {
+                let meta = tree.get_meta(node)?.get_deep_value();
+                let loro::LoroValue::Map(meta) = meta else {
+                    panic!("metadata map")
+                };
+                let Some(loro::LoroValue::String(uuid)) = meta.get("id") else {
+                    panic!("metadata id")
+                };
+                *per_uuid.entry(uuid.to_string()).or_default() += 1;
+            }
+            let extra: usize = per_uuid.values().map(|n| n - 1).sum();
+            let copies = view
+                .repairs
+                .iter()
+                .filter(|r| r.starts_with("identity-copy:"))
+                .count();
+            assert_eq!(copies, extra, "seed {seed}");
+            collisions += extra;
+            views.push(view);
+        }
+        assert_eq!(views[0], views[1], "seed {seed}");
+    }
+    assert!(collisions > 0, "the pool must force collisions");
+    Ok(())
+}

@@ -150,6 +150,7 @@ The following are proposed acceptance cases, not changes to current behavior:
 | Trash a project while editing or moving a child | Specify visibility and restore behavior consistent with the product's trash model. Local foreign-key cascades are not a distributed policy. |
 | Empty Trash while an old device edits a deleted task | Prevent silent resurrection. Retain deletion evidence until the supported offline/history policy permits collection. |
 | Independently create identically named tags | Preserve references and apply a deterministic identity/name policy without violating the SQL projection. |
+| Create entities under the same UUID on two devices (duplicate import or faulty writer) | Keep both: the smaller engine node ID keeps the UUID and the other becomes a visible conflict copy with a derived identity ([ADR 0001](decisions/0001-crdt-adoption.md) C18). |
 
 Choose document boundaries using these cases. Splitting every task into a document may complicate ordering and parent transitions; one document for the entire account may complicate selective sharing and loading. Measure both against realistic data before fixing the boundary.
 

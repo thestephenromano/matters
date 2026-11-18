@@ -125,6 +125,10 @@ pub struct Entity {
     pub effective_trash: bool,
     /// A surviving heading/checklist without a legal parent needs explicit recovery.
     pub recovery_required: bool,
+    /// Set on a conflict copy: another node created concurrently under this
+    /// original UUID kept it. The copy keeps its own fields and children.
+    #[serde(default)]
+    pub identity_conflict: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -135,6 +139,61 @@ pub struct Projection {
     pub tombstones: BTreeSet<String>,
     pub tags: BTreeMap<String, String>,
     pub memberships: BTreeSet<(String, String)>,
+    /// Deterministic repairs of states that only concurrent merges produce.
+    /// A record may never introduce one in its own causal past.
+    #[serde(default)]
+    pub repairs: BTreeSet<String>,
+}
+
+/// Parse an entity UUID. Version 8 is reserved for derived conflict-copy IDs.
+fn entity_uuid(id: &str) -> Result<()> {
+    if uuid::Uuid::parse_str(id)?.get_version_num() == 8 {
+        return Err(invalid("reserved derived identity"));
+    }
+    Ok(())
+}
+
+/// Derived identity of a conflict copy: a UUIDv8 carrying the node's tree ID
+/// (64-bit peer, 32-bit counter) in its 122 free bits. Unique per node, equal
+/// on every replica, and never a valid created ID.
+pub(crate) fn conflict_copy_id(node: TreeID) -> String {
+    let d = (u128::from(node.peer) << 32) | u128::from(node.counter as u32);
+    let mut b = [0u8; 16];
+    for (i, byte) in b.iter_mut().take(6).enumerate() {
+        *byte = (d >> (88 - 8 * i)) as u8;
+    }
+    b[6] = 0x80 | ((d >> 44) & 0x0f) as u8;
+    b[7] = (d >> 36) as u8;
+    b[8] = 0x80 | ((d >> 30) & 0x3f) as u8;
+    b[12..].copy_from_slice(&((d & 0x3fff_ffff) as u32).to_be_bytes());
+    uuid::Uuid::from_bytes(b).to_string()
+}
+
+/// Projected identity of every node. Among nodes created concurrently under
+/// one UUID, the smallest tree ID keeps it; each other node becomes a conflict
+/// copy with a derived identity, so no node's own edits disappear.
+fn resolve_identities<'a>(
+    nodes: impl IntoIterator<Item = (TreeID, &'a str)>,
+) -> BTreeMap<TreeID, (String, Option<String>)> {
+    let nodes: Vec<_> = nodes.into_iter().collect();
+    let mut owner: BTreeMap<&str, TreeID> = BTreeMap::new();
+    for (node, id) in &nodes {
+        owner
+            .entry(id)
+            .and_modify(|o| *o = (*o).min(*node))
+            .or_insert(*node);
+    }
+    nodes
+        .into_iter()
+        .map(|(node, id)| {
+            let projected = if owner[id] == node {
+                (id.to_owned(), None)
+            } else {
+                (conflict_copy_id(node), Some(id.to_owned()))
+            };
+            (node, projected)
+        })
+        .collect()
 }
 
 fn fields(doc: &LoroDoc, node: TreeID) -> Result<Value> {
@@ -177,15 +236,18 @@ fn metadata_string(map: &LoroMap, key: &str) -> Result<String> {
 impl Index {
     pub(crate) fn build(doc: &LoroDoc) -> Result<Self> {
         let tree = doc.get_tree("home");
-        let mut index = Self::default();
+        let mut raw = Vec::new();
         for node in tree.nodes() {
             let map = tree.get_meta(node)?;
             let id = metadata_string(&map, "id")?;
-            uuid::Uuid::parse_str(&id)?;
-            let kind = serde_json::from_str(&metadata_string(&map, "kind")?)?;
-            if index.0.insert(id, (node, kind)).is_some() {
-                return Err(invalid("duplicate entity UUID"));
-            }
+            entity_uuid(&id)?;
+            let kind: Kind = serde_json::from_str(&metadata_string(&map, "kind")?)?;
+            raw.push((node, id, kind));
+        }
+        let resolved = resolve_identities(raw.iter().map(|(n, id, _)| (*n, id.as_str())));
+        let mut index = Self::default();
+        for (node, _, kind) in raw {
+            index.0.insert(resolved[&node].0.clone(), (node, kind));
         }
         Ok(index)
     }
@@ -273,21 +335,26 @@ pub(crate) fn project(doc: &LoroDoc) -> Result<Projection> {
         }
         result.tombstones.insert(id.clone());
     }
-    let mut nodes = BTreeMap::new();
-    let mut ids = BTreeSet::new();
+    let mut raw = Vec::new();
     for node in tree.nodes() {
         let value = fields(doc, node)?;
         let id = string(&value, "id")?;
-        uuid::Uuid::parse_str(&id)?;
-        if !ids.insert(id.clone()) {
-            return Err(invalid("duplicate entity UUID"));
-        }
+        entity_uuid(&id)?;
         let kind: Kind = scalar(&value, "kind")?;
-        nodes.insert(node, (id, kind, value));
+        raw.push((node, id, kind, value));
+    }
+    let resolved = resolve_identities(raw.iter().map(|(n, id, ..)| (*n, id.as_str())));
+    let mut nodes = BTreeMap::new();
+    for (node, _, kind, value) in raw {
+        let (id, original) = resolved[&node].clone();
+        if original.is_some() {
+            result.repairs.insert(format!("identity-copy:{id}"));
+        }
+        nodes.insert(node, (id, kind, value, original));
     }
     let mut ranks: BTreeMap<Option<String>, usize> = BTreeMap::new();
     for node in ordered_nodes(doc) {
-        let (id, kind, value) = &nodes[&node];
+        let (id, kind, value, original) = &nodes[&node];
         let parent = match tree.parent(node) {
             Some(TreeParentId::Root) => None,
             Some(TreeParentId::Node(p)) => Some(p),
@@ -304,7 +371,7 @@ pub(crate) fn project(doc: &LoroDoc) -> Result<Projection> {
         let mut selected = None;
         let mut effective_trash = value["trash"].as_bool().unwrap_or(false);
         while let Some(p) = ancestor {
-            let (pid, pkind, pvalue) = &nodes[&p];
+            let (pid, pkind, pvalue, _) = &nodes[&p];
             if !result.tombstones.contains(pid) {
                 if selected.is_none() && kind.permits(Some(*pkind)) {
                     selected = Some(pid.clone());
@@ -331,6 +398,7 @@ pub(crate) fn project(doc: &LoroDoc) -> Result<Projection> {
             explicit_trash: value["trash"].as_bool().unwrap_or(false),
             effective_trash,
             recovery_required: selected.is_none() && !kind.permits(None),
+            identity_conflict: original.clone(),
         };
         *rank += 1;
         result.entities.insert(id.clone(), entity);
@@ -347,12 +415,16 @@ pub(crate) fn project(doc: &LoroDoc) -> Result<Projection> {
         let id = id
             .as_str()
             .ok_or_else(|| invalid("invalid Today reference"))?;
+        // Only concurrent creations under one UUID produce these; the first
+        // occurrence in the list's CRDT order wins, as on every replica.
         if !seen.insert(id.to_owned()) {
-            return Err(invalid("duplicate Today entry"));
+            result.repairs.insert(format!("today-duplicate:{id}"));
+            continue;
         }
         if let Some(entity) = result.entities.get(id) {
             if entity.kind != Kind::Task {
-                return Err(invalid("Today entry is not a task"));
+                result.repairs.insert(format!("today-non-task:{id}"));
+                continue;
             }
             result.today_order.push(id.to_owned());
         }
@@ -403,7 +475,7 @@ pub(crate) fn apply(doc: &LoroDoc, identities: &mut Index, command: Command) -> 
             parent,
             title,
         } => {
-            uuid::Uuid::parse_str(&id)?;
+            entity_uuid(&id)?;
             if identities.0.contains_key(&id) || doc.get_map("purged").get(&id).is_some() {
                 return Err(invalid("UUID already exists"));
             }
@@ -562,6 +634,37 @@ pub(crate) fn apply(doc: &LoroDoc, identities: &mut Index, command: Command) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_refuses_reserved_identities_before_writing() -> Result<()> {
+        let doc = LoroDoc::new();
+        let mut index = Index::build(&doc)?;
+        let reserved = conflict_copy_id(TreeID::new(7, 3));
+        assert_eq!(uuid::Uuid::parse_str(&reserved)?.get_version_num(), 8);
+        let error = apply(
+            &doc,
+            &mut index,
+            Command::Create {
+                id: reserved,
+                kind: Kind::Task,
+                parent: None,
+                title: "claim".into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "reserved derived identity");
+        assert!(doc.oplog_vv().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn derived_identities_are_distinct_per_tree_node() {
+        let ids: BTreeSet<_> = [(1, 0), (1, 1), (2, 0), (u64::MAX, i32::MAX), (0, -1)]
+            .into_iter()
+            .map(|(peer, counter)| conflict_copy_id(TreeID::new(peer, counter)))
+            .collect();
+        assert_eq!(ids.len(), 5);
+    }
 
     #[test]
     fn identity_and_kind_lookup_never_materialize_notes() -> Result<()> {

@@ -1,5 +1,5 @@
 use super::{
-    encrypted_inbox::{take_work, Config, Inbox, Point, Work, MAX_RECORDS, MERGE_CONFLICT},
+    encrypted_inbox::{take_work, Config, Inbox, Point, Work, MAX_RECORDS},
     *,
 };
 use matters_sync_prototype::{Command, Kind, Replica, Request, Result as TestResult};
@@ -630,12 +630,63 @@ fn review_concurrent_records_reach_the_same_verdicts_in_either_delivery_order() 
         }
         inbox.process(&h.key, okay)?;
         assert!(inbox.entries()?.iter().all(|r| r.status == "applied"));
-        // The merge has no valid projection; every receiver reports that.
-        assert_eq!(inbox.merge_conflict()?.as_deref(), Some(MERGE_CONFLICT));
-        assert!(inbox.projection().is_err());
-        results.push(statuses(&inbox)?);
+        // The concurrent creations converge to an original and a conflict
+        // copy (#113) on every receiver; nothing is rejected.
+        assert_eq!(inbox.merge_conflict()?, None);
+        let view = inbox.projection()?;
+        let copies: Vec<_> = view
+            .entities
+            .values()
+            .filter(|e| e.identity_conflict.as_deref() == Some(TASK))
+            .collect();
+        assert_eq!(copies.len(), 1);
+        results.push((statuses(&inbox)?, view));
     }
     assert_eq!(results[0], results[1]);
+    Ok(())
+}
+
+#[test]
+fn record_may_not_introduce_a_merge_repair_in_its_own_causal_past() -> TestResult<()> {
+    // A writer that already holds TASK creates a second node under the same
+    // UUID. Only concurrency may produce a conflict copy, so this is rejected.
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let first_plain = create(&mut source(71));
+    let first = h.seal(71, None, &first_plain);
+    let doc = LoroDoc::new();
+    doc.set_peer_id(71)?;
+    doc.import(&first_plain)?;
+    let before = doc.oplog_vv();
+    let tree = doc.get_tree("home");
+    let node = tree.create(None)?;
+    let meta = tree.get_meta(node)?;
+    meta.insert("id", TASK)?;
+    meta.insert("kind", "\"Task\"")?;
+    meta.insert("title", "duplicate")?;
+    meta.insert_container("notes", loro::LoroText::new())?;
+    for key in ["deadline", "completion"] {
+        meta.insert(key, "null")?;
+    }
+    meta.insert("schedule", "\"Unscheduled\"")?;
+    meta.insert("trash", false)?;
+    meta.insert("checked", false)?;
+    doc.commit();
+    let second = h.seal(
+        71,
+        Some(hash(&first)),
+        &doc.export(ExportMode::updates(&before))?,
+    );
+    let mut inbox = h.inbox(&dir.path().join("inbox.db"));
+    inbox.receive(GENERATION, 1, &first, okay)?;
+    inbox.receive(GENERATION, 2, &second, okay)?;
+    inbox.process(&h.key, okay)?;
+    let rows = inbox.entries()?;
+    assert_eq!(rows[0].status, "applied");
+    assert_eq!(
+        (rows[1].status.as_str(), rows[1].reason.as_str()),
+        ("quarantined", "domain-repair")
+    );
     Ok(())
 }
 

@@ -654,8 +654,21 @@ fn stage(doc: &LoroDoc, plain: &[u8], actor: u64) -> Result<Stage> {
     // Judge domain validity in the record's own causal past (everything its
     // last operation depends on), never against concurrently applied records.
     let past = staged.fork_at(&Frontiers::from_id(ID::new(actor, end - 1)))?;
-    if project_document(&past).is_err() {
+    let Ok(after) = project_document(&past) else {
         return Ok(Stage::Rejected("domain-projection"));
+    };
+    // Merge repairs (conflict copies, duplicate Today entries) arise only from
+    // concurrency. A record may not introduce one in its own causal past: the
+    // same past without the record's operations is causally closed, since
+    // nothing else can depend on an unpublished record.
+    let mut before = past.oplog_vv();
+    before.set_end(ID::new(actor, start));
+    let prior = past.fork_at(&past.vv_to_frontiers(&before))?;
+    let Ok(prior) = project_document(&prior) else {
+        return Err(error("causal past without record does not project"));
+    };
+    if !after.repairs.is_subset(&prior.repairs) {
+        return Ok(Stage::Rejected("domain-repair"));
     }
     Ok(Stage::Ready(staged))
 }

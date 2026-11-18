@@ -75,8 +75,10 @@ All fixtures begin from one shared genesis document with fixed UUIDs and fixed t
 | C13 | Both set a checklist item checked; then one deletes it while the other unchecks | First merge is checked, not toggled twice. Final item is absent with tombstone. |
 | C14 | Deliver dependent update before its prerequisite, snapshot, restart, deliver prerequisite | Original pending bytes survive; resulting document/projection equals complete ordered delivery. |
 | C15 | Clone a database, create fresh writer incarnations, make simultaneous edits | No reused engine actor/counter ranges; both edits survive. Deliberate actor collision is quarantined, not silently deduplicated. |
-| C16 | Invalid parent types or duplicate UUID create in an authenticated input | Reject/quarantine before projection commit; prior valid state and offending bytes remain available. |
+| C16 | Invalid parent types or duplicate UUID create in an authenticated input (within that input's own causal past) | Reject/quarantine before projection commit; prior valid state and offending bytes remain available. |
 | C17 | Reorder Today on A; move/reorder the task's home list on B | Preserve both view-specific ordering intents. Today order must not move the task's parent or overwrite its home position. Finalize the representation against the ordering work noted below. |
+| C18 | A and B concurrently create entities under one UUID (duplicate import or faulty writer) | Neither creation is rejected and no edit disappears. The node with the smaller Loro tree ID keeps the UUID; each other node becomes a conflict copy with a derived UUIDv8 identity, keeping its own fields, kind, children and position. References by UUID resolve to the original. Identical on every replica in every delivery order ([#113](https://github.com/thestephenromano/matters/issues/113)). |
+| C19 | Concurrent creations under one UUID add duplicate or non-task Today references | The first reference in the list's CRDT order wins; references naming a non-task are skipped. Each repair is reported in the projection. |
 
 For C03/C05, capture fixed expected winners from the documented pinned engine order and independent small reference traces before writing adapter tests; a test that merely compares two calls to the adapter is insufficient. Randomized delivery tests supplement these semantic oracles.
 
