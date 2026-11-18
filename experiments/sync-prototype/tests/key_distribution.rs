@@ -23,9 +23,11 @@ struct Setup {
     authority: Authority,
 }
 fn setup() -> Setup {
+    setup_with_receiver(Device::generate().unwrap())
+}
+fn setup_with_receiver(b: Device) -> Setup {
     let root = Device::generate().unwrap();
     let a = Device::generate().unwrap();
-    let b = Device::generate().unwrap();
     let mut roster = vec![a.public(true).unwrap(), b.public(false).unwrap()];
     roster.sort_by_key(|m| m.id);
     let genesis = sign(
@@ -1014,3 +1016,8 @@ mod outbox_cases;
 
 #[path = "support/record_chain.rs"]
 mod record_chain;
+
+#[path = "support/encrypted_inbox.rs"]
+mod encrypted_inbox;
+#[path = "cases/encrypted_inbox.rs"]
+mod inbox_cases;

@@ -13,3 +13,9 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 fn invalid(message: impl Into<String>) -> Box<dyn std::error::Error + Send + Sync> {
     std::io::Error::other(message.into()).into()
 }
+
+/// Rebuild the bounded experiment's task projection from staged engine state.
+/// This is not a complete hostile-document resource or schema validator.
+pub fn project_document(doc: &loro::LoroDoc) -> Result<Projection> {
+    model::project(doc)
+}

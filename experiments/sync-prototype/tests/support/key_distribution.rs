@@ -41,6 +41,12 @@ pub enum Error {
     Actor,
     Crypto,
 }
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 impl From<minicbor::decode::Error> for Error {
     fn from(_: minicbor::decode::Error) -> Self {
@@ -119,7 +125,7 @@ impl Device {
         fingerprint("ML-DSA-65", self.signing.verification_key.as_slice())
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Route {
     pub app: [u8; 16],
     pub tenant: [u8; 16],
@@ -899,18 +905,25 @@ impl Authority {
             key,
         })
     }
-    /// First data record only, with a single admitted engine actor. Does not
-    /// advance a receive journal or authorize snapshots/history continuation.
-    pub fn open_first_data(
+    pub fn check_epoch_key(&self, key: &EpochKey) -> Result<()> {
+        let state = self.active()?;
+        if key.route != self.route || key.manifest != self.current || key.epoch != state.epoch {
+            return Err(Error::Stale);
+        }
+        Ok(())
+    }
+    /// Authenticate context, current membership and writer before decryption.
+    /// Chain position and engine admission belong to the durable receiver.
+    pub fn authenticate_data<'a>(
         &self,
-        bytes: &[u8],
-        key: &EpochKey,
+        bytes: &'a [u8],
+        key: &'a EpochKey,
         document: &[u8; 16],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<AuthenticatedData<'a>> {
         let state = self.active()?;
         let p = wire::parse(bytes, self.route.content(document)).map_err(|_| Error::Format)?;
         let h = p.header;
-        if h.kind != wire::Kind::Data || h.previous.is_some() {
+        if h.kind != wire::Kind::Data {
             return Err(Error::Unsupported);
         }
         if *h.manifest != self.current
@@ -945,32 +958,33 @@ impl Authority {
             h.kind.signature_context(),
             p.signature,
         )?;
-        let derived = content_key(
-            h.record_id,
-            &key.key,
-            &p.record_key_info().map_err(|_| Error::Format)?,
-        )?;
-        let plain = Provider::aead_open(
-            AeadAlgorithm::Aes256Gcm,
-            &derived,
-            &[0; 12],
-            p.header_bytes(),
-            p.ciphertext,
-        )
-        .map_err(|_| Error::Crypto)?;
+        Ok(AuthenticatedData {
+            parsed: p,
+            key,
+            actor: writer.actor,
+        })
+    }
+    /// First-record regression helper; durable receive uses authenticate_data.
+    pub fn open_first_data(
+        &self,
+        bytes: &[u8],
+        key: &EpochKey,
+        document: &[u8; 16],
+    ) -> Result<Vec<u8>> {
+        let authenticated = self.authenticate_data(bytes, key, document)?;
+        if authenticated.parsed.header.previous.is_some() {
+            return Err(Error::Unsupported);
+        }
+        let actor = authenticated.actor;
+        let plain = authenticated.open()?;
         let meta =
             loro::LoroDoc::decode_import_blob_meta(&plain, true).map_err(|_| Error::Format)?;
         if meta.mode != loro::EncodedBlobMode::Updates {
             return Err(Error::Unsupported);
         }
         if meta.partial_end_vv.len() != 1
-            || meta.partial_end_vv.get(&writer.actor).copied().unwrap_or(0) <= 0
-            || meta
-                .partial_start_vv
-                .get(&writer.actor)
-                .copied()
-                .unwrap_or(0)
-                != 0
+            || meta.partial_end_vv.get(&actor).copied().unwrap_or(0) <= 0
+            || meta.partial_start_vv.get(&actor).copied().unwrap_or(0) != 0
             || !meta.start_frontiers.is_empty()
         {
             return Err(Error::Actor);
@@ -990,6 +1004,38 @@ impl Authority {
         Ok(plain)
     }
 }
+/// A verified signed record. Construction is private to Authority; retaining
+/// this value permits fork detection even if authenticated decryption fails.
+pub struct AuthenticatedData<'a> {
+    parsed: wire::ParsedRecord<'a>,
+    key: &'a EpochKey,
+    actor: u64,
+}
+impl AuthenticatedData<'_> {
+    pub fn parsed(&self) -> &wire::ParsedRecord<'_> {
+        &self.parsed
+    }
+    pub fn actor(&self) -> u64 {
+        self.actor
+    }
+    pub fn open(&self) -> Result<Vec<u8>> {
+        let p = &self.parsed;
+        let derived = content_key(
+            p.header.record_id,
+            &self.key.key,
+            &p.record_key_info().map_err(|_| Error::Format)?,
+        )?;
+        Provider::aead_open(
+            AeadAlgorithm::Aes256Gcm,
+            &derived,
+            &[0; 12],
+            p.header_bytes(),
+            p.ciphertext,
+        )
+        .map_err(|_| Error::Crypto)
+    }
+}
+
 pub struct EpochKey {
     route: Route,
     manifest: Hash,
