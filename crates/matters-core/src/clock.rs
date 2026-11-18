@@ -7,33 +7,50 @@
 //! than arming a single midnight timer, which would miss suspend and clock
 //! changes.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 
 /// Today's date in the local time zone.
-pub fn local_today() -> NaiveDate {
-    chrono::Local::now().date_naive()
+pub fn local_today() -> Date {
+    jiff::Zoned::now().date()
+}
+
+/// Now, in milliseconds since the Unix epoch (how timestamps are stored).
+pub fn now_millis() -> i64 {
+    jiff::Timestamp::now().as_millisecond()
+}
+
+/// The local calendar day of a stored timestamp (milliseconds since the Unix
+/// epoch), or `None` if it is out of range.
+pub fn local_day_of_millis(ms: i64) -> Option<Date> {
+    let at = jiff::Timestamp::from_millisecond(ms).ok()?;
+    Some(at.to_zoned(jiff::tz::TimeZone::system()).date())
+}
+
+/// Parse a date as Matters stores and exchanges it: ISO 8601 `YYYY-MM-DD`.
+pub fn parse_iso_date(s: &str) -> Option<Date> {
+    s.parse().ok()
 }
 
 /// Remembers the date the views were last built for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DayTracker {
-    day: NaiveDate,
+    day: Date,
 }
 
 impl DayTracker {
-    pub fn new(day: NaiveDate) -> Self {
+    pub fn new(day: Date) -> Self {
         Self { day }
     }
 
     /// The date the views were last built for.
-    pub fn day(&self) -> NaiveDate {
+    pub fn day(&self) -> Date {
         self.day
     }
 
     /// Record `now` and report whether it differs from the last recorded date.
     /// Any difference counts, including the clock moving backwards, because
     /// view membership depends on the exact date.
-    pub fn advance(&mut self, now: NaiveDate) -> bool {
+    pub fn advance(&mut self, now: Date) -> bool {
         let changed = now != self.day;
         self.day = now;
         changed
@@ -44,8 +61,8 @@ impl DayTracker {
 mod tests {
     use super::*;
 
-    fn d(day: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 11, day).unwrap()
+    fn d(day: i8) -> Date {
+        jiff::civil::date(2026, 11, day)
     }
 
     #[test]

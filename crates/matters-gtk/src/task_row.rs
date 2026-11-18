@@ -200,7 +200,7 @@ impl TaskRow {
         self.evening.set_visible(task.is_evening());
         match task.start_date {
             Some(date) => {
-                self.date.set_label(&date.format("%b %d").to_string());
+                self.date.set_label(&date.strftime("%b %d").to_string());
                 self.date.set_visible(true);
             }
             None => self.date.set_visible(false),

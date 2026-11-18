@@ -16,7 +16,7 @@ pub struct Area {
 
 impl Area {
     pub fn new(id: impl Into<String>, title: impl Into<String>, sort_order: f64) -> Self {
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         Self {
             id: id.into(),
             title: title.into(),

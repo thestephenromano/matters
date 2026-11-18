@@ -2,16 +2,16 @@
 //! day so the behaviour of the `interim` crate underneath can't drift
 //! unnoticed.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::{DateOrder, Schedule};
 
 /// Wednesday 18 November 2026.
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 18).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 18)
 }
 
-fn date(m: u32, d: u32) -> Option<Schedule> {
-    Some(Schedule::Date(NaiveDate::from_ymd_opt(2026, m, d).unwrap()))
+fn date(m: i8, d: i8) -> Option<Schedule> {
+    Some(Schedule::Date(jiff::civil::date(2026, m, d)))
 }
 
 fn parse(input: &str) -> Option<Schedule> {
@@ -58,7 +58,7 @@ fn calendar_dates() {
         assert_eq!(parse(input), date(12, 24), "{input:?}");
     }
     // A month and day already past this year means next year.
-    let jan5 = Some(Schedule::Date(NaiveDate::from_ymd_opt(2027, 1, 5).unwrap()));
+    let jan5 = Some(Schedule::Date(jiff::civil::date(2027, 1, 5)));
     for input in ["jan 5", "January 5", "5 jan", "1/5"] {
         assert_eq!(parse(input), jan5, "{input:?}");
     }

@@ -1,12 +1,12 @@
 //! Sections in lists (#25): which heading each row sits under, and Anytime's
 //! grouping by area and project.
 
-use chrono::{NaiveDate, TimeZone};
+use jiff::civil::Date;
 use matters_core::{Area, Database, Project, QueryEngine, Schedule, Task, View};
 
 /// Wednesday 18 November 2026.
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 18).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 18)
 }
 
 fn listed(db: &Database, view: &View) -> Vec<(String, String)> {
@@ -40,7 +40,7 @@ fn today_marks_this_evening() {
 #[test]
 fn upcoming_is_grouped_by_date() {
     let db = Database::open_in_memory().unwrap();
-    let day = |d| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
+    let day = |d| jiff::civil::date(2026, 11, d);
     for (id, d) in [("c", 21), ("a", 19), ("b", 19)] {
         let mut t = Task::new(id, id, 0.0);
         t.start_date = Some(day(d));
@@ -101,12 +101,13 @@ fn anytime_is_grouped_by_area_then_project() {
 #[test]
 fn the_logbook_is_grouped_by_the_day_tasks_were_finished() {
     let db = Database::open_in_memory().unwrap();
-    let at = |d: u32, h: u32| {
-        chrono::Local
-            .with_ymd_and_hms(2026, 11, d, h, 0, 0)
-            .single()
+    let at = |d: i8, h: i8| {
+        jiff::civil::date(2026, 11, d)
+            .at(h, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::system())
             .unwrap()
-            .timestamp_millis()
+            .timestamp()
+            .as_millisecond()
     };
     for (id, finished) in [
         ("old", at(16, 9)),

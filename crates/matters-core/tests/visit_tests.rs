@@ -1,11 +1,11 @@
 //! A task whose completion status changes stays in place until the user
 //! leaves the view; other departures are immediate.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::{Database, QueryEngine, Schedule, Status, Task, View, Visit};
 
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 17).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 17)
 }
 
 struct Fixture {

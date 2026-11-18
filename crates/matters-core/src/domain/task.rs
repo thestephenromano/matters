@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
 use super::status::Status;
@@ -25,10 +25,10 @@ pub struct Task {
     pub heading_id: Option<String>,
     pub title: String,
     pub notes: String,
-    pub start_date: Option<NaiveDate>,
+    pub start_date: Option<Date>,
     pub time_of_day: Option<String>, // Some("evening") or None
     pub is_someday: bool,
-    pub deadline: Option<NaiveDate>,
+    pub deadline: Option<Date>,
     pub status: Status,
     pub completed_at: Option<i64>,
     /// When the task was moved to the Trash; `None` while it is not trashed.
@@ -48,7 +48,7 @@ pub struct Task {
 
 impl Task {
     pub fn new(id: impl Into<String>, title: impl Into<String>, sort_order: f64) -> Self {
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         Self {
             id: id.into(),
             area_id: None,
@@ -80,7 +80,7 @@ impl Task {
 
     /// Where this task stands against its deadline on `today`. Only open
     /// tasks are due or overdue: a finished task's deadline is just shown.
-    pub fn deadline_status(&self, today: NaiveDate) -> DeadlineStatus {
+    pub fn deadline_status(&self, today: Date) -> DeadlineStatus {
         match self.deadline {
             None => DeadlineStatus::None,
             Some(_) if self.status != Status::Open => DeadlineStatus::Set,
@@ -101,7 +101,7 @@ impl Task {
     /// Set the task's "When". All three stored fields (start date, time of day,
     /// someday flag) are written together so a task can never be, for example,
     /// both Someday and scheduled for Today.
-    pub fn apply_schedule(&mut self, schedule: &Schedule, today: NaiveDate) {
+    pub fn apply_schedule(&mut self, schedule: &Schedule, today: Date) {
         let (start_date, time_of_day, is_someday) = schedule.to_db_fields(today);
         self.start_date = start_date;
         self.time_of_day = time_of_day.map(str::to_string);

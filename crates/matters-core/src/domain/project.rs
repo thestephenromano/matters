@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
 use super::status::Status;
@@ -9,10 +9,10 @@ pub struct Project {
     pub area_id: Option<String>,
     pub title: String,
     pub notes: String,
-    pub start_date: Option<NaiveDate>,
+    pub start_date: Option<Date>,
     pub time_of_day: Option<String>,
     pub is_someday: bool,
-    pub deadline: Option<NaiveDate>,
+    pub deadline: Option<Date>,
     pub status: Status,
     pub completed_at: Option<i64>,
     /// When the project was moved to the Trash, taking its tasks with it;
@@ -31,7 +31,7 @@ impl Project {
     }
 
     pub fn new(id: impl Into<String>, title: impl Into<String>, sort_order: f64) -> Self {
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         Self {
             id: id.into(),
             area_id: None,

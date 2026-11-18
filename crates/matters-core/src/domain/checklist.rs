@@ -18,7 +18,7 @@ impl ChecklistItem {
         title: impl Into<String>,
         sort_order: f64,
     ) -> Self {
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::clock::now_millis();
         Self {
             id: id.into(),
             task_id: task_id.into(),

@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, TimeZone};
+use jiff::civil::Date;
 use rusqlite::params;
 use std::collections::{BTreeMap, HashMap};
 
@@ -15,7 +15,7 @@ pub struct TodayView {
 
 #[derive(Debug, Clone, Default)]
 pub struct UpcomingGroup {
-    pub date: NaiveDate,
+    pub date: Date,
     pub tasks: Vec<Task>,
 }
 
@@ -132,7 +132,7 @@ impl<'a> QueryEngine<'a> {
 
     /// The tasks a view lists, in display order. Today lists daytime tasks
     /// before evening ones; Upcoming is ordered by date.
-    pub fn tasks_in(&self, view: &View, reference_date: NaiveDate) -> Result<Vec<Task>> {
+    pub fn tasks_in(&self, view: &View, reference_date: Date) -> Result<Vec<Task>> {
         Ok(match view {
             View::Inbox => self.inbox()?,
             View::Today => {
@@ -158,8 +158,8 @@ impl<'a> QueryEngine<'a> {
 
     /// Badge counts for every sidebar view in one aggregate query, without
     /// loading any rows.
-    pub fn counts(&self, reference_date: NaiveDate) -> Result<ViewCounts> {
-        let ref_str = reference_date.format("%Y-%m-%d").to_string();
+    pub fn counts(&self, reference_date: Date) -> Result<ViewCounts> {
+        let ref_str = reference_date.to_string();
         let sql = format!(
             "SELECT
                 COUNT(CASE WHEN {INBOX_WHERE} THEN 1 END),
@@ -190,8 +190,8 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// Today's tasks, split into daytime and This Evening.
-    pub fn today(&self, reference_date: NaiveDate) -> Result<TodayView> {
-        let ref_str = reference_date.format("%Y-%m-%d").to_string();
+    pub fn today(&self, reference_date: Date) -> Result<TodayView> {
+        let ref_str = reference_date.to_string();
         let (evening, daytime) = self
             .select_live(TODAY_WHERE, TODAY_ORDER, params![ref_str])?
             .into_iter()
@@ -200,15 +200,15 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// Future tasks grouped by calendar date.
-    pub fn upcoming(&self, reference_date: NaiveDate) -> Result<Vec<UpcomingGroup>> {
-        let ref_str = reference_date.format("%Y-%m-%d").to_string();
+    pub fn upcoming(&self, reference_date: Date) -> Result<Vec<UpcomingGroup>> {
+        let ref_str = reference_date.to_string();
         let tasks = self.select_live(
             UPCOMING_WHERE,
             &format!("start_date ASC, {MANUAL_ORDER}"),
             params![ref_str],
         )?;
 
-        let mut date_map: BTreeMap<NaiveDate, Vec<Task>> = BTreeMap::new();
+        let mut date_map: BTreeMap<Date, Vec<Task>> = BTreeMap::new();
         for task in tasks {
             if let Some(date) = task.start_date {
                 date_map.entry(date).or_default().push(task);
@@ -223,8 +223,8 @@ impl<'a> QueryEngine<'a> {
     /// Anytime, grouped (#25): each area in sidebar order with its own tasks
     /// first and then its projects' tasks, project by project; then projects
     /// with no area. Within a group, the manual order is kept.
-    pub fn anytime(&self, reference_date: NaiveDate) -> Result<Vec<Task>> {
-        let ref_str = reference_date.format("%Y-%m-%d").to_string();
+    pub fn anytime(&self, reference_date: Date) -> Result<Vec<Task>> {
+        let ref_str = reference_date.to_string();
         let mut tasks = self.select_live(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])?;
         let areas: HashMap<String, Area> = self
             .db
@@ -325,8 +325,8 @@ impl<'a> QueryEngine<'a> {
                 .map(|t| {
                     let day = t
                         .completed_at
-                        .and_then(|ms| chrono::Local.timestamp_millis_opt(ms).single())
-                        .map(|at| at.date_naive().to_string());
+                        .and_then(crate::clock::local_day_of_millis)
+                        .map(|day| day.to_string());
                     format!("done:{}", day.unwrap_or_default())
                 })
                 .collect(),

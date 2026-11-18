@@ -1,5 +1,6 @@
-use chrono::{Datelike, NaiveDate, NaiveTime, TimeZone, Utc};
 use interim::Dialect;
+use jiff::civil::{Date, Time};
+use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
 /// How numeric dates typed by the user are read: `12/24` is month first
@@ -40,7 +41,7 @@ impl TimeOfDay {
 #[serde(tag = "type", content = "value")]
 pub enum Schedule {
     Today { evening: bool },
-    Date(NaiveDate),
+    Date(Date),
     Someday,
     None,
 }
@@ -55,9 +56,7 @@ impl Schedule {
             "evening" => Some(Schedule::Today { evening: true }),
             "someday" => Some(Schedule::Someday),
             "none" => Some(Schedule::None),
-            other => NaiveDate::parse_from_str(other, "%Y-%m-%d")
-                .ok()
-                .map(Schedule::Date),
+            other => crate::clock::parse_iso_date(other).map(Schedule::Date),
         }
     }
 
@@ -75,7 +74,7 @@ impl Schedule {
     /// On top of `interim`: `in 3 days` is read as `3 days`, and a month and
     /// day without a year (`jan 5`, `1/5`) that has passed this year means
     /// next year. A weekday names the coming one, or today on that weekday.
-    pub fn parse_typed(input: &str, today: NaiveDate, order: DateOrder) -> Option<Schedule> {
+    pub fn parse_typed(input: &str, today: Date, order: DateOrder) -> Option<Schedule> {
         let text = input
             .split_whitespace()
             .collect::<Vec<_>>()
@@ -95,18 +94,20 @@ impl Schedule {
             Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => rest.to_string(),
             _ => text,
         };
-        let midnight = Utc.from_utc_datetime(&today.and_time(NaiveTime::MIN));
+        let midnight = today.to_zoned(TimeZone::UTC).ok()?;
         let dialect = match order {
             DateOrder::MonthFirst => Dialect::Us,
             DateOrder::DayFirst => Dialect::Uk,
         };
         let parsed = interim::parse_date_string(&text, midnight, dialect).ok()?;
-        if parsed.time() != NaiveTime::MIN {
+        if parsed.time() != Time::midnight() {
             return None; // a time of day
         }
-        let mut date = parsed.date_naive();
+        let mut date = parsed.date();
         if date < today && names_a_day_of_the_year(&text) {
-            date = date.with_year(date.year() + 1)?; // "jan 5" in November
+            // "jan 5" in November. A 29 February with no such day next
+            // year is refused, not moved.
+            date = date.with().year(date.year() + 1).build().ok()?;
         }
         match date.cmp(&today) {
             std::cmp::Ordering::Less => None,
@@ -119,11 +120,7 @@ impl Schedule {
     /// [`Schedule::parse_typed`], but only actual days. `today` and date
     /// phrases are accepted; This Evening and Someday aren't deadlines, and
     /// past days, times and anything unclear are refused.
-    pub fn parse_typed_deadline(
-        input: &str,
-        today: NaiveDate,
-        order: DateOrder,
-    ) -> Option<NaiveDate> {
+    pub fn parse_typed_deadline(input: &str, today: Date, order: DateOrder) -> Option<Date> {
         match Schedule::parse_typed(input, today, order)? {
             Schedule::Today { evening: false } => Some(today),
             Schedule::Date(date) => Some(date),
@@ -135,10 +132,7 @@ impl Schedule {
         matches!(self, Schedule::Someday)
     }
 
-    pub fn to_db_fields(
-        &self,
-        today: NaiveDate,
-    ) -> (Option<NaiveDate>, Option<&'static str>, bool) {
+    pub fn to_db_fields(&self, today: Date) -> (Option<Date>, Option<&'static str>, bool) {
         match self {
             Schedule::Today { evening } => (
                 Some(today),

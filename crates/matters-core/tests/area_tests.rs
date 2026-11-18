@@ -1,12 +1,12 @@
 //! Areas in the app (#15): the area view, capturing into it, finding a task
 //! there, renaming, and filing projects in areas.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use matters_core::ordering::place_task;
 use matters_core::{Area, Database, MattersError, Project, QueryEngine, Status, Task, View};
 
-fn today() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, 18).unwrap()
+fn today() -> Date {
+    jiff::civil::date(2026, 11, 18)
 }
 
 fn ids(db: &Database, view: &View) -> Vec<String> {
