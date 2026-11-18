@@ -6,7 +6,7 @@ authors = ["Matters Contributors"]
 description = "Core GTD engine and SQLite persistence for Matters"
 
 [dependencies]
-rusqlite = { version = "=0.43.0", default-features = false, features = ["cache", "bundled", "chrono", "uuid"] }
+rusqlite = { version = "=0.43.0", features = ["bundled", "chrono", "uuid"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 thiserror = "2.0"

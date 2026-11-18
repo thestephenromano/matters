@@ -5,10 +5,13 @@ edition = "2021"
 publish = false
 
 # Optional measurement helper, independently resolved from the prototype.
-# Its local lockfile is intentionally regenerated against the chosen app checkout.
+# Its independent lockfile is committed; CI and measurements use --locked.
 [workspace]
 
 [dependencies]
 matters-core = { path = "../../../crates/matters-core" }
 serde_json = "1"
 uuid = "1"
+
+[dev-dependencies]
+rusqlite = { version = "=0.43.0", features = ["bundled"] }

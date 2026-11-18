@@ -31,6 +31,8 @@ jobs:
           cache-dependency-path: experiments/sync-prototype/tests/vectors/record-contract/requirements.txt
       - name: Check execution evidence against the checkout
         run: python tests/vectors/record-contract/check_evidence.py
+      - name: Check evidence drift guards
+        run: python tests/vectors/check_evidence_guards.py
       - name: Install independent fixture oracle
         run: >-
           python -m pip install --only-binary=:all: -r tests/vectors/record-contract/requirements.txt

@@ -89,8 +89,14 @@ fn configure(doc: &LoroDoc, jitter: u8) {
 }
 impl Replica {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let mut conn = Connection::open(path)?;
-        initialize(&mut conn)?;
+        Self::from_connection(Connection::open(path)?, true)
+    }
+    /// Explicit volatile replica for semantic fixtures; never a persistent WAL fallback.
+    pub fn open_in_memory() -> Result<Self> {
+        Self::from_connection(Connection::open_in_memory()?, false)
+    }
+    fn from_connection(mut conn: Connection, persistent: bool) -> Result<Self> {
+        initialize(&mut conn, persistent)?;
         let doc = LoroDoc::new();
         let mut restore = RestoreStats::default();
         let checkpoint: Option<(Vec<u8>, i64, Option<Vec<u8>>)> = conn
@@ -426,7 +432,7 @@ fn write_projection(tx: &Transaction<'_>, projection: &Projection) -> Result<()>
     )?;
     Ok(())
 }
-fn initialize(conn: &mut Connection) -> Result<()> {
+fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
     let tables: i64 = conn.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'",
         [],
@@ -445,7 +451,18 @@ fn initialize(conn: &mut Connection) -> Result<()> {
             return Err(invalid("refusing to open a non-prototype database"));
         }
     }
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
+    let (pragma, expected_mode) = if persistent {
+        ("PRAGMA journal_mode=WAL", "wal")
+    } else {
+        ("PRAGMA journal_mode", "memory")
+    };
+    let mode: String = conn.query_row(pragma, [], |row| row.get(0))?;
+    if mode != expected_mode {
+        return Err(invalid(format!(
+            "replica requires {expected_mode} journal mode; SQLite selected {mode}"
+        )));
+    }
+    conn.execute_batch("PRAGMA synchronous=FULL;")?;
     let tx = conn.transaction()?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS prototype_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,bytes BLOB NOT NULL,outgoing INTEGER NOT NULL CHECK(outgoing IN (0,1)));
@@ -488,14 +505,15 @@ mod tests {
     use super::*;
     #[test]
     fn receive_projects_once_and_persists_that_result() -> Result<()> {
-        let mut sender = Replica::open(":memory:")?;
+        let dir = tempfile::tempdir()?;
+        let mut sender = Replica::open(dir.path().join("sender.db"))?;
         let record = sender.execute(&Request::new(Command::Create {
             id: uuid::Uuid::from_u128(1).to_string(),
             kind: crate::Kind::Task,
             parent: None,
             title: "task".into(),
         }))?;
-        let mut receiver = Replica::open(":memory:")?;
+        let mut receiver = Replica::open(dir.path().join("receiver.db"))?;
         model::PROJECT_CALLS.with(|n| n.set(0));
         receiver.receive(&record)?;
         model::PROJECT_CALLS.with(|n| assert_eq!(n.get(), 1));
