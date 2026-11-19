@@ -2279,6 +2279,25 @@ Item {
     // =========================================================================
     // QUICK FIND POPUP DIALOG (Ctrl+K)
     // =========================================================================
+
+    // Open Quick Find result `index`: an area or project opens its view; a
+    // task opens the view that holds it, with the task open and in view.
+    function openSearchResult(index) {
+        const results = searchResultsList.model;
+        if (index < 0 || index >= results.length)
+            return;
+        const result = results[index];
+        if (result.kind === "area") {
+            controller.selectArea(result.id);
+        } else if (result.kind === "project") {
+            controller.selectProject(result.id);
+        } else {
+            root.pendingRevealId = result.id;
+            taskListView.expandedTaskId = result.id;
+            controller.revealTask(result.id);
+        }
+        quickFindDialog.close();
+    }
     Dialog {
         id: quickFindDialog
         objectName: "quickFindDialog"
@@ -2289,6 +2308,12 @@ Item {
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        // The last search is kept, selected, so typing starts a new one.
+        onOpened: {
+            searchInput.forceActiveFocus();
+            searchInput.selectAll();
+        }
+        onClosed: taskListView.forceActiveFocus()
 
         background: Rectangle {
             color: root.isDark ? "#202124" : "#FFFFFF"
@@ -2307,7 +2332,16 @@ Item {
                 placeholderText: "Quick Find across all tasks, projects, and areas..."
                 font.pixelSize: 15
                 focus: true
-                onTextChanged: controller.search(text)
+                onTextChanged: {
+                    controller.search(text);
+                    searchResultsList.currentIndex = 0;
+                }
+                // The results are chosen from the field: Up and Down move the
+                // highlight, Enter opens it.
+                Keys.onUpPressed: searchResultsList.decrementCurrentIndex()
+                Keys.onDownPressed: searchResultsList.incrementCurrentIndex()
+                Keys.onReturnPressed: root.openSearchResult(searchResultsList.currentIndex)
+                Keys.onEnterPressed: root.openSearchResult(searchResultsList.currentIndex)
             }
 
             ListView {
@@ -2326,11 +2360,17 @@ Item {
 
                 delegate: Rectangle {
                     id: resultItem
+                    objectName: "searchResult"
                     required property var modelData
+                    required property int index
+                    readonly property string kind: modelData.kind
                     width: searchResultsList.width
                     height: 36
                     radius: 6
-                    color: resMouse.containsMouse ? root.colSidebarHover : "transparent"
+                    color: resultItem.ListView.isCurrentItem ? root.colSidebarActive
+                        : resMouse.containsMouse ? root.colSidebarHover : "transparent"
+                    Accessible.role: Accessible.ListItem
+                    Accessible.name: (kind === "area" ? "Area: " : kind === "project" ? "Project: " : "") + modelData.title
 
                     RowLayout {
                         anchors.fill: parent
@@ -2338,9 +2378,28 @@ Item {
                         anchors.rightMargin: 10
                         spacing: 8
 
-                        Text {
-                            text: "•"
-                            color: root.colAccent
+                        // An area or project shows its sidebar icon; a task,
+                        // an empty checkbox like its row.
+                        Item {
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
+                            Icon {
+                                anchors.centerIn: parent
+                                visible: resultItem.kind !== "task"
+                                name: resultItem.kind === "area" ? "area" : "project"
+                                size: 16
+                                color: resultItem.kind === "area" ? root.colTextSecondary : root.colAccent
+                            }
+                            Rectangle {
+                                anchors.centerIn: parent
+                                visible: resultItem.kind === "task"
+                                width: 12
+                                height: 12
+                                radius: 6
+                                color: "transparent"
+                                border.width: 1.5
+                                border.color: root.colTextSecondary
+                            }
                         }
 
                         Text {
@@ -2350,6 +2409,14 @@ Item {
                             Layout.fillWidth: true
                             elide: Text.ElideRight
                         }
+
+                        Text {
+                            objectName: "searchResultKind"
+                            visible: resultItem.kind !== "task"
+                            text: resultItem.kind === "area" ? "Area" : "Project"
+                            font.pixelSize: 11
+                            color: root.colTextSecondary
+                        }
                     }
 
                     MouseArea {
@@ -2357,13 +2424,7 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            const id = resultItem.modelData.id;
-                            root.pendingRevealId = id;
-                            taskListView.expandedTaskId = id;
-                            controller.revealTask(id);
-                            quickFindDialog.close();
-                        }
+                        onClicked: root.openSearchResult(resultItem.index)
                     }
                 }
             }

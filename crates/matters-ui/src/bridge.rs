@@ -1095,13 +1095,43 @@ impl qobject::AppController {
         } else {
             QueryEngine::new(&self.db)
                 .quick_find(&self.search_query)
-                .map(|found| to_json(&found.tasks))
+                .map(|found| to_json(&search_results(&found)))
         };
         match result {
             Ok(json) => self.set_search_results_json(json),
             Err(err) => self.report(err.to_string()),
         }
     }
+}
+
+/// One Quick Find result, as QML lists it: what it is (`area`, `project` or
+/// `task`), its id and its title.
+#[derive(serde::Serialize)]
+struct SearchResult<'a> {
+    kind: &'static str,
+    id: &'a str,
+    title: &'a str,
+}
+
+/// Quick Find's results in the order they are listed: areas, then projects,
+/// then tasks (#26).
+fn search_results(found: &matters_core::QuickFindResult) -> Vec<SearchResult<'_>> {
+    let areas = found.areas.iter().map(|a| SearchResult {
+        kind: "area",
+        id: &a.id,
+        title: &a.title,
+    });
+    let projects = found.projects.iter().map(|p| SearchResult {
+        kind: "project",
+        id: &p.id,
+        title: &p.title,
+    });
+    let tasks = found.tasks.iter().map(|t| SearchResult {
+        kind: "task",
+        id: &t.id,
+        title: &t.title,
+    });
+    areas.chain(projects).chain(tasks).collect()
 }
 
 // =============================================================================

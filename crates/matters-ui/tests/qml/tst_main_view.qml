@@ -1452,6 +1452,62 @@ Item {
             tryVerify(() => !dialog.visible, 1000, "Quick Find closes");
         }
 
+        // Open Quick Find and search for `text`, replacing the last search.
+        function quickFind(text) {
+            keySequence("Ctrl+K");
+            const dialog = findChild(view, "quickFindDialog");
+            tryVerify(() => dialog.opened, 1000, "Ctrl+K opens Quick Find");
+            typeText(text);
+            compare(findChild(view, "searchInput").text, text, "typing replaces the last search");
+            return findChild(view, "searchResults");
+        }
+
+        function test_quick_find_opens_areas_projects_and_tasks() {
+            const area = controller.createArea("qf-xylo-area");
+            controller.createProject("qf-xylo-project");
+            const project = JSON.parse(controller.projectsJson).find(p => p.title === "qf-xylo-project").id;
+            controller.selectView("inbox");
+            controller.addTask("qf-xylo-task");
+            controller.selectView("today");
+
+            let results = quickFind("xylo");
+            tryVerify(() => results.count === 3, 1000, "an area, a project and a task");
+            const kinds = [];
+            for (let i = 0; i < results.count; ++i)
+                kinds.push(results.itemAtIndex(i).kind);
+            compare(kinds, ["area", "project", "task"], "areas and projects before tasks");
+            compare(findChild(results.itemAtIndex(0), "searchResultKind").text, "Area");
+            compare(findChild(results.itemAtIndex(1), "searchResultKind").text, "Project");
+
+            // A click on the project opens it.
+            mouseClick(results.itemAtIndex(1));
+            tryCompare(controller, "currentView", "project");
+            compare(controller.currentProjectId, project);
+            const dialog = findChild(view, "quickFindDialog");
+            tryVerify(() => !dialog.visible, 1000, "Quick Find closes");
+            tryVerify(() => list.activeFocus, 1000, "focus goes back to the list");
+
+            // Enter opens the first result, the area.
+            results = quickFind("xylo");
+            tryVerify(() => results.count === 3);
+            keyClick(Qt.Key_Return);
+            tryCompare(controller, "currentView", "area");
+            compare(controller.currentAreaId, area);
+
+            // Down moves the highlight: two steps to the task.
+            results = quickFind("xylo");
+            tryVerify(() => results.count === 3);
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Down);
+            compare(results.currentIndex, 2);
+            keyClick(Qt.Key_Up);
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Return);
+            tryCompare(controller, "currentView", "inbox");
+            const row = waitForRow("qf-xylo-task");
+            verify(row.isExpanded, "the task is open");
+        }
+
         // ---- Checklists (#21) ---------------------------------------------------
 
         // Every visual descendant of `item` named `name`, in order.
