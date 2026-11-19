@@ -43,10 +43,12 @@ genesis=signed("genesis",root_id,[root,recovery,0,roster,a[0],0,None,commit(0,0,
 manifest=digest(encode(genesis))
 membership=signed("membership",a[0],[0,1,manifest,roster,a[0],1,recovery,[],commit(0,1,key1)])
 writer=signed("writer_start",a[0],[manifest,bytes([4])*16,a[0],bytes([7])*32,71,None])
+handoff=signed("writer_handoff",a[0],[manifest,bytes([4])*16,a[0],bytes([8])*32,73,bytes([7])*32,bytes([9])*48])
+empty_handoff=signed("writer_handoff",a[0],[manifest,bytes([4])*16,a[0],bytes([8])*32,73,bytes([7])*32,None])
 envelope=signed("key_envelope",a[0],[manifest,0,b[0],fp(KEM,b[2]),"content-key",bytes([13])*1153,bytes(69),a[0]])
 aad=[*envelope[0][:7],[manifest,0,b[0],fp(KEM,b[2]),"content-key",a[0]]]
 info=[SUITE,*route,"content-key",fp(KEM,b[2])]
-vectors=[dict(kind=v[0][2],wire_hex=encode(v).hex(),signed_hex=encode(v[0]).hex(),hash_hex=digest(encode(v)).hex()) for v in [genesis,membership,writer,envelope]]
+vectors=[dict(kind=v[0][2],wire_hex=encode(v).hex(),signed_hex=encode(v[0]).hex(),hash_hex=digest(encode(v)).hex()) for v in [genesis,membership,writer,envelope,handoff,empty_handoff]]
 maximum=sorted([member(i,i==0) for i in range(16)],key=lambda x:x[0])
 max_genesis=signed("genesis",root_id,[root,recovery,0,maximum,a[0],0,None,commit(0,0,key0)])
 max_bytes=encode(max_genesis)
@@ -77,4 +79,4 @@ if "--check" in sys.argv:
         raise SystemExit("key-distribution fixture drift")
 else:
     path.write_text(output)
-print(f"4 structural vectors; {len(negative)} rejection cases; 16-member genesis {len(max_bytes)} bytes")
+print(f"{len(vectors)} structural vectors; {len(negative)} rejection cases; 16-member genesis {len(max_bytes)} bytes")

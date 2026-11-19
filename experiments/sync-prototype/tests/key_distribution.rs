@@ -506,13 +506,24 @@ fn writer_admission_binds_document_actor_and_incarnation() {
     assert_eq!(s.authority.admit_writer(&bytes, DOC), Ok(false));
     for (device, inc, actor, prev) in [
         (&s.b, [2; 32], 71, None),
+        (&s.b, [1; 32], 72, None),
         (&s.a, [1; 32], 72, None),
         (&s.b, [2; 32], 72, Some([1; 32])),
     ] {
         let m = writer(&s.authority, device, inc, actor, prev);
+        let mut attempt = s.authority.clone();
+        let expected = if device.id().unwrap() == s.a.id().unwrap() {
+            Error::Fork
+        } else {
+            Error::Actor
+        };
         assert_eq!(
-            s.authority.admit_writer(&sign(&m, device).unwrap(), DOC),
-            Err(Error::Actor)
+            attempt.admit_writer(&sign(&m, device).unwrap(), DOC),
+            Err(expected)
+        );
+        assert_eq!(
+            attempt.writer_fork(DOC, s.a.id().unwrap()).is_some(),
+            expected == Error::Fork
         );
     }
     let restored = writer(&s.authority, &s.a, [2; 32], 72, Some([1; 32]));

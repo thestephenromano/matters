@@ -39,6 +39,7 @@ pub enum Error {
     Fork,
     Unsupported,
     Actor,
+    MissingWriter,
     Crypto,
     /// The content key does not match the epoch's signed commitment.
     KeyCommitment,
@@ -182,6 +183,15 @@ pub enum Body {
         actor: u64,
         previous: Option<Id>,
     },
+    Handoff {
+        manifest: Hash,
+        document: [u8; 16],
+        device: Hash,
+        incarnation: Id,
+        actor: u64,
+        previous: Id,
+        closing: Option<Hash>,
+    },
     Envelope {
         manifest: Hash,
         epoch: u64,
@@ -198,6 +208,7 @@ impl Body {
             Self::Genesis { .. } => "genesis",
             Self::Membership { .. } => "membership",
             Self::Writer { .. } => "writer_start",
+            Self::Handoff { .. } => "writer_handoff",
             Self::Envelope { .. } => "key_envelope",
         }
     }
@@ -294,6 +305,24 @@ pub fn signing_bytes(message: &Message) -> Result<Vec<u8>> {
                 .bytes(incarnation)?
                 .u64(*actor)?;
             optional(&mut e, previous)?;
+        }
+        Body::Handoff {
+            manifest,
+            document,
+            device,
+            incarnation,
+            actor,
+            previous,
+            closing,
+        } => {
+            e.array(7)?
+                .bytes(manifest)?
+                .bytes(document)?
+                .bytes(device)?
+                .bytes(incarnation)?
+                .u64(*actor)?
+                .bytes(previous)?;
+            optional(&mut e, closing)?;
         }
         Body::Envelope {
             manifest,
@@ -458,6 +487,18 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
                 previous: r.optional()?,
             }
         }
+        "writer_handoff" => {
+            r.array(7)?;
+            Body::Handoff {
+                manifest: r.fixed()?,
+                document: r.fixed()?,
+                device: r.fixed()?,
+                incarnation: r.fixed()?,
+                actor: r.0.u64()?,
+                previous: r.fixed()?,
+                closing: r.optional()?,
+            }
+        }
         "key_envelope" => {
             r.array(8)?;
             let manifest = r.fixed()?;
@@ -554,12 +595,21 @@ struct Writer {
     device: Hash,
     actor: u64,
     previous: Option<Id>,
+    closing: Option<Option<Hash>>,
     signed_bytes: Vec<u8>,
 }
 #[derive(Clone)]
 struct WriterLineage {
     head: Id,
     fork_evidence: Option<(Vec<u8>, Vec<u8>)>,
+}
+pub struct WriterHistory {
+    pub device: Hash,
+    /// Previous writer and its signed closing head; null head means empty.
+    pub predecessor: Option<(Id, Option<Hash>)>,
+    /// None: active. Some(None): closed empty. Some(Some(hash)): closed prefix.
+    pub closed: Option<Option<Hash>>,
+    pub frozen: bool,
 }
 #[derive(Clone)]
 pub struct Authority {
@@ -740,17 +790,43 @@ impl Authority {
         if p.message.route != self.route {
             return Err(Error::Context);
         }
-        let Body::Writer {
-            manifest,
-            document,
-            device,
-            incarnation,
-            actor,
-            previous,
-        } = &p.message.body
-        else {
-            return Err(Error::Unsupported);
-        };
+        let (manifest, document, device, incarnation, actor, previous, closing) =
+            match &p.message.body {
+                Body::Writer {
+                    manifest,
+                    document,
+                    device,
+                    incarnation,
+                    actor,
+                    previous,
+                } => (
+                    manifest,
+                    document,
+                    device,
+                    incarnation,
+                    actor,
+                    *previous,
+                    None,
+                ),
+                Body::Handoff {
+                    manifest,
+                    document,
+                    device,
+                    incarnation,
+                    actor,
+                    previous,
+                    closing,
+                } => (
+                    manifest,
+                    document,
+                    device,
+                    incarnation,
+                    actor,
+                    Some(*previous),
+                    Some(*closing),
+                ),
+                _ => return Err(Error::Unsupported),
+            };
         if *document != expected_document {
             return Err(Error::Context);
         }
@@ -774,7 +850,30 @@ impl Authority {
             if old.signed_bytes == bytes {
                 return Ok(false);
             }
+            if old.device == *device {
+                return self.freeze_writer(lineage, old.signed_bytes.clone(), bytes);
+            }
+            // A different device cannot freeze the owner by claiming its ID.
             return Err(Error::Actor);
+        }
+        if let Some(prev) = previous {
+            let old = self
+                .writers
+                .get(&(*document, prev))
+                .ok_or(Error::MissingPrevious)?;
+            if old.device != *device {
+                return Err(Error::Actor);
+            }
+        }
+        // Same-device conflicting successor claims are evidence even when
+        // they reuse an actor. Never let an arrival-dependent uniqueness check
+        // hide two authenticated definitions of the same lineage step.
+        if let Some((_, first)) = self
+            .writers
+            .iter()
+            .find(|((doc, _), w)| doc == document && w.device == *device && w.previous == previous)
+        {
+            return self.freeze_writer(lineage, first.signed_bytes.clone(), bytes);
         }
         if self
             .writers
@@ -782,29 +881,6 @@ impl Authority {
             .any(|((doc, _), w)| doc == document && w.actor == *actor)
         {
             return Err(Error::Actor);
-        }
-        if let Some(prev) = previous {
-            let old = self
-                .writers
-                .get(&(*document, *prev))
-                .ok_or(Error::MissingPrevious)?;
-            if old.device != *device {
-                return Err(Error::Actor);
-            }
-        }
-        // Null is also a predecessor: there is one root per device/document.
-        // Historical bindings are retained to detect competing successors even
-        // after later replacements. A valid fork freezes only this lineage.
-        if let Some((_, first)) = self
-            .writers
-            .iter()
-            .find(|((doc, _), w)| doc == document && w.device == *device && w.previous == *previous)
-        {
-            self.lineages
-                .get_mut(&lineage)
-                .ok_or(Error::Actor)?
-                .fork_evidence = Some((first.signed_bytes.clone(), bytes.to_vec()));
-            return Err(Error::Fork);
         }
         if self.writers.len() >= MAX_WRITERS {
             return Err(Error::Limit);
@@ -814,7 +890,8 @@ impl Authority {
             Writer {
                 device: *device,
                 actor: *actor,
-                previous: *previous,
+                previous,
+                closing,
                 signed_bytes: bytes.to_vec(),
             },
         );
@@ -826,6 +903,40 @@ impl Authority {
             },
         );
         Ok(true)
+    }
+    fn freeze_writer(
+        &mut self,
+        lineage: ([u8; 16], Hash),
+        first: Vec<u8>,
+        second: &[u8],
+    ) -> Result<bool> {
+        self.lineages
+            .get_mut(&lineage)
+            .ok_or(Error::Actor)?
+            .fork_evidence = Some((first, second.to_vec()));
+        Err(Error::Fork)
+    }
+    pub fn writer_history(&self, document: [u8; 16], incarnation: Id) -> Result<WriterHistory> {
+        let writer = self
+            .writers
+            .get(&(document, incarnation))
+            .ok_or(Error::MissingWriter)?;
+        let lineage = self
+            .lineages
+            .get(&(document, writer.device))
+            .ok_or(Error::Actor)?;
+        let closed = self
+            .writers
+            .iter()
+            .find(|((doc, _), w)| *doc == document && w.previous == Some(incarnation))
+            .map(|(_, successor)| successor.closing.ok_or(Error::Unsupported))
+            .transpose()?;
+        Ok(WriterHistory {
+            device: writer.device,
+            predecessor: writer.previous.zip(writer.closing),
+            closed,
+            frozen: lineage.fork_evidence.is_some(),
+        })
     }
     pub fn wrap_key(&self, admin: &Device, recipient: Hash, key: &Id) -> Result<Vec<u8>> {
         if admin.id()? != self.admin()? {
@@ -961,6 +1072,25 @@ impl Authority {
         key: &'a EpochKey,
         document: &[u8; 16],
     ) -> Result<AuthenticatedData<'a>> {
+        self.authenticate_record(bytes, key, document, true)
+    }
+    /// Signature facts for admitted active or retired writers. The inbox must
+    /// independently enforce closing prefixes and frozen writer lineages.
+    pub fn authenticate_history<'a>(
+        &self,
+        bytes: &'a [u8],
+        key: &'a EpochKey,
+        document: &[u8; 16],
+    ) -> Result<AuthenticatedData<'a>> {
+        self.authenticate_record(bytes, key, document, false)
+    }
+    fn authenticate_record<'a>(
+        &self,
+        bytes: &'a [u8],
+        key: &'a EpochKey,
+        document: &[u8; 16],
+        active_only: bool,
+    ) -> Result<AuthenticatedData<'a>> {
         self.check_epoch_key(key)?;
         let state = self.active()?;
         let p = wire::parse(bytes, self.route.content(document)).map_err(|_| Error::Format)?;
@@ -975,7 +1105,11 @@ impl Authority {
         let writer = self
             .writers
             .get(&(*document, *h.incarnation))
-            .ok_or(Error::Actor)?;
+            .ok_or(if active_only {
+                Error::Actor
+            } else {
+                Error::MissingWriter
+            })?;
         if writer.device != *h.author {
             return Err(Error::Actor);
         }
@@ -983,10 +1117,10 @@ impl Authority {
             .lineages
             .get(&(*document, *h.author))
             .ok_or(Error::Actor)?;
-        if lineage.fork_evidence.is_some() {
+        if active_only && lineage.fork_evidence.is_some() {
             return Err(Error::Fork);
         }
-        if lineage.head != *h.incarnation {
+        if active_only && lineage.head != *h.incarnation {
             return Err(Error::Stale);
         }
         verify_signature(

@@ -146,7 +146,7 @@ fn reversed_records_survive_restart_and_apply_once_without_echo() -> TestResult<
         [],
         |r| r.get(0),
     )?;
-    assert_eq!(tables, 2); // Receive never creates an outgoing queue.
+    assert_eq!(tables, 3); // Content, metadata and writer receipts; no outgoing queue.
     conn.execute(
         "UPDATE inbox_meta SET projection=?1",
         [serde_json::to_string(
@@ -824,3 +824,6 @@ fn review_replacement_writer_starts_are_refused_at_open() -> TestResult<()> {
     assert!(!dir.path().join("inbox.db").exists());
     Ok(())
 }
+
+#[path = "writer_lifecycle.rs"]
+mod lifecycle;
