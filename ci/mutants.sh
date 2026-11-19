@@ -5,8 +5,8 @@
 # By default only code this branch changed, relative to origin/main, is
 # mutated (`--in-diff`), and every mutant there must be caught: new and
 # changed code arrives with tests that notice when it breaks. `--all`
-# mutates the whole crate (about 4 minutes with 4 jobs), for triage; known
-# survivors are tracked in #128.
+# mutates the whole crate, to the same standard. A mutant that cannot change
+# behaviour is excluded in .cargo/mutants.toml, with the reason.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . ci/lib.sh

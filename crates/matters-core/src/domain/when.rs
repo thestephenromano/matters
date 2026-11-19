@@ -11,29 +11,6 @@ pub enum DateOrder {
     DayFirst,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TimeOfDay {
-    Anytime,
-    Evening,
-}
-
-impl TimeOfDay {
-    pub fn as_db_str(&self) -> Option<&'static str> {
-        match self {
-            TimeOfDay::Anytime => None,
-            TimeOfDay::Evening => Some("evening"),
-        }
-    }
-
-    pub fn from_db_str(s: Option<&str>) -> Self {
-        match s {
-            Some("evening") => TimeOfDay::Evening,
-            _ => TimeOfDay::Anytime,
-        }
-    }
-}
-
 /// The "When" representation:
 /// A task can be scheduled for Today (daytime or evening), on a specific calendar date,
 /// marked for Someday, or unscheduled (Inbox / Anytime).
@@ -128,10 +105,6 @@ impl Schedule {
         }
     }
 
-    pub fn is_someday(&self) -> bool {
-        matches!(self, Schedule::Someday)
-    }
-
     pub fn to_db_fields(&self, today: Date) -> (Option<Date>, Option<&'static str>, bool) {
         match self {
             Schedule::Today { evening } => (
@@ -178,4 +151,31 @@ fn names_a_day_of_the_year(text: &str) -> bool {
                 .all(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
     };
     month_name || numeric_pair
+}
+
+#[cfg(test)]
+mod tests {
+    use super::names_a_day_of_the_year;
+
+    #[test]
+    fn a_day_of_the_year_is_a_month_name_or_a_month_and_day() {
+        for text in ["jan 5", "5 january", "dec", "1/5", "12.24", "1-5"] {
+            assert!(names_a_day_of_the_year(text), "{text:?}");
+        }
+        for text in [
+            "5",          // one number
+            "1/5/2025",   // has a year
+            "2025-01-05", // has a year
+            "1/2025",     // a part too long
+            "1/",         // an empty part
+            "/5",
+            "a/b",      // not numbers
+            "1/5 2025", // more than one word
+            "ja 5",     // too short for a month
+            "yesterday",
+            "last friday",
+        ] {
+            assert!(!names_a_day_of_the_year(text), "{text:?}");
+        }
+    }
 }

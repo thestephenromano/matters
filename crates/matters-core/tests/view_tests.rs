@@ -307,3 +307,25 @@ fn logbook_lists_every_finished_task_its_badge_counts() {
         "the bounded slice still works"
     );
 }
+
+#[test]
+fn an_undated_task_due_today_is_found_in_today() {
+    // The Inbox lists it too, but Today is where its deadline puts it.
+    let mut task = Task::new("t", "Pay rent", 0.0);
+    task.deadline = Some(today());
+    assert_eq!(View::containing(&task, today()), View::Today);
+    task.deadline = Some(jiff::civil::date(2026, 11, 3));
+    assert_eq!(View::containing(&task, today()), View::Today, "overdue");
+    task.deadline = Some(jiff::civil::date(2026, 12, 1));
+    assert_eq!(View::containing(&task, today()), View::Inbox, "not due yet");
+}
+
+#[test]
+fn views_have_their_titles() {
+    let titles: Vec<&str> = all_views("p1").iter().map(View::title).collect();
+    assert_eq!(
+        titles,
+        ["Inbox", "Today", "Upcoming", "Anytime", "Someday", "Logbook", "Trash", "Project"]
+    );
+    assert_eq!(View::Area("a1".into()).title(), "Area");
+}
