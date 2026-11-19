@@ -47,6 +47,7 @@ Area (e.g. Work, Personal, Finances)
 3. **Heading:**
    * A visual section divider inside a Project to group related tasks.
    * Cannot be completed independently; exists purely for spatial organization.
+   * Added from the project's menu; renamed, moved (with its tasks) and deleted from its own. Deleting a heading keeps its tasks in the project, above the headings, and can be undone. An empty heading is still shown, so tasks can be moved into it.
 
 4. **Task (To-Do):**
    * The atomic unit of work.
@@ -154,7 +155,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Up` / `Down` | Task list | Moves list selection |
 | `Escape` | Task list, task editor | Closes the open task, then clears the selection; returns focus to the list |
 | `Ctrl + Z` | After moving to Trash | Undoes, while the Undo notice shows |
-| `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list. In Today, moving past the This Evening heading moves the task into or out of This Evening (dragging does the same) |
+| `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list. In Today, moving past the This Evening heading moves the task into or out of This Evening; in a project, moving past a heading files the task under it, or above the headings (dragging does the same) |
 
 ---
 
@@ -298,7 +299,7 @@ The [encrypted sync design](SYNC_DESIGN.md) records the security contract, propo
 Status of the Qt app. **Done** items are built; **Partly** items say what is missing and link the issue tracking it.
 
 - [x] **Done:** local SQLite persistence with WAL mode.
-- [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app has areas (sidebar, area view, filing projects, rename, Trash), projects, tasks and their checklists; headings (#22) have no interface yet, and tasks are filed in areas only by capturing them in the area until Move (#54).
+- [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app has areas (sidebar, area view, filing projects, rename, Trash), projects with headings, tasks and their checklists; tasks are filed in areas only by capturing them in the area until Move (#54).
 - [x] **Done:** core views Inbox, Today (with a This Evening section), Upcoming (grouped by day), Anytime (grouped by area and project), Someday, Logbook (grouped by the day tasks were finished) and Trash.
 - [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
 - [x] **Done:** inline task expansion. Title, notes, checklist, When and deadline are edited in place; a closed row shows how much of its checklist is done.

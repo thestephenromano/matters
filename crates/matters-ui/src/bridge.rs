@@ -21,7 +21,8 @@ use cxx_qt_lib::{
 };
 use matters_core::{
     local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
-    DeadlineStatus, Project, QueryEngine, Schedule, Status, Task, View, Visit,
+    DeadlineStatus, DeletedHeading, Heading, ListRow, Project, QueryEngine, Schedule, Status, Task,
+    View, Visit,
 };
 use uuid::Uuid;
 
@@ -259,6 +260,37 @@ pub mod qobject {
             item_id: &QString,
             after_id: &QString,
         );
+
+        /// Add a heading at the end of the current project. Returns its id,
+        /// or an empty string when nothing was added (a blank title).
+        #[qinvokable]
+        fn add_heading(self: Pin<&mut AppController>, title: &QString) -> QString;
+        /// Rename a heading. Returns false, changing nothing, when the title
+        /// is blank.
+        #[qinvokable]
+        fn rename_heading(
+            self: Pin<&mut AppController>,
+            heading_id: &QString,
+            title: &QString,
+        ) -> bool;
+        /// Delete a heading; its tasks stay in the project, above the
+        /// headings. `restore_heading` undoes the last deletion.
+        #[qinvokable]
+        fn delete_heading(self: Pin<&mut AppController>, heading_id: &QString);
+        #[qinvokable]
+        fn restore_heading(self: Pin<&mut AppController>);
+        /// Move a heading, with its tasks, `step` places up or down.
+        #[qinvokable]
+        fn move_heading(self: Pin<&mut AppController>, heading_id: &QString, step: i32);
+        /// Put a task of the current project under `heading_id` (empty: above
+        /// the headings), right after `after_id` there (first when empty).
+        #[qinvokable]
+        fn place_project_task(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            heading_id: &QString,
+            after_id: &QString,
+        );
     }
 
     impl cxx_qt::Initialize for AppController {}
@@ -287,6 +319,10 @@ pub mod qobject {
         /// Whether the task at `row` is scheduled for This Evening.
         #[qinvokable]
         fn evening_at(self: &TaskListModel, row: i32) -> bool;
+        /// The heading the row at `row` is under (a task) or is (an empty
+        /// heading's row), or an empty string.
+        #[qinvokable]
+        fn heading_at(self: &TaskListModel, row: i32) -> QString;
     }
 
     #[auto_cxx_name]
@@ -474,6 +510,8 @@ pub struct AppControllerRust {
     day: DayTracker,
     search_query: String,
     db: Database,
+    /// The last heading deleted, for Undo (`restore_heading`).
+    deleted_heading: Option<DeletedHeading>,
 }
 
 impl Default for AppControllerRust {
@@ -505,6 +543,7 @@ impl Default for AppControllerRust {
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
+            deleted_heading: None,
             db: database(),
         }
     }
@@ -1006,6 +1045,85 @@ impl qobject::AppController {
         self.finish(result);
     }
 
+    pub fn add_heading(self: Pin<&mut Self>, title: &QString) -> QString {
+        let title = String::from(title);
+        let Some(project_id) = self.view.project_id().map(str::to_string) else {
+            return QString::default();
+        };
+        if Task::clean_title(&title).is_none() {
+            return QString::default();
+        }
+        let mut heading = Heading::new(Uuid::new_v4().to_string(), project_id, title, 0.0);
+        let result = self.db.add_heading(&mut heading);
+        let id = if result.is_ok() {
+            QString::from(heading.id.as_str())
+        } else {
+            QString::default()
+        };
+        self.finish(result);
+        id
+    }
+
+    pub fn rename_heading(self: Pin<&mut Self>, heading_id: &QString, title: &QString) -> bool {
+        let title = String::from(title);
+        if Task::clean_title(&title).is_none() {
+            return false;
+        }
+        let result = self.db.rename_heading(&String::from(heading_id), &title);
+        let renamed = result.is_ok();
+        self.finish(result);
+        renamed
+    }
+
+    pub fn delete_heading(mut self: Pin<&mut Self>, heading_id: &QString) {
+        let result = self
+            .db
+            .delete_heading(&String::from(heading_id))
+            .map(|deleted| {
+                self.as_mut().rust_mut().deleted_heading = Some(deleted);
+            });
+        self.finish(result);
+    }
+
+    pub fn restore_heading(mut self: Pin<&mut Self>) {
+        let Some(deleted) = self.as_mut().rust_mut().deleted_heading.take() else {
+            return;
+        };
+        let result = self.db.restore_heading(&deleted);
+        self.finish(result);
+    }
+
+    pub fn move_heading(self: Pin<&mut Self>, heading_id: &QString, step: i32) {
+        let result = matters_core::ordering::move_heading(
+            &self.db,
+            &String::from(heading_id),
+            step as isize,
+        );
+        self.finish(result);
+    }
+
+    pub fn place_project_task(
+        self: Pin<&mut Self>,
+        task_id: &QString,
+        heading_id: &QString,
+        after_id: &QString,
+    ) {
+        let Some(project_id) = self.view.project_id().map(str::to_string) else {
+            return;
+        };
+        let heading = String::from(heading_id);
+        let after = String::from(after_id);
+        let result = matters_core::ordering::place_in_heading(
+            &self.db,
+            &project_id,
+            self.day.day(),
+            &String::from(task_id),
+            (!heading.is_empty()).then_some(heading.as_str()),
+            (!after.is_empty()).then_some(after.as_str()),
+        );
+        self.finish(result);
+    }
+
     /// Report a command's outcome and publish the new state.
     fn finish(mut self: Pin<&mut Self>, result: matters_core::Result<()>) {
         if let Err(err) = result {
@@ -1155,13 +1273,17 @@ enum Role {
     Section,
     /// Whether the task is deferred to Someday.
     Someday,
+    /// `task`, or `heading` for a heading with no tasks to list (#22).
+    Kind,
+    /// The heading a task is under, or an empty heading's own id.
+    HeadingId,
     /// Checklist items done, and in all (0 without a checklist).
     ChecklistDone,
     ChecklistTotal,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 12] = [
+    const ALL: [(Role, &'static str); 14] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -1174,6 +1296,8 @@ impl Role {
         (Role::Someday, "someday"),
         (Role::ChecklistDone, "checklistDone"),
         (Role::ChecklistTotal, "checklistTotal"),
+        (Role::Kind, "kind"),
+        (Role::HeadingId, "headingId"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -1184,10 +1308,26 @@ impl Role {
     }
 }
 
+/// The key a row is reconciled by: a task's id, or `heading:<id>` for an
+/// empty heading's row (task ids are UUIDs, so the two never meet).
+fn row_key(row: &ListRow) -> String {
+    match row {
+        ListRow::Task(task) => task.id.clone(),
+        ListRow::EmptyHeading(heading) => format!("heading:{}", heading.id),
+    }
+}
+
+fn row_task(row: &ListRow) -> Option<&Task> {
+    match row {
+        ListRow::Task(task) => Some(task),
+        ListRow::EmptyHeading(_) => None,
+    }
+}
+
 pub struct TaskListModelRust {
     error_message: QString,
-    rows: Vec<Task>,
-    /// Section key per listed task id (#25).
+    rows: Vec<ListRow>,
+    /// Section key per row (`row_key`), #25.
     sections: HashMap<String, String>,
     /// Checklist progress per listed task id that has a checklist (#21).
     progress: HashMap<String, ChecklistProgress>,
@@ -1253,24 +1393,34 @@ impl qobject::TaskListModel {
             engine
                 .tasks_in(&view, local_today())
                 .and_then(|members| {
+                    let shown: Vec<Task> = this.rows.iter().filter_map(row_task).cloned().collect();
                     this.visit
-                        .rows(&view, members, &this.rows, |id| db.get_task(id))
+                        .rows(&view, members, &shown, |id| db.get_task(id))
                 })
                 .and_then(|tasks| {
                     let keys = engine.section_keys(&view, &tasks)?;
-                    let sections: HashMap<String, String> =
+                    let mut sections: HashMap<String, String> =
                         tasks.iter().map(|t| t.id.clone()).zip(keys).collect();
                     let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
                     let progress = db.checklist_progress(&ids)?;
-                    Ok((tasks, sections, progress))
+                    let rows = engine.list_rows(&view, tasks)?;
+                    for row in &rows {
+                        if let ListRow::EmptyHeading(h) = row {
+                            sections.insert(
+                                row_key(row),
+                                matters_core::heading_section_key(&h.id, &h.title),
+                            );
+                        }
+                    }
+                    Ok((rows, sections, progress))
                 })
         };
         match target {
-            Ok((tasks, sections, progress)) => {
+            Ok((rows, sections, progress)) => {
                 let this = self.as_mut().rust_mut().get_mut();
                 let old_sections = std::mem::replace(&mut this.sections, sections);
                 let old_progress = std::mem::replace(&mut this.progress, progress);
-                reconcile(&mut QtRows(self.as_mut()), tasks, |t| t.id.clone());
+                reconcile(&mut QtRows(self.as_mut()), rows, row_key);
                 // A row whose task is unchanged can still move to another
                 // section (the Logbook after midnight, say) or have its
                 // checklist ticked: refresh those.
@@ -1278,9 +1428,10 @@ impl qobject::TaskListModel {
                     .rows
                     .iter()
                     .enumerate()
-                    .filter(|(_, t)| {
-                        old_sections.get(&t.id) != self.sections.get(&t.id)
-                            || old_progress.get(&t.id) != self.progress.get(&t.id)
+                    .filter(|(_, row)| {
+                        let key = row_key(row);
+                        old_sections.get(&key) != self.sections.get(&key)
+                            || old_progress.get(&key) != self.progress.get(&key)
                     })
                     .map(|(i, _)| i)
                     .collect();
@@ -1298,7 +1449,10 @@ impl qobject::TaskListModel {
 
     pub fn row_of(&self, task_id: &QString) -> i32 {
         let id = String::from(task_id);
-        self.rows.iter().position(|t| t.id == id).map_or(-1, qt_row)
+        self.rows
+            .iter()
+            .position(|row| row_task(row).is_some_and(|t| t.id == id))
+            .map_or(-1, qt_row)
     }
 
     pub fn id_at(&self, row: i32) -> QString {
@@ -1315,17 +1469,37 @@ impl qobject::TaskListModel {
         self.task_at(row).is_some_and(Task::is_evening)
     }
 
+    pub fn heading_at(&self, row: i32) -> QString {
+        let heading = match usize::try_from(row).ok().and_then(|r| self.rows.get(r)) {
+            Some(ListRow::Task(task)) => task.heading_id.as_deref(),
+            Some(ListRow::EmptyHeading(heading)) => Some(heading.id.as_str()),
+            None => None,
+        };
+        QString::from(heading.unwrap_or_default())
+    }
+
     fn task_at(&self, row: i32) -> Option<&Task> {
-        usize::try_from(row).ok().and_then(|r| self.rows.get(r))
+        usize::try_from(row)
+            .ok()
+            .and_then(|r| self.rows.get(r))
+            .and_then(row_task)
     }
 
     pub fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
         let row = usize::try_from(index.row()).ok();
-        let (Some(task), Some(role)) = (row.and_then(|r| self.rows.get(r)), Role::from_i32(role))
+        let (Some(row), Some(role)) = (row.and_then(|r| self.rows.get(r)), Role::from_i32(role))
         else {
             return QVariant::default();
         };
+        let task = match row {
+            ListRow::Task(task) => task,
+            ListRow::EmptyHeading(heading) => return self.heading_data(row, heading, role),
+        };
         match role {
+            Role::Kind => QVariant::from(&QString::from("task")),
+            Role::HeadingId => QVariant::from(&QString::from(
+                task.heading_id.as_deref().unwrap_or_default(),
+            )),
             Role::TaskId => QVariant::from(&QString::from(task.id.as_str())),
             Role::Title => QVariant::from(&QString::from(task.title.as_str())),
             Role::Notes => QVariant::from(&QString::from(task.notes.as_str())),
@@ -1366,6 +1540,29 @@ impl qobject::TaskListModel {
                     DeadlineStatus::Overdue => "overdue",
                 }))
             }
+        }
+    }
+
+    /// An empty heading's row: its kind, id, title and section; the task
+    /// roles are empty.
+    fn heading_data(&self, row: &ListRow, heading: &Heading, role: Role) -> QVariant {
+        match role {
+            Role::Kind => QVariant::from(&QString::from("heading")),
+            Role::HeadingId => QVariant::from(&QString::from(heading.id.as_str())),
+            Role::Title => QVariant::from(&QString::from(heading.title.as_str())),
+            Role::Section => QVariant::from(&QString::from(
+                self.sections
+                    .get(&row_key(row))
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            )),
+            Role::Done | Role::Evening | Role::Someday => QVariant::from(&false),
+            Role::ChecklistDone | Role::ChecklistTotal => QVariant::from(&0_i32),
+            Role::TaskId
+            | Role::Notes
+            | Role::StartDate
+            | Role::Deadline
+            | Role::DeadlineStatus => QVariant::from(&QString::default()),
         }
     }
 
@@ -1446,7 +1643,7 @@ qt_list_sink!(
     /// The task list model as a [`ListSink`].
     QtRows,
     qobject::TaskListModel,
-    Task
+    ListRow
 );
 
 // =============================================================================

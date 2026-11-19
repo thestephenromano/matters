@@ -13,6 +13,9 @@ pub use domain::{
     Project, ProjectProgress, Schedule, Status, Task, View,
 };
 pub use error::{MattersError, Result};
-pub use query::{ProjectView, QueryEngine, QuickFindResult, TodayView, UpcomingGroup, ViewCounts};
+pub use query::{
+    heading_section_key, ListRow, ProjectView, QueryEngine, QuickFindResult, TodayView,
+    UpcomingGroup, ViewCounts,
+};
 pub use storage::Database;
 pub use visit::Visit;
