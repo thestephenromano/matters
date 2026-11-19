@@ -1451,5 +1451,203 @@ Item {
             verify(row.isExpanded, "the revealed task is expanded");
             tryVerify(() => !dialog.visible, 1000, "Quick Find closes");
         }
+
+        // ---- Checklists (#21) ---------------------------------------------------
+
+        // Every visual descendant of `item` named `name`, in order.
+        function childrenNamed(item, name) {
+            const found = [];
+            for (let i = 0; i < item.children.length; ++i) {
+                const child = item.children[i];
+                if (child.objectName === name)
+                    found.push(child);
+                for (const inner of childrenNamed(child, name))
+                    found.push(inner);
+            }
+            return found;
+        }
+
+        // The open row's checklist items, top to bottom, that are shown.
+        function checklistRows(row) {
+            return childrenNamed(row, "checklistItem")
+                .filter(item => item.visible)
+                .sort((a, b) => a.mapToItem(row, 0, 0).y - b.mapToItem(row, 0, 0).y);
+        }
+
+        function checklistTitles(row) {
+            return checklistRows(row).map(item => item.title);
+        }
+
+        function checklistItem(row, title) {
+            return checklistRows(row).find(item => item.title === title) || null;
+        }
+
+        // A task in Today with a checklist made through the controller, open.
+        function checklistFixture(name, titles) {
+            const row = addToToday(name);
+            for (const title of titles)
+                verify(controller.addChecklistItem(row.taskId, title, "") !== "");
+            expandRow(row);
+            waitForChecklist(row, titles);
+            return row;
+        }
+
+        function waitForChecklist(row, titles, message) {
+            tryVerify(() => checklistTitles(row).join("|") === titles.join("|"), 2000,
+                      (message || "checklist") + ": got " + checklistTitles(row).join("|"));
+            settle();
+        }
+
+        function test_a_checklist_is_typed_into_the_open_task() {
+            const row = addToToday("cl-typed");
+            expandRow(row);
+            mouseClick(findChild(row, "checklistButton"));
+            const field = findChild(row, "checklistNewEnd");
+            const input = findChild(field, "checklistNewInput");
+            tryVerify(() => input.activeFocus, 1000, "the new-item field takes the cursor");
+
+            typeText("passport");
+            keyClick(Qt.Key_Return);
+            typeText("  charger ");
+            keyClick(Qt.Key_Return);
+            waitForChecklist(row, ["passport", "charger"]);
+            verify(input.activeFocus, "ready for the next item");
+            compare(input.text, "");
+
+            keyClick(Qt.Key_Return); // nothing typed: nothing added
+            keyClick(Qt.Key_Escape);
+            verify(!field.visible, "Escape closes the field");
+            verify(list.activeFocus, "and goes back to the list");
+            verify(row.isExpanded, "the task stays open");
+            waitForChecklist(row, ["passport", "charger"]);
+
+            // Closed, the row says how much is done.
+            clickRowBody(row);
+            tryVerify(() => !row.isExpanded);
+            const badge = findChild(row, "checklistBadge");
+            tryVerify(() => badge.visible, 1000, "the closed row shows the checklist");
+            compare(findChild(row, "checklistProgress").text, "0/2");
+        }
+
+        function test_checklist_items_are_ticked_renamed_and_deleted() {
+            const row = checklistFixture("cl-edit", ["milk", "bread", "eggs"]);
+
+            mouseClick(findChild(checklistItem(row, "bread"), "checklistBox"));
+            tryVerify(() => checklistItem(row, "bread").done, 1000, "bread is ticked");
+            mouseClick(findChild(checklistItem(row, "bread"), "checklistBox"));
+            tryVerify(() => !checklistItem(row, "bread").done, 1000, "and unticked");
+            mouseClick(findChild(checklistItem(row, "milk"), "checklistBox"));
+            tryVerify(() => checklistItem(row, "milk").done, 1000, "milk is ticked");
+
+            // Rename: select the title, type, and leave the field.
+            const title = findChild(checklistItem(row, "eggs"), "checklistTitle");
+            mouseClick(title);
+            verify(title.activeFocus);
+            title.selectAll();
+            typeText("a dozen eggs");
+            keyClick(Qt.Key_Tab);
+            waitForChecklist(row, ["milk", "bread", "a dozen eggs"]);
+
+            // A blank title is refused and the old one comes back.
+            const renamed = findChild(checklistItem(row, "a dozen eggs"), "checklistTitle");
+            mouseClick(renamed);
+            renamed.selectAll();
+            keyClick(Qt.Key_Space);
+            keyClick(Qt.Key_Tab);
+            tryCompare(renamed, "text", "a dozen eggs");
+
+            // The hover button deletes an item.
+            const bread = checklistItem(row, "bread");
+            mouseMove(bread, bread.width / 2, 10);
+            const del = findChild(bread, "checklistDelete");
+            tryVerify(() => del.visible, 1000, "delete shows on hover");
+            mouseClick(del);
+            waitForChecklist(row, ["milk", "a dozen eggs"]);
+
+            clickRowBody(row);
+            tryVerify(() => !row.isExpanded);
+            tryCompare(findChild(row, "checklistProgress"), "text", "1/2");
+        }
+
+        function test_checklist_keys_act_on_the_checklist_not_the_task() {
+            const row = checklistFixture("cl-keys", ["one", "two", "three"]);
+            const before = indexOf("cl-keys");
+            const one = findChild(checklistItem(row, "one"), "checklistTitle");
+            mouseClick(one);
+            verify(one.activeFocus);
+
+            // Ctrl+Down moves the item, never the task.
+            keyClick(Qt.Key_Down, Qt.ControlModifier);
+            waitForChecklist(row, ["two", "one", "three"], "one moved down");
+            verify(one.activeFocus, "the moved item keeps the cursor");
+            compare(indexOf("cl-keys"), before, "the task stayed where it was");
+
+            // Up and Down go between items.
+            keyClick(Qt.Key_Down);
+            tryVerify(() => findChild(checklistItem(row, "three"), "checklistTitle").activeFocus, 1000, "Down: next item");
+            keyClick(Qt.Key_Up);
+            keyClick(Qt.Key_Up);
+            tryVerify(() => findChild(checklistItem(row, "two"), "checklistTitle").activeFocus, 1000, "Up twice: first item");
+            keyClick(Qt.Key_Up);
+            verify(findChild(checklistItem(row, "two"), "checklistTitle").activeFocus, "Up at the top stays");
+            verify(row.isExpanded);
+
+            // Backspace in an emptied item deletes it, not the task, and the
+            // cursor goes to the item above.
+            const three = findChild(checklistItem(row, "three"), "checklistTitle");
+            mouseClick(three);
+            three.selectAll();
+            keyClick(Qt.Key_Backspace); // clears the text
+            keyClick(Qt.Key_Backspace); // deletes the empty item
+            waitForChecklist(row, ["two", "one"], "three deleted");
+            verify(rowFor("cl-keys") !== null, "the task is not in the Trash");
+            tryVerify(() => findChild(checklistItem(row, "one"), "checklistTitle").activeFocus, 1000,
+                      "the cursor moves to the item above");
+            keyClick(Qt.Key_Escape);
+            verify(list.activeFocus);
+            verify(row.isExpanded, "Escape in an item leaves the task open");
+        }
+
+        function test_enter_in_an_item_adds_the_next_one_below_it() {
+            const row = checklistFixture("cl-enter", ["first", "last"]);
+            mouseClick(findChild(checklistItem(row, "first"), "checklistTitle"));
+            keyClick(Qt.Key_End);
+            keyClick(Qt.Key_Return);
+            typeText("second");
+            keyClick(Qt.Key_Return);
+            waitForChecklist(row, ["first", "second", "last"]);
+            typeText("third");
+            keyClick(Qt.Key_Return);
+            waitForChecklist(row, ["first", "second", "third", "last"], "the next goes below the one just added");
+
+            // Clicking away keeps what was typed.
+            typeText("fourth");
+            mouseClick(findChild(row, "notesInput"));
+            waitForChecklist(row, ["first", "second", "third", "fourth", "last"], "fourth was kept");
+
+            // So does closing the task while typing.
+            mouseClick(findChild(row, "checklistButton"));
+            const input = findChild(findChild(row, "checklistNewEnd"), "checklistNewInput");
+            tryVerify(() => input.activeFocus, 1000, "the field at the end is open");
+            typeText("sixth");
+            clickRowBody(row);
+            tryVerify(() => !row.isExpanded);
+            tryCompare(findChild(row, "checklistProgress"), "text", "0/6");
+        }
+
+        function test_dragging_a_checklist_item_reorders_it() {
+            const row = checklistFixture("cl-drag", ["a", "b", "c"]);
+            const a = checklistItem(row, "a");
+            const c = checklistItem(row, "c");
+            const grip = findChild(a, "checklistGrip");
+            const line = findChild(row, "checklistDropLine");
+            // Onto the lower half of c: a goes after it.
+            const to = c.mapToItem(view, c.width / 2, c.height - 6);
+            dragGripTo(grip, to, () => verify(line.visible, "a line shows where it will land"));
+            waitForChecklist(row, ["b", "c", "a"]);
+            verify(!line.visible);
+            compare(checklistItem(row, "a"), a, "the item was moved, not recreated");
+            verify(rowFor("cl-drag") !== null && indexOf("cl-drag") >= 0, "the task didn't move");
+        }
     }
 }
