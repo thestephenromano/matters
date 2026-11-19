@@ -162,13 +162,10 @@ fn has_name(text: &str, names: &[&str]) -> bool {
     })
 }
 
-/// Whether `text` gives a clock time: `h:mm` (`0:00`, `9:30`), or a number
-/// with am or pm (`12am`, `9 pm`, `9:30pm`).
+/// Whether `text` gives a clock time: `h:mm` (`0:00`, `9:30`, `9:30pm`), or
+/// an hour with am or pm (`12am`, `9 pm`).
 fn names_a_time(text: &str) -> bool {
-    let clock = |s: &str| {
-        s.starts_with(|c: char| c.is_ascii_digit())
-            && s.chars().all(|c| c.is_ascii_digit() || c == ':')
-    };
+    let hour = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
     let tokens: Vec<&str> = text.split_whitespace().collect();
     tokens.iter().enumerate().any(|(i, t)| {
         let hours_minutes = t.split_once(':').is_some_and(|(h, m)| {
@@ -179,8 +176,8 @@ fn names_a_time(text: &str) -> bool {
         let meridiem = t
             .strip_suffix("am")
             .or_else(|| t.strip_suffix("pm"))
-            .is_some_and(clock)
-            || (matches!(*t, "am" | "pm") && i > 0 && clock(tokens[i - 1]));
+            .is_some_and(hour)
+            || (matches!(*t, "am" | "pm") && i > 0 && hour(tokens[i - 1]));
         hours_minutes || meridiem
     })
 }
