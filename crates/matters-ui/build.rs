@@ -6,7 +6,12 @@ fn main() {
             // TaskListModel derives from QAbstractListModel, which QML tooling
             // resolves from this module.
             .depend("QtQml.Models")
-            .qml_files(["qml/Main.qml", "qml/MainView.qml", "qml/Icon.qml"]),
+            .qml_files([
+                "qml/Main.qml",
+                "qml/MainView.qml",
+                "qml/Icon.qml",
+                "qml/ChecklistEditor.qml",
+            ]),
     )
     .file("src/bridge.rs")
     .qt_module("Gui")

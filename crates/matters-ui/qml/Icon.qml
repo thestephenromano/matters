@@ -35,6 +35,7 @@ Item {
         "sidebar": "M4 5h16v14H4z M9.5 5v14",
         "close": "M6 6l12 12 M18 6L6 18",
         "check": "M5 12.5l4.5 4.5L19 7",
+        "checklist": "M4 5h3.5v3.5H4z M4 10.25h3.5v3.5H4z M4 15.5h3.5V19H4z M11 6.75h9 M11 12h9 M11 17.25h9",
         "chevron-left": "M15 5l-7 7 7 7",
         "chevron-right": "M9 5l7 7-7 7",
         "chevron-down": "M7 10l5 5 5-5",

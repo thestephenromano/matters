@@ -5,6 +5,8 @@
 //! * `TaskListModel` is the task list for one view. It reconciles rows by
 //!   task id so delegates (and their expansion, focus and edit state) survive
 //!   reloads; see [`matters_core::list_diff`].
+//! * `ChecklistModel` is the checklist of one open task, reconciled the same
+//!   way by item id.
 //!
 //! View membership, "When" parsing and task placement all live in
 //! `matters_core`; this layer only translates between QML and those types.
@@ -18,8 +20,8 @@ use cxx_qt_lib::{
     QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant,
 };
 use matters_core::{
-    local_today, Area, Database, DateOrder, DayTracker, DeadlineStatus, Project, QueryEngine,
-    Schedule, Status, Task, View, Visit,
+    local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
+    DeadlineStatus, Project, QueryEngine, Schedule, Status, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -224,6 +226,39 @@ pub mod qobject {
         /// Called periodically by the UI.
         #[qinvokable]
         fn check_date(self: Pin<&mut AppController>);
+
+        /// Add an item to a task's checklist: right below `after_id`, or at
+        /// the end when it is empty. Returns the new item's id, or an empty
+        /// string when nothing was added (a blank title).
+        #[qinvokable]
+        fn add_checklist_item(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            title: &QString,
+            after_id: &QString,
+        ) -> QString;
+        /// Rename a checklist item. Returns false, changing nothing, when the
+        /// title is blank; the field then shows the old title.
+        #[qinvokable]
+        fn rename_checklist_item(
+            self: Pin<&mut AppController>,
+            item_id: &QString,
+            title: &QString,
+        ) -> bool;
+        #[qinvokable]
+        fn set_checklist_item_done(self: Pin<&mut AppController>, item_id: &QString, done: bool);
+        #[qinvokable]
+        fn delete_checklist_item(self: Pin<&mut AppController>, item_id: &QString);
+        /// Move a checklist item `step` places up (negative) or down.
+        #[qinvokable]
+        fn move_checklist_item(self: Pin<&mut AppController>, item_id: &QString, step: i32);
+        /// Move a checklist item to follow `after_id` (first when empty).
+        #[qinvokable]
+        fn place_checklist_item(
+            self: Pin<&mut AppController>,
+            item_id: &QString,
+            after_id: &QString,
+        );
     }
 
     impl cxx_qt::Initialize for AppController {}
@@ -306,6 +341,74 @@ pub mod qobject {
         fn role_names(self: &TaskListModel) -> QHash_i32_QByteArray;
         #[cxx_override]
         fn row_count(self: &TaskListModel, parent: &QModelIndex) -> i32;
+    }
+
+    #[auto_cxx_name]
+    extern "RustQt" {
+        #[qobject]
+        #[qml_element]
+        #[base = QAbstractListModel]
+        type ChecklistModel = super::ChecklistModelRust;
+
+        /// Show the checklist of task `task_id`. Rows are reconciled by item
+        /// id, so a field being edited keeps its delegate across reloads.
+        #[qinvokable]
+        fn load(self: Pin<&mut ChecklistModel>, task_id: &QString);
+        /// Id of the item at `row`, or an empty string when out of range.
+        #[qinvokable]
+        fn id_at(self: &ChecklistModel, row: i32) -> QString;
+    }
+
+    #[auto_cxx_name]
+    unsafe extern "RustQt" {
+        #[inherit]
+        fn begin_insert_rows(
+            self: Pin<&mut ChecklistModel>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
+        #[inherit]
+        fn end_insert_rows(self: Pin<&mut ChecklistModel>);
+        #[inherit]
+        fn begin_remove_rows(
+            self: Pin<&mut ChecklistModel>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
+        #[inherit]
+        fn end_remove_rows(self: Pin<&mut ChecklistModel>);
+        #[inherit]
+        fn begin_move_rows(
+            self: Pin<&mut ChecklistModel>,
+            source_parent: &QModelIndex,
+            source_first: i32,
+            source_last: i32,
+            destination_parent: &QModelIndex,
+            destination_child: i32,
+        ) -> bool;
+        #[inherit]
+        fn end_move_rows(self: Pin<&mut ChecklistModel>);
+        #[inherit]
+        fn index(self: &ChecklistModel, row: i32, column: i32, parent: &QModelIndex)
+            -> QModelIndex;
+
+        #[qsignal]
+        #[inherit]
+        fn data_changed(
+            self: Pin<&mut ChecklistModel>,
+            top_left: &QModelIndex,
+            bottom_right: &QModelIndex,
+            roles: &QList_i32,
+        );
+
+        #[cxx_override]
+        fn data(self: &ChecklistModel, index: &QModelIndex, role: i32) -> QVariant;
+        #[cxx_override]
+        fn role_names(self: &ChecklistModel) -> QHash_i32_QByteArray;
+        #[cxx_override]
+        fn row_count(self: &ChecklistModel, parent: &QModelIndex) -> i32;
     }
 }
 
@@ -827,6 +930,81 @@ impl qobject::AppController {
     }
 
     /// Report a command's outcome and publish the new state.
+    pub fn add_checklist_item(
+        self: Pin<&mut Self>,
+        task_id: &QString,
+        title: &QString,
+        after_id: &QString,
+    ) -> QString {
+        let title = String::from(title);
+        if Task::clean_title(&title).is_none() {
+            return QString::default();
+        }
+        let mut item = ChecklistItem::new(
+            Uuid::new_v4().to_string(),
+            String::from(task_id),
+            title,
+            0.0,
+        );
+        let after = String::from(after_id);
+        let result = if after.is_empty() {
+            self.db.add_checklist_item(&mut item)
+        } else {
+            matters_core::ordering::add_checklist_item_below(&self.db, &mut item, &after)
+        };
+        let id = if result.is_ok() {
+            QString::from(item.id.as_str())
+        } else {
+            QString::default()
+        };
+        self.finish(result);
+        id
+    }
+
+    pub fn rename_checklist_item(self: Pin<&mut Self>, item_id: &QString, title: &QString) -> bool {
+        let title = String::from(title);
+        if Task::clean_title(&title).is_none() {
+            return false;
+        }
+        let result = self
+            .db
+            .rename_checklist_item(&String::from(item_id), &title);
+        let renamed = result.is_ok();
+        self.finish(result);
+        renamed
+    }
+
+    pub fn set_checklist_item_done(self: Pin<&mut Self>, item_id: &QString, done: bool) {
+        let result = self
+            .db
+            .set_checklist_item_done(&String::from(item_id), done);
+        self.finish(result);
+    }
+
+    pub fn delete_checklist_item(self: Pin<&mut Self>, item_id: &QString) {
+        let result = self.db.delete_checklist_item(&String::from(item_id));
+        self.finish(result);
+    }
+
+    pub fn move_checklist_item(self: Pin<&mut Self>, item_id: &QString, step: i32) {
+        let result = matters_core::ordering::move_checklist_item(
+            &self.db,
+            &String::from(item_id),
+            step as isize,
+        );
+        self.finish(result);
+    }
+
+    pub fn place_checklist_item(self: Pin<&mut Self>, item_id: &QString, after_id: &QString) {
+        let after = String::from(after_id);
+        let result = matters_core::ordering::place_checklist_item(
+            &self.db,
+            &String::from(item_id),
+            (!after.is_empty()).then_some(after.as_str()),
+        );
+        self.finish(result);
+    }
+
     fn finish(mut self: Pin<&mut Self>, result: matters_core::Result<()>) {
         if let Err(err) = result {
             self.as_mut().report(err.to_string());
@@ -945,10 +1123,13 @@ enum Role {
     Section,
     /// Whether the task is deferred to Someday.
     Someday,
+    /// Checklist items done, and in all (0 without a checklist).
+    ChecklistDone,
+    ChecklistTotal,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 10] = [
+    const ALL: [(Role, &'static str); 12] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -959,6 +1140,8 @@ impl Role {
         (Role::DeadlineStatus, "deadlineStatus"),
         (Role::Section, "section"),
         (Role::Someday, "someday"),
+        (Role::ChecklistDone, "checklistDone"),
+        (Role::ChecklistTotal, "checklistTotal"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -974,6 +1157,8 @@ pub struct TaskListModelRust {
     rows: Vec<Task>,
     /// Section key per listed task id (#25).
     sections: HashMap<String, String>,
+    /// Checklist progress per listed task id that has a checklist (#21).
+    progress: HashMap<String, ChecklistProgress>,
     db: Database,
     /// Keeps tasks ticked during this visit in place (see `matters_core::Visit`).
     visit: Visit,
@@ -997,6 +1182,7 @@ impl Default for TaskListModelRust {
             queued: None,
             visit_id: None,
             sections: HashMap::new(),
+            progress: HashMap::new(),
         }
     }
 }
@@ -1042,21 +1228,28 @@ impl qobject::TaskListModel {
                     let keys = engine.section_keys(&view, &tasks)?;
                     let sections: HashMap<String, String> =
                         tasks.iter().map(|t| t.id.clone()).zip(keys).collect();
-                    Ok((tasks, sections))
+                    let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+                    let progress = db.checklist_progress(&ids)?;
+                    Ok((tasks, sections, progress))
                 })
         };
         match target {
-            Ok((tasks, sections)) => {
-                let old =
-                    std::mem::replace(&mut self.as_mut().rust_mut().get_mut().sections, sections);
+            Ok((tasks, sections, progress)) => {
+                let this = self.as_mut().rust_mut().get_mut();
+                let old_sections = std::mem::replace(&mut this.sections, sections);
+                let old_progress = std::mem::replace(&mut this.progress, progress);
                 reconcile(&mut QtRows(self.as_mut()), tasks, |t| t.id.clone());
                 // A row whose task is unchanged can still move to another
-                // section (the Logbook after midnight, say): refresh those.
+                // section (the Logbook after midnight, say) or have its
+                // checklist ticked: refresh those.
                 let moved: Vec<usize> = self
                     .rows
                     .iter()
                     .enumerate()
-                    .filter(|(_, t)| old.get(&t.id) != self.sections.get(&t.id))
+                    .filter(|(_, t)| {
+                        old_sections.get(&t.id) != self.sections.get(&t.id)
+                            || old_progress.get(&t.id) != self.progress.get(&t.id)
+                    })
                     .map(|(i, _)| i)
                     .collect();
                 for row in moved {
@@ -1125,6 +1318,14 @@ impl qobject::TaskListModel {
                     .map(String::as_str)
                     .unwrap_or_default(),
             )),
+            Role::ChecklistDone => {
+                let done = self.progress.get(&task.id).map_or(0, |p| p.done);
+                QVariant::from(&i32::try_from(done).unwrap_or(i32::MAX))
+            }
+            Role::ChecklistTotal => {
+                let total = self.progress.get(&task.id).map_or(0, |p| p.total);
+                QVariant::from(&i32::try_from(total).unwrap_or(i32::MAX))
+            }
             Role::DeadlineStatus => {
                 QVariant::from(&QString::from(match task.deadline_status(local_today()) {
                     DeadlineStatus::None => "none",
@@ -1163,6 +1364,138 @@ fn qt_row(row: usize) -> i32 {
 
 impl ListSink<Task> for QtRows<'_> {
     fn rows(&mut self) -> &mut Vec<Task> {
+        &mut self.0.as_mut().rust_mut().get_mut().rows
+    }
+    fn begin_remove(&mut self, row: usize) {
+        let row = qt_row(row);
+        self.0
+            .as_mut()
+            .begin_remove_rows(&QModelIndex::default(), row, row);
+    }
+    fn end_remove(&mut self) {
+        self.0.as_mut().end_remove_rows();
+    }
+    fn begin_insert(&mut self, row: usize) {
+        let row = qt_row(row);
+        self.0
+            .as_mut()
+            .begin_insert_rows(&QModelIndex::default(), row, row);
+    }
+    fn end_insert(&mut self) {
+        self.0.as_mut().end_insert_rows();
+    }
+    fn begin_move(&mut self, from: usize, to: usize) {
+        let root = QModelIndex::default();
+        let from = qt_row(from);
+        let moved = self
+            .0
+            .as_mut()
+            .begin_move_rows(&root, from, from, &root, qt_row(to));
+        assert!(moved, "beginMoveRows rejected a move from {from} to {to}");
+    }
+    fn end_move(&mut self) {
+        self.0.as_mut().end_move_rows();
+    }
+    fn changed(&mut self, row: usize) {
+        let index = self.0.index(qt_row(row), 0, &QModelIndex::default());
+        self.0
+            .as_mut()
+            .data_changed(&index, &index, &QList::<i32>::default());
+    }
+}
+
+// =============================================================================
+// ChecklistModel
+// =============================================================================
+
+#[repr(i32)]
+#[derive(Clone, Copy)]
+enum ItemRole {
+    ItemId = 0x0100, // Qt::UserRole
+    Title,
+    Done,
+}
+
+impl ItemRole {
+    const ALL: [(ItemRole, &'static str); 3] = [
+        (ItemRole::ItemId, "itemId"),
+        (ItemRole::Title, "title"),
+        (ItemRole::Done, "done"),
+    ];
+
+    fn from_i32(role: i32) -> Option<ItemRole> {
+        ItemRole::ALL
+            .iter()
+            .map(|(r, _)| *r)
+            .find(|r| *r as i32 == role)
+    }
+}
+
+pub struct ChecklistModelRust {
+    rows: Vec<ChecklistItem>,
+    db: Database,
+}
+
+impl Default for ChecklistModelRust {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            db: database(),
+        }
+    }
+}
+
+impl qobject::ChecklistModel {
+    pub fn load(mut self: Pin<&mut Self>, task_id: &QString) {
+        match self.db.list_checklist_items(&String::from(task_id)) {
+            Ok(items) => reconcile(&mut ChecklistRows(self.as_mut()), items, |i| i.id.clone()),
+            Err(err) => eprintln!("matters: {err}"),
+        }
+    }
+
+    pub fn id_at(&self, row: i32) -> QString {
+        usize::try_from(row)
+            .ok()
+            .and_then(|r| self.rows.get(r))
+            .map_or_else(QString::default, |item| QString::from(item.id.as_str()))
+    }
+
+    pub fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
+        let row = usize::try_from(index.row()).ok();
+        let (Some(item), Some(role)) =
+            (row.and_then(|r| self.rows.get(r)), ItemRole::from_i32(role))
+        else {
+            return QVariant::default();
+        };
+        match role {
+            ItemRole::ItemId => QVariant::from(&QString::from(item.id.as_str())),
+            ItemRole::Title => QVariant::from(&QString::from(item.title.as_str())),
+            ItemRole::Done => QVariant::from(&item.is_completed),
+        }
+    }
+
+    pub fn role_names(&self) -> QHash<QHashPair_i32_QByteArray> {
+        let mut roles = QHash::<QHashPair_i32_QByteArray>::default();
+        for (role, name) in ItemRole::ALL {
+            roles.insert(role as i32, QByteArray::from(name));
+        }
+        roles
+    }
+
+    pub fn row_count(&self, parent: &QModelIndex) -> i32 {
+        if parent.is_valid() {
+            0
+        } else {
+            i32::try_from(self.rows.len()).unwrap_or(i32::MAX)
+        }
+    }
+}
+
+/// [`ListSink`] for the checklist model, like [`QtRows`] for tasks.
+struct ChecklistRows<'a>(Pin<&'a mut qobject::ChecklistModel>);
+
+impl ListSink<ChecklistItem> for ChecklistRows<'_> {
+    fn rows(&mut self) -> &mut Vec<ChecklistItem> {
         &mut self.0.as_mut().rust_mut().get_mut().rows
     }
     fn begin_remove(&mut self, row: usize) {

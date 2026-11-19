@@ -8,7 +8,7 @@ pub mod view;
 pub mod when;
 
 pub use area::Area;
-pub use checklist::ChecklistItem;
+pub use checklist::{ChecklistItem, ChecklistProgress};
 pub use heading::Heading;
 pub use project::{Project, ProjectProgress};
 pub use status::Status;

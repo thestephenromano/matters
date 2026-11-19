@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use super::schema::{MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, SCHEMA_V1};
 use super::trash;
-use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
+use crate::domain::{Area, ChecklistItem, ChecklistProgress, Heading, Project, Status, Task};
 use crate::error::{MattersError, Result};
 
 /// Columns read by [`Database::map_task_row`], in its expected order.
@@ -688,11 +688,45 @@ impl Database {
         Ok(())
     }
 
+    /// Add `item` at the end of its task's checklist. Its title is cleaned
+    /// like a task's ([`Task::clean_title`]); a blank one is refused.
+    pub fn add_checklist_item(&self, item: &mut ChecklistItem) -> Result<()> {
+        let Some(title) = Task::clean_title(&item.title) else {
+            return Err(MattersError::Validation(
+                "a checklist item needs a title".into(),
+            ));
+        };
+        item.title = title;
+        item.sort_order = self.with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM checklist_items WHERE task_id = ?1",
+                params![item.task_id],
+                |r| r.get(0),
+            )?)
+        })?;
+        self.create_checklist_item(item)
+    }
+
+    pub fn get_checklist_item(&self, id: &str) -> Result<Option<ChecklistItem>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT id, task_id, title, is_completed, sort_order, created_at, updated_at
+                 FROM checklist_items WHERE id = ?1",
+                params![id],
+                Self::map_checklist_row,
+            )
+            .optional()?)
+    }
+
+    /// A task's checklist in its order. Tied keys (items never arranged)
+    /// fall back to the order they were added.
     pub fn list_checklist_items(&self, task_id: &str) -> Result<Vec<ChecklistItem>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, task_id, title, is_completed, sort_order, created_at, updated_at
-             FROM checklist_items WHERE task_id = ?1 ORDER BY sort_order ASC",
+             FROM checklist_items WHERE task_id = ?1
+             ORDER BY sort_order ASC, created_at ASC, id ASC",
         )?;
         let rows = stmt.query_map(params![task_id], Self::map_checklist_row)?;
         let mut items = Vec::new();
@@ -702,14 +736,60 @@ impl Database {
         Ok(items)
     }
 
-    pub fn toggle_checklist_item(&self, id: &str) -> Result<()> {
+    /// Rename a checklist item; the title is cleaned and a blank one refused,
+    /// as for [`Self::add_checklist_item`].
+    pub fn rename_checklist_item(&self, id: &str, title: &str) -> Result<()> {
+        let Some(title) = Task::clean_title(title) else {
+            return Err(MattersError::Validation(
+                "a checklist item needs a title".into(),
+            ));
+        };
         let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
-            "UPDATE checklist_items SET is_completed = CASE WHEN is_completed = 1 THEN 0 ELSE 1 END, updated_at = ?1 WHERE id = ?2",
-            params![now, id],
+        let changed = conn.execute(
+            "UPDATE checklist_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now, id],
         )?;
-        Ok(())
+        checklist_item_found(changed, id)
+    }
+
+    /// Tick or untick a checklist item. Setting the state, rather than
+    /// flipping it, means a click on a stale row can't undo what it shows.
+    pub fn set_checklist_item_done(&self, id: &str, done: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = crate::clock::now_millis();
+        let changed = conn.execute(
+            "UPDATE checklist_items SET is_completed = ?1, updated_at = ?2 WHERE id = ?3",
+            params![done, now, id],
+        )?;
+        checklist_item_found(changed, id)
+    }
+
+    /// How many of each task's checklist items are done, for the tasks in
+    /// `task_ids` that have a checklist.
+    pub fn checklist_progress(
+        &self,
+        task_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, ChecklistProgress>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(SUM(is_completed), 0), COUNT(*) FROM checklist_items WHERE task_id = ?1",
+        )?;
+        let mut progress = std::collections::HashMap::new();
+        for id in task_ids {
+            let (done, total): (i64, i64) =
+                stmt.query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            if total > 0 {
+                progress.insert(
+                    id.to_string(),
+                    ChecklistProgress {
+                        done: done as usize,
+                        total: total as usize,
+                    },
+                );
+            }
+        }
+        Ok(progress)
     }
 
     pub fn delete_checklist_item(&self, id: &str) -> Result<()> {
@@ -821,4 +901,15 @@ impl Database {
             updated_at: row.get(6)?,
         })
     }
+}
+
+/// `Ok` when an update found checklist item `id` (`changed` rows).
+fn checklist_item_found(changed: usize, id: &str) -> Result<()> {
+    if changed == 0 {
+        return Err(MattersError::NotFound {
+            entity: "checklist item",
+            id: id.to_string(),
+        });
+    }
+    Ok(())
 }

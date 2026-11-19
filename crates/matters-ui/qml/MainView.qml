@@ -1586,6 +1586,8 @@ Item {
                             required property string deadline
                             required property string deadlineStatus
                             required property bool someday
+                            required property int checklistDone
+                            required property int checklistTotal
                             required property int index
 
                             readonly property bool isExpanded: taskListView.expandedTaskId === taskId
@@ -1897,6 +1899,39 @@ Item {
                                         }
                                     }
 
+                                    // Checklist progress, while the row is closed.
+                                    Rectangle {
+                                        objectName: "checklistBadge"
+                                        visible: taskRow.checklistTotal > 0 && !taskRow.isExpanded
+                                        Layout.preferredHeight: 20
+                                        Layout.preferredWidth: checklistLabel.contentWidth + 28
+                                        radius: 4
+                                        color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                        Accessible.role: Accessible.StaticText
+                                        Accessible.name: "Checklist: " + taskRow.checklistDone + " of " + taskRow.checklistTotal + " done"
+
+                                        Icon {
+                                            id: checklistIcon
+                                            name: "checklist"
+                                            size: 12
+                                            color: root.colTextSecondary
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: 6
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+
+                                        Text {
+                                            id: checklistLabel
+                                            objectName: "checklistProgress"
+                                            anchors.left: checklistIcon.right
+                                            anchors.leftMargin: 4
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: taskRow.checklistDone + "/" + taskRow.checklistTotal
+                                            font.pixelSize: 11
+                                            color: root.colTextSecondary
+                                        }
+                                    }
+
                                     // Move to Trash (shows on hover). Nothing is
                                     // destroyed until the Trash is emptied.
                                     ToolButton {
@@ -2031,6 +2066,29 @@ Item {
                                         }
                                     }
 
+                                    // The checklist (#21), made only while the row is
+                                    // open, so closed rows hold no model.
+                                    Loader {
+                                        id: checklistLoader
+                                        objectName: "checklistLoader"
+                                        active: taskRow.isExpanded
+                                        readonly property ChecklistEditor editor: item as ChecklistEditor
+                                        visible: editor !== null && editor.shown
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: visible ? editor.implicitHeight : 0
+                                        sourceComponent: ChecklistEditor {
+                                            taskId: taskRow.taskId
+                                            controller: controller
+                                            textPrimary: root.colTextPrimary
+                                            textSecondary: root.colTextSecondary
+                                            accent: root.colAccent
+                                            border: root.colBorder
+                                            hover: root.colSidebarHover
+                                            // Escape: back to the list; the row stays open.
+                                            onLeave: taskListView.forceActiveFocus()
+                                        }
+                                    }
+
                                     // When and Deadline, tucked into the corner: pills
                                     // that show the current value, with a chevron to
                                     // say a click changes it (in the popover).
@@ -2042,6 +2100,35 @@ Item {
                                         spacing: 4
 
                                         Item { Layout.fillWidth: true }
+
+                                        // Adds an item at the end of the checklist.
+                                        ToolButton {
+                                            id: checklistButton
+                                            objectName: "checklistButton"
+                                            focusPolicy: Qt.NoFocus
+                                            Accessible.name: "Add a checklist item"
+                                            leftPadding: 8
+                                            rightPadding: 8
+                                            topPadding: 4
+                                            bottomPadding: 4
+                                            background: Rectangle {
+                                                implicitHeight: 26
+                                                implicitWidth: 26
+                                                radius: height / 2
+                                                color: checklistButton.down ? root.colSidebarActive
+                                                    : checklistButton.hovered ? root.colSidebarHover : "transparent"
+                                                border.width: 1
+                                                border.color: root.colBorder
+                                            }
+                                            contentItem: Icon {
+                                                name: "checklist"
+                                                size: 14
+                                                color: root.colTextSecondary
+                                            }
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: "Add a checklist item"
+                                            onClicked: if (checklistLoader.editor) checklistLoader.editor.startAdding("")
+                                        }
 
                                         ToolButton {
                                             id: whenControl

@@ -30,3 +30,10 @@ impl ChecklistItem {
         }
     }
 }
+
+/// How much of a task's checklist is done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChecklistProgress {
+    pub done: usize,
+    pub total: usize,
+}
