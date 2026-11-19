@@ -20,7 +20,11 @@ libcrux-ml-dsa = { version = "=0.0.11", default-features = false, features = ["s
 minicbor = { version = "=2.3.1", default-features = false, features = ["std"], optional = true }
 
 [features]
-crypto-probe = ["dep:hpke-rs", "dep:hpke-rs-crypto", "dep:hpke-rs-libcrux", "dep:libcrux-ml-dsa"]
+# The key-distribution suite composes the replica with the outbox, so the
+# probe enables that test-only API.
+crypto-probe = ["dep:hpke-rs", "dep:hpke-rs-crypto", "dep:hpke-rs-libcrux", "dep:libcrux-ml-dsa", "local-outbox"]
+# Test-only: `Replica::open_with_outbox` and the `LocalOutbox` participant.
+local-outbox = []
 record-contract = ["dep:minicbor"]
 
 [dev-dependencies]

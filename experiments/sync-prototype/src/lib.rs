@@ -6,10 +6,12 @@ mod replica;
 pub mod wire;
 
 pub use model::{Command, Entity, Kind, Projection, Schedule};
-pub use replica::{
-    Admission, Fault, InboxEntry, LocalOutbox, Record, Replica, Request, RestoreStats,
-    ATOMIC_FORMAT,
-};
+pub use replica::{Admission, Fault, InboxEntry, Record, Replica, Request, RestoreStats};
+/// Trusted test-only composition with the encrypted outbox. Behind a feature
+/// so ordinary users of this crate cannot open an integrated store with a
+/// participant that skips intent capture.
+#[cfg(feature = "local-outbox")]
+pub use replica::{LocalOutbox, ATOMIC_FORMAT, INTEGRATED_BUSY_TIMEOUT};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

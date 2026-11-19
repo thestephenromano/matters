@@ -1,0 +1,27 @@
+# Atomic sender review follow-up
+
+Review of #138 (atomic local edits and outgoing intents) against base `36b76be`. Contract: [atomic sender](../../docs/SYNC_ATOMIC_SENDER.md). Each finding lists its root cause, the owning boundary and the regression witness. Every behavioral witness below failed against the #138 code and passes after the change.
+
+| # | Finding | Root cause and owning boundary | Change | Witness |
+|---|---|---|---|---|
+| 1 | A reopen with a saved but unsealed edit blocked all further edits | Every open retires the previous writer, whose stranded operations carry its actor: no receiver accepts them from another writer, and re-sealing under the old writer would let a restored copy sign a competing record (#132). The composed open owned the state but had no way out | Decision (maintainer, 2026-11-19): opening re-issues stranded work. In the open's write transaction the document is rebuilt without the stranded operations (ignoring a checkpoint holding them), each saved request body re-runs as the new writer, its journal row takes the new operations and its intent moves to the new writer in place. A failure commits nothing | `review_a_restart_before_sealing_reissues_the_edit_and_editing_continues` (with and without a checkpoint), `review_a_failed_reissue_leaves_the_stranded_edit_for_the_next_open`, updated `atomic_sender_process_exit_boundaries`, `uncertain_ack_and_request_conflict_never_duplicate_local_edits`, `restored_backup_reissues_unsealed_work_and_receivers_still_detect_the_fork` |
+| 2 | The store accepted only 16 edits in its lifetime | `MAX_INTENTS` counted every intent ever written; nothing deletes them | The budget counts in-flight intents (not acknowledged); delivered history is retained and does not count | `review_delivered_intents_do_not_count_against_the_in_flight_budget` |
+| 3 | The request retry lookup ran outside the write transaction | `Replica::execute` read the journal before `BEGIN IMMEDIATE` | The lookup and the save share one immediate transaction. A retained receipt is still a local read that needs no ownership, as the contract says | `review_a_request_saved_concurrently_by_another_handle_is_seen_under_the_write_lock` |
+| 4 | A standalone open could take over an integrated store created after its check | The composition was inferred from a table checked outside the transaction and not recorded | `outbox_meta.composition` records `standalone` or `atomic`; every writer start checks it under the write lock, the standalone open re-checks the domain marker there, and `attach` requires `atomic`. Formats: `matters-encrypted-outbox/3`, `matters-sync-atomic-outbox/1` | `review_a_standalone_open_cannot_take_over_an_integrated_store` |
+| 5 | Any concurrent write made a local edit fail at once | Integrated connections used a zero busy timeout | Integrated domain and sealing connections wait up to one second (`INTEGRATED_BUSY_TIMEOUT`) for another short write; a held writer still fails the edit with nothing saved | `review_a_short_concurrent_write_delays_an_edit_instead_of_failing_it`; `wal_reader_keeps_snapshot_while_writer_contention_leaves_no_partial_save` still passes |
+| 6 | `AfterWriterCommit` fired after the whole open | The hook ran in `Sender::open` after `Replica` returned | `open_with_outbox` takes a `committed` callback run right after the writer commit | `review_the_writer_commit_point_precedes_the_rest_of_the_open` (also shows the orphaned announced writer is an empty chain link receivers admit) |
+| 7 | Test-only composition API was public | No gate on `LocalOutbox`/`open_with_outbox` | Behind the `local-outbox` feature, enabled by `crypto-probe`, whose key-distribution suite composes them | Structural (`cargo clippy --all-targets` with and without features) |
+| 8 | Ownership checks re-validated the binding on every write | `check_owner` called `check_binding` | The binding is checked when the writer starts and never changes; `check_owner` checks ownership only | Structural; covered by the fencing tests |
+| 9 | A throwaway `Request` was built to derive a batch | `batch` took a `Request` | `batch(request_id: &str)` | Structural |
+| 10 | Integrated stores ran inbox work that could never apply | `refresh_inbox` and the open-time replay ran regardless of mode | Both are skipped for an integrated store | `review_an_integrated_store_never_replays_an_inbox` |
+
+## Sibling search
+
+- Lifetime counters used as capacity: other `count_limit` callers are none in the outbox; the inbox's 32-record budget bounds a fixture receive set, not lifetime use.
+- Reads outside the write transaction that guard a write: `receive` (standalone only; disabled in integrated stores) checks the journal before its own deferred transaction. Its insert is a plain `INSERT` under `UNIQUE(id,bytes)`, so two handles receiving the same record cannot store it twice, but the second fails with a constraint error instead of reporting a duplicate. Left as is: receive is outside this composition, and the error is safe.
+- Zero busy timeouts: the standalone outbox and `Delivery` keep them, as their contention fixtures define.
+
+## Remaining
+
+- A re-issue that fails on every open (for example a command that no longer validates) leaves editing blocked, as before; `recovery_required()` then reports it.
+- A restored copy re-issues stranded work as its own writer; receivers freeze the device when the original's history contradicts the handoff. Reconciling the two branches remains open.
