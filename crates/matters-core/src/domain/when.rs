@@ -80,8 +80,10 @@ impl Schedule {
             DateOrder::DayFirst => Dialect::Uk,
         };
         let parsed = interim::parse_date_string(&text, midnight, dialect).ok()?;
-        if parsed.time() != Time::midnight() {
-            return None; // a time of day
+        // A time of day. `interim` gives a date with no time as midnight,
+        // so a time typed as midnight (`12am`, `0:00`) is found in the text.
+        if parsed.time() != Time::midnight() || names_a_time(&text) {
+            return None;
         }
         let mut date = parsed.date();
         if date < today && names_a_day_of_the_year(&text) {
@@ -160,6 +162,29 @@ fn has_name(text: &str, names: &[&str]) -> bool {
     })
 }
 
+/// Whether `text` gives a clock time: `h:mm` (`0:00`, `9:30`), or a number
+/// with am or pm (`12am`, `9 pm`, `9:30pm`).
+fn names_a_time(text: &str) -> bool {
+    let clock = |s: &str| {
+        s.starts_with(|c: char| c.is_ascii_digit())
+            && s.chars().all(|c| c.is_ascii_digit() || c == ':')
+    };
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    tokens.iter().enumerate().any(|(i, t)| {
+        let hours_minutes = t.split_once(':').is_some_and(|(h, m)| {
+            !h.is_empty()
+                && h.chars().all(|c| c.is_ascii_digit())
+                && m.starts_with(|c: char| c.is_ascii_digit())
+        });
+        let meridiem = t
+            .strip_suffix("am")
+            .or_else(|| t.strip_suffix("pm"))
+            .is_some_and(clock)
+            || (matches!(*t, "am" | "pm") && i > 0 && clock(tokens[i - 1]));
+        hours_minutes || meridiem
+    })
+}
+
 /// Whether `text` names a day: it has a number (`nov 18`, `11/18`,
 /// `0 days`), a weekday or a month. A bare unit (`week`), a span
 /// (`this month`) or a time (`midnight`) doesn't.
@@ -186,7 +211,28 @@ fn names_a_day_of_the_year(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{names_a_day, names_a_day_of_the_year};
+    use super::{names_a_day, names_a_day_of_the_year, names_a_time};
+
+    #[test]
+    fn a_clock_time_is_h_mm_or_a_number_with_am_or_pm() {
+        for text in ["12am", "0:00", "9:30", "fri 9 pm", "9:30pm", "tomorrow 5pm"] {
+            assert!(names_a_time(text), "{text:?}");
+        }
+        for text in [
+            "dec 24",
+            "12/24",
+            "2026-12-24",
+            "in 3 days",
+            "am",
+            "pm",
+            "spam",
+            "ham 5",
+            ":30",
+            "a:30",
+        ] {
+            assert!(!names_a_time(text), "{text:?}");
+        }
+    }
 
     #[test]
     fn a_day_is_named_by_a_number_a_weekday_or_a_month() {

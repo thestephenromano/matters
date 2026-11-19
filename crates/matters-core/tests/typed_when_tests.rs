@@ -109,6 +109,12 @@ fn anything_unclear_is_refused() {
         "3 days ago",
         "2026-11-10",
         "tomorrow 5pm",
+        // Times typed as midnight, which `interim` gives like a bare date.
+        "12am",
+        "0:00",
+        "00:00",
+        "tomorrow 12am",
+        "12 am",
         "noon",
         "in banana",
         "in week", // `in` only before a number
