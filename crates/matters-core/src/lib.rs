@@ -9,8 +9,8 @@ pub mod visit;
 
 pub use clock::{local_today, DayTracker};
 pub use domain::{
-    Area, ChecklistItem, ChecklistProgress, DateOrder, DeadlineStatus, Heading, Project,
-    ProjectProgress, Schedule, Status, Task, View,
+    Area, ChecklistItem, ChecklistProgress, DateOrder, DeadlineStatus, DeletedHeading, Heading,
+    Project, ProjectProgress, Schedule, Status, Task, View,
 };
 pub use error::{MattersError, Result};
 pub use query::{ProjectView, QueryEngine, QuickFindResult, TodayView, UpcomingGroup, ViewCounts};

@@ -88,6 +88,13 @@ const AREA_WHERE: &str = "area_id = ?1 AND project_id IS NULL AND status IN ('op
 /// Stable order for manually sorted lists; `id` breaks exact ties.
 const MANUAL_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
 
+/// A project's order: the tasks without a heading, then each heading's
+/// tasks in the headings' order (#22); within each, the manual order.
+const PROJECT_ORDER: &str =
+    "(SELECT h.sort_order FROM headings h WHERE h.id = tasks.heading_id) ASC, \
+     (SELECT h.created_at FROM headings h WHERE h.id = tasks.heading_id) ASC, \
+     heading_id ASC, sort_order ASC, created_at ASC, id ASC";
+
 /// Today's own manual order (`crate::ordering`), then the home order.
 const TODAY_ORDER: &str = "today_order ASC, sort_order ASC, created_at ASC, id ASC";
 
@@ -276,6 +283,7 @@ impl<'a> QueryEngine<'a> {
     /// * Anytime: `project:<id>:<title>` or `area:<id>:<title>`.
     /// * Logbook: `done:YYYY-MM-DD`, the local day it was finished
     ///   (`done:` when unknown).
+    /// * A project: `heading:<id>:<title>` under a heading (#22).
     ///
     /// Dates are left for the frontend to format in the user's locale.
     pub fn section_keys(&self, view: &View, tasks: &[Task]) -> Result<Vec<String>> {
@@ -330,7 +338,26 @@ impl<'a> QueryEngine<'a> {
                     format!("done:{}", day.unwrap_or_default())
                 })
                 .collect(),
-            View::Inbox | View::Someday | View::Trash | View::Project(_) | View::Area(_) => {
+            View::Project(id) => {
+                let headings: HashMap<String, String> = self
+                    .db
+                    .list_headings_for_project(id)?
+                    .into_iter()
+                    .map(|h| (h.id, h.title))
+                    .collect();
+                tasks
+                    .iter()
+                    .map(|t| {
+                        t.heading_id
+                            .as_ref()
+                            .and_then(|h| {
+                                headings.get(h).map(|title| format!("heading:{h}:{title}"))
+                            })
+                            .unwrap_or_default()
+                    })
+                    .collect()
+            }
+            View::Inbox | View::Someday | View::Trash | View::Area(_) => {
                 vec![String::new(); tasks.len()]
             }
         })
@@ -350,7 +377,7 @@ impl<'a> QueryEngine<'a> {
     }
 
     pub fn project_tasks(&self, project_id: &str) -> Result<Vec<Task>> {
-        self.select_live(PROJECT_WHERE, MANUAL_ORDER, params![project_id])
+        self.select_live(PROJECT_WHERE, PROJECT_ORDER, params![project_id])
     }
 
     /// Every trashed task, most recently trashed first.

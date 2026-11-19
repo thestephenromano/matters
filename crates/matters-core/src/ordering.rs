@@ -8,6 +8,10 @@
 //!   rearranges a project, and the reverse. This Evening is ordered within
 //!   itself; moving a task past its boundary moves the task into the other
 //!   section, switching This Evening on or off (decided on #53);
+//! * a project's headings are ordered by their `sort_order`, and its tasks
+//!   within their heading (or the part above the headings). Moving a task past
+//!   a heading files it under that heading, as with This Evening (decided on
+//!   #22);
 //! * the sidebar orders projects and areas by their `sort_order`;
 //! * a task's checklist orders its items by their `sort_order`.
 //!
@@ -58,12 +62,14 @@ pub fn place_task(
 }
 
 /// Move a task `step` places up (negative) or down (positive) in `view`,
-/// stopping at the ends of the list. In Today, a task moved past the This
-/// Evening boundary goes into the other section ([`place_in_today`]): one
-/// step down from the last daytime task is the top of This Evening.
+/// stopping at the ends of the list. A task moved past the end of its
+/// section goes into the next one (Today: daytime, This Evening; a project:
+/// above the headings, then each heading): one step down from the
+/// last daytime task is the top of This Evening, and one step up from a
+/// heading's first task is the end of the section above it.
 pub fn move_task(db: &Database, view: &View, today: Date, id: &str, step: isize) -> Result<()> {
-    if *view == View::Today {
-        return move_in_today(db, today, id, step);
+    if matches!(view, View::Today | View::Project(_)) {
+        return move_across_sections(db, view, today, id, step);
     }
     let (_, list) = section_of(db, view, today, id)?;
     let ids: Vec<&str> = list.iter().map(|t| t.id.as_str()).collect();
@@ -86,54 +92,210 @@ fn after_step<'a>(ids: &[&'a str], id: &str, step: isize) -> Option<Option<&'a s
     Some(to.checked_sub(1).map(|i| rest[i]))
 }
 
-fn move_in_today(db: &Database, today: Date, id: &str, step: isize) -> Result<()> {
-    let list = QueryEngine::new(db).tasks_in(&View::Today, today)?;
-    let Some(task) = list.iter().find(|t| t.id == id) else {
-        return Err(invalid(format!("task '{id}' is not in Today")));
+/// A part of a list arranged by hand that is ordered within itself: Today's
+/// daytime tasks or This Evening, or a project's tasks above the headings
+/// (`Heading(None)`) or under one.
+#[derive(Debug, Clone, PartialEq)]
+enum Section {
+    Today { evening: bool },
+    Heading(Option<String>),
+}
+
+/// The sections of Today (daytime, This Evening) or of a project (above the
+/// headings, then each heading, empty ones included), in order, each with
+/// its tasks' ids in order.
+fn sections(db: &Database, view: &View, today: Date) -> Result<Vec<(Section, Vec<String>)>> {
+    let list = QueryEngine::new(db).tasks_in(view, today)?;
+    let ids_where = |keep: &dyn Fn(&Task) -> bool| -> Vec<String> {
+        list.iter()
+            .filter(|t| keep(t))
+            .map(|t| t.id.clone())
+            .collect()
     };
-    let evening = task.is_evening();
-    let section: Vec<&str> = list
+    Ok(match view {
+        View::Today => [false, true]
+            .into_iter()
+            .map(|evening| {
+                (
+                    Section::Today { evening },
+                    ids_where(&|t: &Task| t.is_evening() == evening),
+                )
+            })
+            .collect(),
+        View::Project(project_id) => {
+            let headings = db.list_headings_for_project(project_id)?;
+            // Whether `t` is under `heading`; a heading that no longer
+            // exists counts as none.
+            let under = |t: &Task, heading: Option<&str>| {
+                let known = t
+                    .heading_id
+                    .as_deref()
+                    .filter(|h| headings.iter().any(|x| x.id == *h));
+                known == heading
+            };
+            let mut sections = vec![(
+                Section::Heading(None),
+                ids_where(&|t: &Task| under(t, None)),
+            )];
+            for h in &headings {
+                sections.push((
+                    Section::Heading(Some(h.id.clone())),
+                    ids_where(&|t: &Task| under(t, Some(&h.id))),
+                ));
+            }
+            sections
+        }
+        _ => Vec::new(),
+    })
+}
+
+/// [`move_task`] in a list with sections: within the task's section, or
+/// into the next or previous one when moved past its end.
+fn move_across_sections(
+    db: &Database,
+    view: &View,
+    today: Date,
+    id: &str,
+    step: isize,
+) -> Result<()> {
+    let sections = sections(db, view, today)?;
+    let Some(s) = sections
         .iter()
-        .filter(|t| t.is_evening() == evening)
-        .map(|t| t.id.as_str())
-        .collect();
-    let other: Vec<&str> = list
+        .position(|(_, ids)| ids.iter().any(|i| i == id))
+    else {
+        return Err(invalid(format!("task '{id}' is not in {}", view.title())));
+    };
+    let ids: Vec<&str> = sections[s].1.iter().map(String::as_str).collect();
+    let from = ids
         .iter()
-        .filter(|t| t.is_evening() != evening)
-        .map(|t| t.id.as_str())
-        .collect();
-    let from = section
-        .iter()
-        .position(|t| *t == id)
+        .position(|i| *i == id)
         .expect("the task is in its own section") as isize;
     let target = from + step;
-    let len = section.len() as isize;
+    let len = ids.len() as isize;
 
+    // Within the section, or past an end of the list: stop at the end.
+    let within = |step| match after_step(&ids, id, step) {
+        Some(after) => place_task(db, view, today, id, after),
+        None => Ok(()),
+    };
     if (0..len).contains(&target) {
-        if target == from {
-            return Ok(());
-        }
-        let rest: Vec<&str> = section.iter().copied().filter(|t| *t != id).collect();
-        let after = (target as usize).checked_sub(1).map(|i| rest[i]);
-        return place_task(db, &View::Today, today, id, after);
+        return within(step);
     }
     if target >= len {
-        if evening {
-            return Ok(()); // already at the bottom of This Evening
-        }
-        // Down past the last daytime task: into This Evening, `k` places
-        // below its top.
-        let k = ((target - len) as usize).min(other.len());
-        return place_in_today(db, today, id, true, k.checked_sub(1).map(|i| other[i]));
+        // Down past the section's last task: into the next section, `k`
+        // places below its top.
+        let Some((next, others)) = sections.get(s + 1) else {
+            return within(step);
+        };
+        let k = ((target - len) as usize).min(others.len());
+        let after = k.checked_sub(1).map(|i| others[i].as_str());
+        return place_in_section(db, view, today, id, next, after);
     }
-    // Up past the top of the section (`target` is negative).
-    if !evening {
-        return Ok(()); // already at the top of Today
-    }
-    // Into the daytime tasks, `k` places above their end.
+    // Up past the section's first task (`target` is negative): into the
+    // previous section, `k` places above its end.
+    let Some(previous) = s.checked_sub(1) else {
+        return within(step);
+    };
+    let (section, others) = &sections[previous];
     let k = (-target - 1) as usize;
-    let at = other.len().saturating_sub(k);
-    place_in_today(db, today, id, false, at.checked_sub(1).map(|i| other[i]))
+    let at = others.len().saturating_sub(k);
+    let after = at.checked_sub(1).map(|i| others[i].as_str());
+    place_in_section(db, view, today, id, section, after)
+}
+
+fn place_in_section(
+    db: &Database,
+    view: &View,
+    today: Date,
+    id: &str,
+    section: &Section,
+    after: Option<&str>,
+) -> Result<()> {
+    match (section, view) {
+        (Section::Today { evening }, _) => place_in_today(db, today, id, *evening, after),
+        (Section::Heading(heading), View::Project(project_id)) => {
+            place_in_heading(db, project_id, today, id, heading.as_deref(), after)
+        }
+        (Section::Heading(_), _) => Err(invalid(format!("{} has no headings", view.title()))),
+    }
+}
+
+/// Put a task of project `project_id` under `heading` (`None` for the part
+/// above the headings), right after `after` within it (first when `None`).
+/// `after` must be under that heading already.
+pub fn place_in_heading(
+    db: &Database,
+    project_id: &str,
+    today: Date,
+    id: &str,
+    heading: Option<&str>,
+    after: Option<&str>,
+) -> Result<()> {
+    let list = QueryEngine::new(db).project_tasks(project_id)?;
+    let Some(task) = list.iter().find(|t| t.id == id) else {
+        return Err(invalid(format!("task '{id}' is not in this project")));
+    };
+    if let Some(heading) = heading {
+        if !db
+            .list_headings_for_project(project_id)?
+            .iter()
+            .any(|h| h.id == heading)
+        {
+            return Err(invalid(format!(
+                "heading '{heading}' is not in this project"
+            )));
+        }
+    }
+    if let Some(after) = after {
+        if !list
+            .iter()
+            .any(|t| t.id == after && t.heading_id.as_deref() == heading && t.id != id)
+        {
+            return Err(invalid(format!(
+                "'{after}' is not under the heading '{id}' is moving to"
+            )));
+        }
+    }
+    if task.heading_id.as_deref() != heading {
+        let mut task = task.clone();
+        task.heading_id = heading.map(str::to_string);
+        db.update_task(&task)?;
+    }
+    place_task(db, &View::Project(project_id.to_string()), today, id, after)
+}
+
+/// Move a heading, with its tasks, so it follows `after` (or comes first)
+/// among its project's headings.
+pub fn place_heading(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
+    let list = headings_beside(db, id)?;
+    check_member(&list, id, after)?;
+    write(db, "headings", "sort_order", &place(&list, id, after))
+}
+
+/// Move a heading `step` places up (negative) or down (positive) among its
+/// project's headings, stopping at the ends.
+pub fn move_heading(db: &Database, id: &str, step: isize) -> Result<()> {
+    let list = headings_beside(db, id)?;
+    let ids: Vec<&str> = list.iter().map(|(i, _)| i.as_str()).collect();
+    match after_step(&ids, id, step) {
+        Some(after) => place_heading(db, id, after),
+        None => Ok(()),
+    }
+}
+
+/// The headings of heading `id`'s project, in order, with their keys.
+fn headings_beside(db: &Database, id: &str) -> Result<Vec<(String, f64)>> {
+    let Some(heading) = db.get_heading(id)? else {
+        return Err(MattersError::NotFound {
+            entity: "heading",
+            id: id.to_string(),
+        });
+    };
+    Ok(db
+        .list_headings_for_project(&heading.project_id)?
+        .into_iter()
+        .map(|h| (h.id, h.sort_order))
+        .collect())
 }
 
 /// Add a captured task (from `View::new_task`) right below `below` in
@@ -159,6 +321,9 @@ pub fn add_task_below(
         )));
     };
     let evening = anchor.is_evening();
+    if matches!(view, View::Project(_)) {
+        task.heading_id = anchor.heading_id.clone();
+    }
     db.add_task(task)?;
     if *view == View::Today {
         place_in_today(db, today, &task.id, evening, Some(below))
@@ -315,12 +480,19 @@ fn section_of(
     let Some(task) = list.iter().find(|t| t.id == id) else {
         return Err(invalid(format!("task '{id}' is not in {}", view.title())));
     };
-    if *view != View::Today {
-        return Ok(("sort_order", list));
+    match view {
+        View::Today => {
+            let evening = task.is_evening();
+            list.retain(|t| t.is_evening() == evening);
+            Ok(("today_order", list))
+        }
+        View::Project(_) => {
+            let heading = task.heading_id.clone();
+            list.retain(|t| t.heading_id == heading);
+            Ok(("sort_order", list))
+        }
+        _ => Ok(("sort_order", list)),
     }
-    let evening = task.is_evening();
-    list.retain(|t| t.is_evening() == evening);
-    Ok(("today_order", list))
 }
 
 fn key(task: &Task, column: &str) -> f64 {

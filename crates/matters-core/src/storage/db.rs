@@ -6,7 +6,9 @@ use super::schema::{
     MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, SCHEMA_V1,
 };
 use super::trash;
-use crate::domain::{Area, ChecklistItem, ChecklistProgress, Heading, Project, Status, Task};
+use crate::domain::{
+    Area, ChecklistItem, ChecklistProgress, DeletedHeading, Heading, Project, Status, Task,
+};
 use crate::error::{MattersError, Result};
 
 /// Columns read by [`Database::map_task_row`], in its expected order.
@@ -459,11 +461,65 @@ impl Database {
         Ok(())
     }
 
+    /// Add `heading` at the end of its project's headings. Its title is
+    /// cleaned like a task's ([`Task::clean_title`]); a blank one, or a
+    /// project that doesn't exist, is refused and nothing is added.
+    pub fn add_heading(&self, heading: &mut Heading) -> Result<()> {
+        let Some(title) = Task::clean_title(&heading.title) else {
+            return Err(MattersError::Validation("a heading needs a title".into()));
+        };
+        heading.title = title;
+        heading.sort_order = self.with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM headings WHERE project_id = ?1",
+                params![heading.project_id],
+                |r| r.get(0),
+            )?)
+        })?;
+        self.create_heading(heading)
+    }
+
+    pub fn get_heading(&self, id: &str) -> Result<Option<Heading>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT id, project_id, title, sort_order, created_at, updated_at
+                 FROM headings WHERE id = ?1",
+                params![id],
+                Self::map_heading_row,
+            )
+            .optional()?)
+    }
+
+    /// Rename a heading; the title is cleaned and a blank one refused, as
+    /// for [`Self::add_heading`].
+    pub fn rename_heading(&self, id: &str, title: &str) -> Result<()> {
+        let Some(title) = Task::clean_title(title) else {
+            return Err(MattersError::Validation("a heading needs a title".into()));
+        };
+        let conn = self.conn.lock().unwrap();
+        let now = crate::clock::now_millis();
+        let changed = conn.execute(
+            "UPDATE headings SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now, id],
+        )?;
+        if changed == 0 {
+            return Err(MattersError::NotFound {
+                entity: "heading",
+                id: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// A project's headings in their order. Tied keys (headings never
+    /// arranged) fall back to the order they were added.
     pub fn list_headings_for_project(&self, project_id: &str) -> Result<Vec<Heading>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, title, sort_order, created_at, updated_at
-             FROM headings WHERE project_id = ?1 ORDER BY sort_order ASC",
+             FROM headings WHERE project_id = ?1
+             ORDER BY sort_order ASC, created_at ASC, id ASC",
         )?;
         let rows = stmt.query_map(params![project_id], Self::map_heading_row)?;
         let mut headings = Vec::new();
@@ -473,10 +529,74 @@ impl Database {
         Ok(headings)
     }
 
-    pub fn delete_heading(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM headings WHERE id = ?1", params![id])?;
-        Ok(())
+    /// Delete a heading. Its tasks stay in the project, in the part above
+    /// the headings (decided on #22). Returns what [`Self::restore_heading`]
+    /// needs to undo it.
+    pub fn delete_heading(&self, id: &str) -> Result<DeletedHeading> {
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let heading = tx
+                .query_row(
+                    "SELECT id, project_id, title, sort_order, created_at, updated_at
+                     FROM headings WHERE id = ?1",
+                    params![id],
+                    Self::map_heading_row,
+                )
+                .optional()?
+                .ok_or_else(|| MattersError::NotFound {
+                    entity: "heading",
+                    id: id.to_string(),
+                })?;
+            let task_ids = {
+                let mut stmt =
+                    tx.prepare("SELECT id FROM tasks WHERE heading_id = ?1 ORDER BY id")?;
+                let ids = stmt
+                    .query_map(params![id], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<String>>>()?;
+                ids
+            };
+            // Tasks lose the heading through `ON DELETE SET NULL`; clearing
+            // it here too keeps that true without the pragma.
+            tx.execute(
+                "UPDATE tasks SET heading_id = NULL WHERE heading_id = ?1",
+                params![id],
+            )?;
+            tx.execute("DELETE FROM headings WHERE id = ?1", params![id])?;
+            tx.commit()?;
+            Ok(DeletedHeading { heading, task_ids })
+        })
+    }
+
+    /// Undo [`Self::delete_heading`]: the heading comes back, with the tasks
+    /// that were under it and are still in its project without a heading.
+    pub fn restore_heading(&self, deleted: &DeletedHeading) -> Result<()> {
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let h = &deleted.heading;
+            tx.execute(
+                "INSERT INTO headings (id, project_id, title, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    h.id,
+                    h.project_id,
+                    h.title,
+                    h.sort_order,
+                    h.created_at,
+                    h.updated_at
+                ],
+            )?;
+            {
+                let mut stmt = tx.prepare(
+                    "UPDATE tasks SET heading_id = ?1
+                     WHERE id = ?2 AND project_id = ?3 AND heading_id IS NULL",
+                )?;
+                for task in &deleted.task_ids {
+                    stmt.execute(params![h.id, task, h.project_id])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     // =========================================================================
