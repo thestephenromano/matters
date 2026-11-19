@@ -305,3 +305,52 @@ fn a_task_added_below_another_joins_its_heading() {
         pairs(&[("p1", "plan"), ("new", "plan"), ("p2", "plan")])
     );
 }
+
+#[test]
+fn an_empty_heading_has_a_row_where_its_tasks_would_be() {
+    use matters_core::ListRow;
+    let db = fixture(
+        &["plan", "empty", "build", "last"],
+        &[("loose", None), ("p1", Some("plan")), ("b1", Some("build"))],
+    );
+    let engine = QueryEngine::new(&db);
+    let tasks = engine.tasks_in(&project(), today()).unwrap();
+    let rows: Vec<String> = engine
+        .list_rows(&project(), tasks)
+        .unwrap()
+        .into_iter()
+        .map(|row| match row {
+            ListRow::Task(t) => t.id,
+            ListRow::EmptyHeading(h) => format!("[{}]", h.id),
+        })
+        .collect();
+    assert_eq!(rows, ["loose", "p1", "[empty]", "b1", "[last]"]);
+
+    // Other views have only tasks.
+    let inbox = engine.tasks_in(&View::Inbox, today()).unwrap();
+    assert!(engine
+        .list_rows(&View::Inbox, inbox)
+        .unwrap()
+        .iter()
+        .all(|row| matches!(row, ListRow::Task(_))));
+}
+
+#[test]
+fn rows_keep_the_order_of_the_tasks_given_within_each_heading() {
+    use matters_core::ListRow;
+    let db = fixture(&["h"], &[("a", Some("h")), ("b", Some("h")), ("x", None)]);
+    let engine = QueryEngine::new(&db);
+    // The order Visit gives (a ticked task kept in place), not the query's.
+    let mut tasks = engine.tasks_in(&project(), today()).unwrap();
+    tasks.reverse();
+    let rows: Vec<String> = engine
+        .list_rows(&project(), tasks)
+        .unwrap()
+        .into_iter()
+        .map(|row| match row {
+            ListRow::Task(t) => t.id,
+            ListRow::EmptyHeading(h) => format!("[{}]", h.id),
+        })
+        .collect();
+    assert_eq!(rows, ["x", "b", "a"]);
+}

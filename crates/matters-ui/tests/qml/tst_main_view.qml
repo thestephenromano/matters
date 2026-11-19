@@ -1508,6 +1508,139 @@ Item {
             verify(row.isExpanded, "the task is open");
         }
 
+        // ---- Headings (#22) -----------------------------------------------------
+
+        // Each row's heading id ("" above the headings), as listed, with an
+        // empty heading's row shown as "[<id>]".
+        function headingLayout() {
+            const out = [];
+            for (let i = 0; i < list.count; ++i) {
+                const id = list.model.idAt(i);
+                const heading = list.model.headingAt(i);
+                out.push(id === "" ? "[" + heading + "]" : list.model.titleAt(i) + "@" + heading);
+            }
+            return out.join(",");
+        }
+
+        // The section heading showing heading `title`.
+        function headingSection(title) {
+            for (const item of childrenNamed(list.contentItem, "sectionHeading")) {
+                if (item.visible && item.kind === "heading" && item.title === title)
+                    return item;
+            }
+            return null;
+        }
+
+        function headingMenuAction(title, itemName) {
+            const section = headingSection(title);
+            verify(section !== null, "heading " + title + " is shown");
+            const button = findChild(section, "headingMenuButton");
+            clickWhenShown(button);
+            const item = findChild(button, itemName);
+            tryVerify(() => item.visible, 1000, "the heading menu is open");
+            waitForRendering(view);
+            mouseClick(item);
+            const menu = findChild(button, "headingMenu");
+            tryVerify(() => !menu.visible, 2000, "the heading menu has closed");
+        }
+
+        function test_a_heading_is_added_from_the_project_menu_and_filled_by_moving_tasks() {
+            openFreshProject("hd-add", ["hd-add-1", "hd-add-2"]);
+            menuAction("addHeadingItem");
+            const dialog = findChild(view, "renameDialog");
+            tryVerify(() => dialog.opened, 1000);
+            const input = findChild(dialog, "renameInput");
+            compare(input.text, "", "a new heading starts blank");
+            input.text = "Phase one";
+            dialog.accept();
+            tryVerify(() => !dialog.visible, 2000);
+
+            // The empty heading shows, below the tasks.
+            tryVerify(() => headingSection("Phase one") !== null, 2000, "the heading is shown");
+            const heading = list.model.headingAt(list.count - 1);
+            verify(heading !== "");
+            compare(headingLayout(), "hd-add-1@,hd-add-2@,[" + heading + "]");
+
+            // Ctrl+Down from the last task files it under the heading.
+            const row = rowFor("hd-add-2");
+            list.selectedTaskId = row.taskId;
+            list.forceActiveFocus();
+            keyClick(Qt.Key_Down, Qt.ControlModifier);
+            tryVerify(() => headingLayout() === "hd-add-1@,hd-add-2@" + heading, 2000, headingLayout());
+            verify(headingSection("Phase one") !== null, "the heading now heads its task");
+            compare(rowFor("hd-add-2"), row, "the row was moved, not recreated");
+
+            // Ctrl+Up takes it back above the headings.
+            keyClick(Qt.Key_Up, Qt.ControlModifier);
+            tryVerify(() => headingLayout() === "hd-add-1@,hd-add-2@,[" + heading + "]", 2000, headingLayout());
+        }
+
+        function test_a_heading_is_renamed_moved_and_deleted_with_undo() {
+            openFreshProject("hd-edit", ["hd-edit-1", "hd-edit-2"]);
+            const first = controller.addHeading("First");
+            const second = controller.addHeading("Second");
+            controller.placeProjectTask(rowFor("hd-edit-1").taskId, first, "");
+            controller.placeProjectTask(rowFor("hd-edit-2").taskId, second, "");
+            tryVerify(() => headingLayout() === "hd-edit-1@" + first + ",hd-edit-2@" + second, 2000, headingLayout());
+            settle();
+
+            headingMenuAction("First", "renameHeadingItem");
+            const dialog = findChild(view, "renameDialog");
+            tryVerify(() => dialog.opened, 1000);
+            const input = findChild(dialog, "renameInput");
+            compare(input.text, "First");
+            input.text = "Planning";
+            dialog.accept();
+            tryVerify(() => headingSection("Planning") !== null, 2000, "renamed");
+            tryVerify(() => !dialog.visible, 2000);
+
+            headingMenuAction("Planning", "moveHeadingDownItem");
+            tryVerify(() => headingLayout() === "hd-edit-2@" + second + ",hd-edit-1@" + first, 2000,
+                      "the heading moved with its task: " + headingLayout());
+            settle();
+
+            // Delete keeps the task, above the headings; Undo brings it back.
+            headingMenuAction("Planning", "deleteHeadingItem");
+            tryVerify(() => headingLayout() === "hd-edit-1@,hd-edit-2@" + second, 2000,
+                      "the task stays in the project: " + headingLayout());
+            const toast = findChild(view, "undoToast");
+            verify(toast.visible, "the undo notice shows");
+            mouseClick(findChild(toast, "undoButton"));
+            tryVerify(() => headingLayout() === "hd-edit-2@" + second + ",hd-edit-1@" + first, 2000,
+                      "undo puts it back: " + headingLayout());
+            verify(headingSection("Planning") !== null);
+        }
+
+        function test_dragging_a_task_onto_an_empty_heading_files_it_there() {
+            openFreshProject("hd-drag", ["hd-drag-1", "hd-drag-2"]);
+            const heading = controller.addHeading("Later");
+            tryVerify(() => headingLayout() === "hd-drag-1@,hd-drag-2@,[" + heading + "]", 2000, headingLayout());
+            settle();
+            const row = rowFor("hd-drag-1");
+            const empty = childrenNamed(list.contentItem, "emptyHeading").find(item => item.headingId === heading);
+            verify(empty !== undefined, "the empty heading has a row");
+            const to = empty.mapToItem(view, empty.width / 2, empty.height / 2);
+            dragGripTo(findChild(row, "dragGrip"), to);
+            tryVerify(() => headingLayout() === "hd-drag-2@,hd-drag-1@" + heading, 2000,
+                      "dropped under the heading: " + headingLayout());
+        }
+
+        function test_the_selection_steps_over_an_empty_heading() {
+            openFreshProject("hd-sel", ["hd-sel-1", "hd-sel-2"]);
+            controller.addHeading("Nothing yet");
+            const full = controller.addHeading("Something");
+            controller.placeProjectTask(rowFor("hd-sel-2").taskId, full, "");
+            tryVerify(() => list.model.idAt(1) === "", 2000, "the empty heading's row is second: " + headingLayout());
+            settle();
+            focusList();
+            keyClick(Qt.Key_Down);
+            compare(selectedTitle(), "hd-sel-1");
+            keyClick(Qt.Key_Down);
+            compare(selectedTitle(), "hd-sel-2", "Down goes past the empty heading");
+            keyClick(Qt.Key_Up);
+            compare(selectedTitle(), "hd-sel-1", "and so does Up");
+        }
+
         // ---- Checklists (#21) ---------------------------------------------------
 
         // Every visual descendant of `item` named `name`, in order.

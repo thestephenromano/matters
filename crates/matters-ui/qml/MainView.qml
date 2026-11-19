@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Qt.labs.qmlmodels
 import matters
 
 // The whole application UI as a plain Item, so it can be hosted by Main.qml's
@@ -78,6 +79,8 @@ Item {
         } else if (undoKind === "area") {
             controller.restoreArea(undoId);
             controller.selectArea(undoId);
+        } else if (undoKind === "heading") {
+            controller.restoreHeading();
         }
         hideUndo();
     }
@@ -223,9 +226,14 @@ Item {
         if (count === 0)
             return;
         const current = taskModel.rowOf(taskListView.selectedTaskId);
-        const row = current < 0 ? (step > 0 ? 0 : count - 1)
-                                : Math.max(0, Math.min(count - 1, current + step));
-        selectRow(row);
+        let row = current < 0 ? (step > 0 ? 0 : count - 1)
+                              : Math.max(0, Math.min(count - 1, current + step));
+        // An empty heading's row holds no task: go on past it.
+        const direction = current < 0 ? (step > 0 ? 1 : -1) : Math.sign(step);
+        while (row >= 0 && row < count && taskModel.idAt(row) === "")
+            row += direction;
+        if (row >= 0 && row < count)
+            selectRow(row);
     }
 
     function moveSelected(step) {
@@ -353,11 +361,14 @@ Item {
             taskDrop = null;
             return;
         }
-        // Today is split into daytime and This Evening; dropping in the
-        // other section moves the task there (decided on #53).
-        const sectioned = controller.currentView === "today";
-        taskDrop = dropSlot(taskListView, from, row => taskModel.idAt(row),
-                            row => sectioned && taskModel.eveningAt(row), scenePos);
+        // Today is split into daytime and This Evening, and a project into
+        // its headings; dropping in another section moves the task there
+        // (decided on #53 and #22).
+        const view = controller.currentView;
+        const sectionAt = view === "today" ? (row => taskModel.eveningAt(row))
+            : view === "project" ? (row => taskModel.headingAt(row))
+            : (row => false);
+        taskDrop = dropSlot(taskListView, from, row => taskModel.idAt(row), sectionAt, scenePos);
     }
 
     function endTaskDrag() {
@@ -368,6 +379,8 @@ Item {
         if (drop && id !== "") {
             if (controller.currentView === "today")
                 controller.placeTodayTask(id, drop.section, drop.afterId);
+            else if (controller.currentView === "project")
+                controller.placeProjectTask(id, drop.section, drop.afterId);
             else
                 controller.placeTask(id, drop.afterId);
             Qt.callLater(root.scrollToTask, id);
@@ -511,9 +524,13 @@ Item {
         return Qt.formatDate(date, "dddd, MMMM d");
     }
 
-    function openRename(kind) {
+    // Name something: rename the current project or area (`kind` "project"
+    // or "area"), rename heading `id` ("heading"), or add a heading to the
+    // current project ("newHeading").
+    function openRename(kind, id, title) {
         renameDialog.kind = kind;
-        renameInput.text = controller.currentTitle;
+        renameDialog.targetId = id || "";
+        renameInput.text = title !== undefined ? title : controller.currentTitle;
         renameDialog.open();
     }
 
@@ -1139,6 +1156,12 @@ Item {
                                 onTriggered: root.openRename("project")
                             }
 
+                            MenuItem {
+                                objectName: "addHeadingItem"
+                                text: "Add Heading…"
+                                onTriggered: root.openRename("newHeading", "", "")
+                            }
+
                             MenuSeparator {}
 
                             MenuItem {
@@ -1441,6 +1464,8 @@ Item {
                             readonly property bool shown: section !== ""
                             objectName: kind === "evening" ? "eveningHeading" : (shown ? "sectionHeading" : "")
                             readonly property string title: root.describeSection(section)
+                            // A project heading's id (#22), from heading:<id>:<title>.
+                            readonly property string headingId: kind === "heading" ? section.split(":")[1] : ""
                             width: taskListView.width
                             height: !shown ? 0 : kind === "date" ? 48 : 40
                             visible: shown
@@ -1484,7 +1509,57 @@ Item {
                                 text: sectionHeading.title
                                 font.pixelSize: 15
                                 font.weight: Font.DemiBold
-                                color: root.colTextPrimary
+                                color: sectionHeading.kind === "heading" ? root.colAccent : root.colTextPrimary
+                            }
+
+                            // A project heading's actions.
+                            ToolButton {
+                                id: headingMenuButton
+                                objectName: "headingMenuButton"
+                                visible: sectionHeading.kind === "heading"
+                                anchors.right: parent.right
+                                anchors.verticalCenter: headingText.verticalCenter
+                                focusPolicy: Qt.NoFocus
+                                Accessible.name: "Heading actions"
+                                contentItem: Icon {
+                                    name: "more"
+                                    size: 16
+                                    color: root.colTextSecondary
+                                }
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Heading actions"
+                                onClicked: headingMenu.popup(headingMenuButton, 0, height)
+
+                                Menu {
+                                    id: headingMenu
+                                    objectName: "headingMenu"
+
+                                    MenuItem {
+                                        objectName: "renameHeadingItem"
+                                        text: "Rename…"
+                                        onTriggered: root.openRename("heading", sectionHeading.headingId, sectionHeading.title)
+                                    }
+                                    MenuItem {
+                                        objectName: "moveHeadingUpItem"
+                                        text: "Move Up"
+                                        onTriggered: controller.moveHeading(sectionHeading.headingId, -1)
+                                    }
+                                    MenuItem {
+                                        objectName: "moveHeadingDownItem"
+                                        text: "Move Down"
+                                        onTriggered: controller.moveHeading(sectionHeading.headingId, 1)
+                                    }
+                                    MenuSeparator {}
+                                    // Its tasks stay in the project (decided on #22).
+                                    MenuItem {
+                                        objectName: "deleteHeadingItem"
+                                        text: "Delete Heading"
+                                        onTriggered: {
+                                            root.showUndo("heading", sectionHeading.headingId, sectionHeading.title);
+                                            controller.deleteHeading(sectionHeading.headingId);
+                                        }
+                                    }
+                                }
                             }
                             Rectangle {
                                 anchors.bottom: parent.bottom
@@ -1574,653 +1649,676 @@ Item {
                         // for its current item as rows come and go), focus goes to
                         // whatever inside the row last had it, such as the notes
                         // editor, instead of the row itself (issue #1).
-                        delegate: FocusScope {
-                            id: taskRow
-                            objectName: "taskRow"
-                            required property string taskId
-                            required property string title
-                            required property string notes
-                            required property bool done
-                            required property string startDate
-                            required property bool evening
-                            required property string deadline
-                            required property string deadlineStatus
-                            required property bool someday
-                            required property int checklistDone
-                            required property int checklistTotal
-                            required property int index
+                        // A task, or a heading with no tasks to list (#22): its
+                        // section heading shows above the row, which is where a
+                        // task moved or dropped into it lands.
+                        delegate: DelegateChooser {
+                            role: "kind"
 
-                            readonly property bool isExpanded: taskListView.expandedTaskId === taskId
-                            readonly property bool isSelected: taskListView.selectedTaskId === taskId
-
-                            // F2 asked to edit this task's title: focus it once open.
-                            // The new-task field is open under this row (Enter).
-                            readonly property bool newBelowHere: root.newBelowId === taskId
-                            onNewBelowHereChanged: if (newBelowHere) Qt.callLater(taskRow.focusNewBelow)
-                            Component.onCompleted: if (newBelowHere) Qt.callLater(taskRow.focusNewBelow)
-                            function focusNewBelow() {
-                                if (newBelowHere)
-                                    newBelowInput.forceActiveFocus();
-                            }
-
-                            readonly property bool titleEditRequested: root.titleEditId === taskId
-                            onTitleEditRequestedChanged: if (titleEditRequested) Qt.callLater(taskRow.beginTitleEdit)
-                            function beginTitleEdit() {
-                                root.titleEditId = "";
-                                titleInput.forceActiveFocus();
-                                titleInput.selectAll();
-                            }
-
-                            // The content keeps its natural height, pinned to the top;
-                            // the row grows to reveal it and clips the rest, so the
-                            // header stays put while the height animates.
-                            readonly property real targetHeight: isExpanded || newBelowHere ? rowContent.implicitHeight + 16 : 48
-                            width: taskListView.width
-                            height: targetHeight
-                            clip: true
-
-                            // Once expanded, scroll the whole row into view, so its
-                            // notes and When buttons don't open below the fold. This
-                            // can fire while the ListView is laying out (a row created
-                            // already expanded), and repositioning the view from inside
-                            // its own layout crashes Qt, so the scroll is deferred.
-                            onHeightChanged: {
-                                if (isExpanded && height === targetHeight)
-                                    Qt.callLater(root.scrollToTask, taskId);
-                            }
-
-                            Rectangle {
-                                anchors.fill: parent
-                                // An open task is a card, like a page; a closed one is
-                                // tinted when selected or hovered.
-                                radius: taskRow.isExpanded ? 10 : 8
-                                color: taskRow.isExpanded ? root.colCardBg
-                                    : taskRow.isSelected ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
-                                    : rowHover.hovered ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
-                                border.color: !taskRow.isExpanded ? "transparent"
-                                    : taskRow.isSelected ? (root.isDark ? "#2F5F8F" : "#A5C8EC") : root.colBorder
-                                border.width: 1
-                            }
-
-                            Behavior on height {
-                                enabled: !root.reduceMotion
-                                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
-                            }
-
-                            // Passive hover tracking: unlike a MouseArea it never
-                            // blocks clicks from reaching the controls in the row.
-                            HoverHandler { id: rowHover }
-
-                            // Click on empty row space toggles expansion. Declared
-                            // first, so it sits beneath the row's controls and only
-                            // receives clicks that none of them accept.
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: {
-                                    taskListView.selectedTaskId = taskRow.taskId;
-                                    taskListView.expandedTaskId = taskRow.isExpanded ? "" : taskRow.taskId;
-                                    taskListView.forceActiveFocus();
+                            DelegateChoice {
+                                roleValue: "heading"
+                                delegate: Item {
+                                    objectName: "emptyHeading"
+                                    required property string headingId
+                                    required property string title
+                                    required property int index
+                                    readonly property real targetHeight: height
+                                    width: taskListView.width
+                                    height: 12
                                 }
                             }
 
-                            ColumnLayout {
-                                id: rowContent
-                                anchors.top: parent.top
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.margins: 8
-                                spacing: 8
+                            DelegateChoice {
+                                roleValue: "task"
+                                delegate: FocusScope {
+                                    id: taskRow
+                                    objectName: "taskRow"
+                                    required property string taskId
+                                    required property string title
+                                    required property string notes
+                                    required property bool done
+                                    required property string startDate
+                                    required property bool evening
+                                    required property string deadline
+                                    required property string deadlineStatus
+                                    required property bool someday
+                                    required property int checklistDone
+                                    required property int checklistTotal
+                                    required property int index
 
-                                // Main Row: Checkbox + Title + Date Pills. Fixed
-                                // height: the collapsed row shows exactly this.
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 32
-                                    Layout.maximumHeight: 32
-                                    spacing: 12
+                                    readonly property bool isExpanded: taskListView.expandedTaskId === taskId
+                                    readonly property bool isSelected: taskListView.selectedTaskId === taskId
 
-                                    // Drag grip: reorders the task (lists arranged by
-                                    // hand only). Dragging takes over from the row's
-                                    // click once the pointer moves. It keeps its space
-                                    // in every list, so rows line up the same everywhere.
-                                    Item {
-                                        objectName: "dragGrip"
-                                        enabled: controller.reorderable
-                                        Layout.preferredWidth: 12
-                                        Layout.preferredHeight: 24
-                                        opacity: enabled && (rowHover.hovered || gripDrag.active) ? 1 : 0
-
-                                        Icon {
-                                            anchors.centerIn: parent
-                                            name: "grip"
-                                            size: 16
-                                            color: root.colTextSecondary
-                                        }
-                                        HoverHandler { cursorShape: Qt.OpenHandCursor }
-                                        DragHandler {
-                                            id: gripDrag
-                                            target: null
-                                            onActiveChanged: active ? root.beginTaskDrag(taskRow.taskId) : root.endTaskDrag()
-                                            onCentroidChanged: if (active) root.updateTaskDrag(centroid.scenePosition)
-                                        }
+                                    // F2 asked to edit this task's title: focus it once open.
+                                    // The new-task field is open under this row (Enter).
+                                    readonly property bool newBelowHere: root.newBelowId === taskId
+                                    onNewBelowHereChanged: if (newBelowHere) Qt.callLater(taskRow.focusNewBelow)
+                                    Component.onCompleted: if (newBelowHere) Qt.callLater(taskRow.focusNewBelow)
+                                    function focusNewBelow() {
+                                        if (newBelowHere)
+                                            newBelowInput.forceActiveFocus();
                                     }
 
-                                    // Circular checkbox
+                                    readonly property bool titleEditRequested: root.titleEditId === taskId
+                                    onTitleEditRequestedChanged: if (titleEditRequested) Qt.callLater(taskRow.beginTitleEdit)
+                                    function beginTitleEdit() {
+                                        root.titleEditId = "";
+                                        titleInput.forceActiveFocus();
+                                        titleInput.selectAll();
+                                    }
+
+                                    // The content keeps its natural height, pinned to the top;
+                                    // the row grows to reveal it and clips the rest, so the
+                                    // header stays put while the height animates.
+                                    readonly property real targetHeight: isExpanded || newBelowHere ? rowContent.implicitHeight + 16 : 48
+                                    width: taskListView.width
+                                    height: targetHeight
+                                    clip: true
+
+                                    // Once expanded, scroll the whole row into view, so its
+                                    // notes and When buttons don't open below the fold. This
+                                    // can fire while the ListView is laying out (a row created
+                                    // already expanded), and repositioning the view from inside
+                                    // its own layout crashes Qt, so the scroll is deferred.
+                                    onHeightChanged: {
+                                        if (isExpanded && height === targetHeight)
+                                            Qt.callLater(root.scrollToTask, taskId);
+                                    }
+
                                     Rectangle {
-                                        id: checkCircle
-                                        objectName: "checkCircle"
-                                        Layout.preferredWidth: 20
-                                        Layout.preferredHeight: 20
-                                        radius: 10
-
-                                        // Completing a task: the circle fills with a
-                                        // short pop.
-                                        Behavior on color {
-                                            enabled: !root.reduceMotion
-                                            ColorAnimation { duration: 150 }
-                                        }
-                                        SequentialAnimation {
-                                            id: tickPop
-                                            NumberAnimation { target: checkCircle; property: "scale"; to: 1.2; duration: 90; easing.type: Easing.OutCubic }
-                                            NumberAnimation { target: checkCircle; property: "scale"; to: 1; duration: 140; easing.type: Easing.OutBack }
-                                        }
-                                        Connections {
-                                            target: taskRow
-                                            function onDoneChanged() {
-                                                if (taskRow.done && !root.reduceMotion)
-                                                    tickPop.restart();
-                                            }
-                                        }
-                                        color: taskRow.done ? root.colAccent : "transparent"
-                                        border.color: taskRow.done ? root.colAccent : (checkMouse.containsMouse ? root.colAccent : root.colTextSecondary)
-                                        border.width: 1.5
-
-                                        Icon {
-                                            anchors.centerIn: parent
-                                            name: "check"
-                                            size: 14
-                                            strokeWidth: 2.6
-                                            color: "#FFFFFF"
-                                            visible: taskRow.done
-                                        }
-
-                                        MouseArea {
-                                            id: checkMouse
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: controller.toggleTask(taskRow.taskId)
-                                        }
+                                        anchors.fill: parent
+                                        // An open task is a card, like a page; a closed one is
+                                        // tinted when selected or hovered.
+                                        radius: taskRow.isExpanded ? 10 : 8
+                                        color: taskRow.isExpanded ? root.colCardBg
+                                            : taskRow.isSelected ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
+                                            : rowHover.hovered ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                        border.color: !taskRow.isExpanded ? "transparent"
+                                            : taskRow.isSelected ? (root.isDark ? "#2F5F8F" : "#A5C8EC") : root.colBorder
+                                        border.width: 1
                                     }
 
-                                    // Title: plain text while the task is closed, an
-                                    // editable field while it is open (#27).
-                                    Text {
-                                        visible: !taskRow.isExpanded
-                                        text: taskRow.title
-                                        font.pixelSize: 14
-                                        font.strikeout: taskRow.done
-                                        color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
-                                        Layout.fillWidth: true
-                                        elide: Text.ElideRight
+                                    Behavior on height {
+                                        enabled: !root.reduceMotion
+                                        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
                                     }
 
-                                    TextInput {
-                                        id: titleInput
-                                        objectName: "titleInput"
-                                        visible: taskRow.isExpanded
-                                        text: taskRow.title
-                                        font.pixelSize: 14
-                                        font.strikeout: taskRow.done
-                                        color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
-                                        selectByMouse: true
-                                        clip: true
-                                        // Only as wide as the text, so a click on the
-                                        // empty space beside it still closes the row.
-                                        Layout.preferredWidth: Math.max(contentWidth + 8, 60)
-                                        Layout.minimumWidth: 40
+                                    // Passive hover tracking: unlike a MouseArea it never
+                                    // blocks clicks from reaching the controls in the row.
+                                    HoverHandler { id: rowHover }
 
-                                        // Saved when editing ends (Enter, focus leaves).
-                                        // A blank title is refused and the old one shown.
-                                        onEditingFinished: {
-                                            if (text !== taskRow.title && !controller.renameTask(taskRow.taskId, text))
-                                                text = taskRow.title;
-                                        }
-                                        onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
-                                        // Enter goes on to the notes.
-                                        Keys.onReturnPressed: notesInput.forceActiveFocus()
-                                        Keys.onEnterPressed: notesInput.forceActiveFocus()
-                                        // Escape abandons the edit; the row stays open.
-                                        Keys.onEscapePressed: {
-                                            text = taskRow.title;
+                                    // Click on empty row space toggles expansion. Declared
+                                    // first, so it sits beneath the row's controls and only
+                                    // receives clicks that none of them accept.
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: {
+                                            taskListView.selectedTaskId = taskRow.taskId;
+                                            taskListView.expandedTaskId = taskRow.isExpanded ? "" : taskRow.taskId;
                                             taskListView.forceActiveFocus();
                                         }
-
-                                        // Show changes made elsewhere, but never while
-                                        // the user is typing.
-                                        Connections {
-                                            target: taskRow
-                                            function onTitleChanged() {
-                                                if (!titleInput.activeFocus)
-                                                    titleInput.text = taskRow.title;
-                                            }
-                                        }
                                     }
 
-                                    // Fills the space beside the title field.
-                                    Item {
-                                        visible: taskRow.isExpanded
-                                        Layout.fillWidth: true
-                                    }
+                                    ColumnLayout {
+                                        id: rowContent
+                                        anchors.top: parent.top
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.margins: 8
+                                        spacing: 8
 
-                                    // "This Evening" badge; Today has a This Evening
-                                    // heading instead.
-                                    Rectangle {
-                                        objectName: "eveningBadge"
-                                        visible: taskRow.evening && controller.currentView !== "today"
-                                        Layout.preferredHeight: 20
-                                        Layout.preferredWidth: eveningLabel.contentWidth + 28
-                                        radius: 4
-                                        color: root.isDark ? "#382D16" : "#FFF3BF"
+                                        // Main Row: Checkbox + Title + Date Pills. Fixed
+                                        // height: the collapsed row shows exactly this.
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 32
+                                            Layout.maximumHeight: 32
+                                            spacing: 12
 
-                                        Icon {
-                                            id: eveningIcon
-                                            name: "evening"
-                                            size: 12
-                                            color: root.colEvening
-                                            anchors.left: parent.left
-                                            anchors.leftMargin: 6
-                                            anchors.verticalCenter: parent.verticalCenter
-                                        }
+                                            // Drag grip: reorders the task (lists arranged by
+                                            // hand only). Dragging takes over from the row's
+                                            // click once the pointer moves. It keeps its space
+                                            // in every list, so rows line up the same everywhere.
+                                            Item {
+                                                objectName: "dragGrip"
+                                                enabled: controller.reorderable
+                                                Layout.preferredWidth: 12
+                                                Layout.preferredHeight: 24
+                                                opacity: enabled && (rowHover.hovered || gripDrag.active) ? 1 : 0
 
-                                        Text {
-                                            id: eveningLabel
-                                            anchors.left: eveningIcon.right
-                                            anchors.leftMargin: 4
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            text: "Evening"
-                                            font.pixelSize: 11
-                                            font.weight: Font.DemiBold
-                                            color: root.colEvening
-                                        }
-                                    }
-
-                                    // Start date badge, where the list doesn't already
-                                    // say it (root.describeStart).
-                                    Rectangle {
-                                        objectName: "startBadge"
-                                        visible: dateLabel.text !== ""
-                                        Layout.preferredHeight: 20
-                                        Layout.preferredWidth: dateLabel.contentWidth + 12
-                                        radius: 4
-                                        color: root.isDark ? "#2C2E33" : "#E9ECEF"
-
-                                        Text {
-                                            id: dateLabel
-                                            objectName: "startLabel"
-                                            anchors.centerIn: parent
-                                            text: root.describeStart(taskRow.startDate)
-                                            font.pixelSize: 11
-                                            color: root.colTextSecondary
-                                        }
-                                    }
-
-                                    // Deadline badge: red when due today or overdue.
-                                    Rectangle {
-                                        objectName: "deadlineBadge"
-                                        readonly property bool urgent: taskRow.deadlineStatus === "today"
-                                            || taskRow.deadlineStatus === "overdue"
-                                        visible: taskRow.deadline !== ""
-                                        Layout.preferredHeight: 20
-                                        Layout.preferredWidth: deadlineLabel.contentWidth + 28
-                                        radius: 4
-                                        color: urgent ? (root.isDark ? "#3B1F1F" : "#FFE3E3") : (root.isDark ? "#2C2E33" : "#E9ECEF")
-
-                                        Icon {
-                                            id: deadlineIcon
-                                            name: "deadline"
-                                            size: 12
-                                            color: deadlineLabel.color
-                                            anchors.left: parent.left
-                                            anchors.leftMargin: 6
-                                            anchors.verticalCenter: parent.verticalCenter
-                                        }
-
-                                        Text {
-                                            id: deadlineLabel
-                                            objectName: "deadlineLabel"
-                                            anchors.left: deadlineIcon.right
-                                            anchors.leftMargin: 4
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            text: root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
-                                            font.pixelSize: 11
-                                            font.weight: parent.urgent ? Font.DemiBold : Font.Normal
-                                            color: parent.urgent ? (root.isDark ? "#FFA8A8" : "#C92A2A") : root.colTextSecondary
-                                        }
-                                    }
-
-                                    // Checklist progress, while the row is closed.
-                                    Rectangle {
-                                        objectName: "checklistBadge"
-                                        visible: taskRow.checklistTotal > 0 && !taskRow.isExpanded
-                                        Layout.preferredHeight: 20
-                                        Layout.preferredWidth: checklistLabel.contentWidth + 28
-                                        radius: 4
-                                        color: root.isDark ? "#2C2E33" : "#E9ECEF"
-                                        Accessible.role: Accessible.StaticText
-                                        Accessible.name: "Checklist: " + taskRow.checklistDone + " of " + taskRow.checklistTotal + " done"
-
-                                        Icon {
-                                            id: checklistIcon
-                                            name: "checklist"
-                                            size: 12
-                                            color: root.colTextSecondary
-                                            anchors.left: parent.left
-                                            anchors.leftMargin: 6
-                                            anchors.verticalCenter: parent.verticalCenter
-                                        }
-
-                                        Text {
-                                            id: checklistLabel
-                                            objectName: "checklistProgress"
-                                            anchors.left: checklistIcon.right
-                                            anchors.leftMargin: 4
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            text: taskRow.checklistDone + "/" + taskRow.checklistTotal
-                                            font.pixelSize: 11
-                                            color: root.colTextSecondary
-                                        }
-                                    }
-
-                                    // Move to Trash (shows on hover). Nothing is
-                                    // destroyed until the Trash is emptied.
-                                    ToolButton {
-                                        objectName: "deleteButton"
-                                        focusPolicy: Qt.NoFocus
-                                        contentItem: Icon {
-                                            name: "close"
-                                            size: 14
-                                            color: root.colTextSecondary
-                                        }
-                                        visible: rowHover.hovered && controller.currentView !== "trash"
-                                        ToolTip.visible: hovered
-                                        ToolTip.text: "Move to Trash"
-                                        onClicked: {
-                                            root.showUndo("task", taskRow.taskId, taskRow.title);
-                                            controller.trashTask(taskRow.taskId);
-                                        }
-                                    }
-
-                                    // In the Trash, each task can be put back.
-                                    ToolButton {
-                                        objectName: "restoreButton"
-                                        focusPolicy: Qt.NoFocus
-                                        text: "Put Back"
-                                        visible: controller.currentView === "trash"
-                                        font.pixelSize: 11
-                                        onClicked: controller.restoreTask(taskRow.taskId)
-                                    }
-                                }
-
-                                // New task below this one (Enter on the selection).
-                                Rectangle {
-                                    visible: taskRow.newBelowHere
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 34
-                                    Layout.leftMargin: 56 // in line with the title
-                                    radius: 6
-                                    color: root.isDark ? "#1A1B1E" : "#FFFFFF"
-                                    border.color: root.colAccent
-
-                                    TextInput {
-                                        id: newBelowInput
-                                        objectName: "newBelowInput"
-                                        anchors.fill: parent
-                                        anchors.leftMargin: 8
-                                        anchors.rightMargin: 8
-                                        verticalAlignment: TextInput.AlignVCenter
-                                        font.pixelSize: 14
-                                        color: root.colTextPrimary
-                                        clip: true
-
-                                        Text {
-                                            anchors.fill: parent
-                                            verticalAlignment: Text.AlignVCenter
-                                            text: "New to-do"
-                                            color: root.colTextSecondary
-                                            font.pixelSize: 14
-                                            visible: !newBelowInput.text
-                                        }
-
-                                        Keys.onReturnPressed: root.commitNewBelow(taskRow.taskId, newBelowInput)
-                                        Keys.onEnterPressed: root.commitNewBelow(taskRow.taskId, newBelowInput)
-                                        Keys.onEscapePressed: {
-                                            text = "";
-                                            root.closeNewBelow();
-                                        }
-                                        // Clicking elsewhere keeps what was typed.
-                                        onActiveFocusChanged: {
-                                            if (activeFocus || root.newBelowId !== taskRow.taskId)
-                                                return;
-                                            const title = text;
-                                            text = "";
-                                            root.newBelowId = "";
-                                            if (title.trim() !== "")
-                                                controller.addTaskBelow(title, taskRow.taskId);
-                                        }
-                                    }
-                                }
-
-                                // In-Place Expanded Detail: Notes & Quick Scheduler
-                                ColumnLayout {
-                                    id: expandedContent
-                                    visible: taskRow.isExpanded
-                                    Layout.fillWidth: true
-                                    // In line with the title: past the grip (12),
-                                    // the checkbox (20) and their spacing (2 × 12).
-                                    Layout.leftMargin: 56
-                                    spacing: 10
-
-                                    // Notes Editor. Saves after a pause in typing and
-                                    // when editing ends, not on every keystroke.
-                                    TextArea {
-                                        id: notesInput
-                                        objectName: "notesInput"
-                                        // Editing a task's notes selects that task.
-                                        onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
-                                        Layout.fillWidth: true
-                                        // Grows with what is written.
-                                        Layout.preferredHeight: Math.max(44, contentHeight + topPadding + bottomPadding)
-                                        placeholderText: "Notes"
-                                        font.pixelSize: 13
-                                        color: root.colTextPrimary
-                                        wrapMode: TextArea.Wrap
-                                        leftPadding: 0
-                                        background: null
-
-                                        function save() {
-                                            saveTimer.stop();
-                                            if (text !== taskRow.notes)
-                                                controller.updateTaskNotes(taskRow.taskId, text);
-                                        }
-
-                                        // Not a binding: while the user is typing, the
-                                        // stored notes must not overwrite the editor.
-                                        Component.onCompleted: text = taskRow.notes
-                                        Connections {
-                                            target: taskRow
-                                            function onNotesChanged() {
-                                                if (!notesInput.activeFocus)
-                                                    notesInput.text = taskRow.notes;
-                                            }
-                                        }
-
-                                        onTextChanged: if (activeFocus) saveTimer.restart()
-                                        onEditingFinished: save()
-                                        Component.onDestruction: save()
-
-                                        Timer {
-                                            id: saveTimer
-                                            interval: 600
-                                            onTriggered: notesInput.save()
-                                        }
-                                    }
-
-                                    // The checklist (#21), made only while the row is
-                                    // open, so closed rows hold no model.
-                                    Loader {
-                                        id: checklistLoader
-                                        objectName: "checklistLoader"
-                                        active: taskRow.isExpanded
-                                        readonly property ChecklistEditor editor: item as ChecklistEditor
-                                        visible: editor !== null && editor.shown
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: visible ? editor.implicitHeight : 0
-                                        sourceComponent: ChecklistEditor {
-                                            taskId: taskRow.taskId
-                                            controller: controller
-                                            textPrimary: root.colTextPrimary
-                                            textSecondary: root.colTextSecondary
-                                            accent: root.colAccent
-                                            border: root.colBorder
-                                            hover: root.colSidebarHover
-                                            // Escape: back to the list; the row stays open.
-                                            onLeave: taskListView.forceActiveFocus()
-                                        }
-                                    }
-
-                                    // When and Deadline, tucked into the corner: pills
-                                    // that show the current value, with a chevron to
-                                    // say a click changes it (in the popover).
-                                    // The label is the buttons' own property, not
-                                    // `text`: some styles (KDE's) paint `text` in
-                                    // the background, beside our contentItem.
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 4
-
-                                        Item { Layout.fillWidth: true }
-
-                                        // Adds an item at the end of the checklist.
-                                        ToolButton {
-                                            id: checklistButton
-                                            objectName: "checklistButton"
-                                            focusPolicy: Qt.NoFocus
-                                            Accessible.name: "Add a checklist item"
-                                            leftPadding: 8
-                                            rightPadding: 8
-                                            topPadding: 4
-                                            bottomPadding: 4
-                                            background: Rectangle {
-                                                implicitHeight: 26
-                                                implicitWidth: 26
-                                                radius: height / 2
-                                                color: checklistButton.down ? root.colSidebarActive
-                                                    : checklistButton.hovered ? root.colSidebarHover : "transparent"
-                                                border.width: 1
-                                                border.color: root.colBorder
-                                            }
-                                            contentItem: Icon {
-                                                name: "checklist"
-                                                size: 14
-                                                color: root.colTextSecondary
-                                            }
-                                            ToolTip.visible: hovered
-                                            ToolTip.text: "Add a checklist item"
-                                            onClicked: if (checklistLoader.editor) checklistLoader.editor.startAdding("")
-                                        }
-
-                                        ToolButton {
-                                            id: whenControl
-                                            objectName: "schedule-date"
-                                            focusPolicy: Qt.NoFocus
-                                            font.pixelSize: 12
-                                            property string label: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
-                                            readonly property bool hasValue: taskRow.startDate !== "" || taskRow.evening || taskRow.someday
-                                            Accessible.name: label
-                                            Accessible.role: Accessible.ButtonMenu
-                                            leftPadding: 10
-                                            rightPadding: 8
-                                            topPadding: 4
-                                            bottomPadding: 4
-                                            background: Rectangle {
-                                                implicitHeight: 26
-                                                radius: height / 2
-                                                color: whenControl.down ? root.colSidebarActive
-                                                    : whenControl.hovered ? root.colSidebarHover : "transparent"
-                                                border.width: 1
-                                                border.color: root.colBorder
-                                            }
-                                            contentItem: RowLayout {
-                                                spacing: 6
                                                 Icon {
-                                                    name: "calendar"
+                                                    anchors.centerIn: parent
+                                                    name: "grip"
+                                                    size: 16
+                                                    color: root.colTextSecondary
+                                                }
+                                                HoverHandler { cursorShape: Qt.OpenHandCursor }
+                                                DragHandler {
+                                                    id: gripDrag
+                                                    target: null
+                                                    onActiveChanged: active ? root.beginTaskDrag(taskRow.taskId) : root.endTaskDrag()
+                                                    onCentroidChanged: if (active) root.updateTaskDrag(centroid.scenePosition)
+                                                }
+                                            }
+
+                                            // Circular checkbox
+                                            Rectangle {
+                                                id: checkCircle
+                                                objectName: "checkCircle"
+                                                Layout.preferredWidth: 20
+                                                Layout.preferredHeight: 20
+                                                radius: 10
+
+                                                // Completing a task: the circle fills with a
+                                                // short pop.
+                                                Behavior on color {
+                                                    enabled: !root.reduceMotion
+                                                    ColorAnimation { duration: 150 }
+                                                }
+                                                SequentialAnimation {
+                                                    id: tickPop
+                                                    NumberAnimation { target: checkCircle; property: "scale"; to: 1.2; duration: 90; easing.type: Easing.OutCubic }
+                                                    NumberAnimation { target: checkCircle; property: "scale"; to: 1; duration: 140; easing.type: Easing.OutBack }
+                                                }
+                                                Connections {
+                                                    target: taskRow
+                                                    function onDoneChanged() {
+                                                        if (taskRow.done && !root.reduceMotion)
+                                                            tickPop.restart();
+                                                    }
+                                                }
+                                                color: taskRow.done ? root.colAccent : "transparent"
+                                                border.color: taskRow.done ? root.colAccent : (checkMouse.containsMouse ? root.colAccent : root.colTextSecondary)
+                                                border.width: 1.5
+
+                                                Icon {
+                                                    anchors.centerIn: parent
+                                                    name: "check"
                                                     size: 14
-                                                    color: root.colTextSecondary
+                                                    strokeWidth: 2.6
+                                                    color: "#FFFFFF"
+                                                    visible: taskRow.done
                                                 }
-                                                Text {
-                                                    objectName: "pillLabel"
-                                                    text: whenControl.label
-                                                    font: whenControl.font
-                                                    color: whenControl.hasValue ? root.colTextPrimary : root.colTextSecondary
-                                                }
-                                                Icon {
-                                                    objectName: "pillChevron"
-                                                    name: "chevron-down"
-                                                    size: 12
-                                                    color: root.colTextSecondary
-                                                }
-                                            }
-                                            ToolTip.visible: hovered
-                                            ToolTip.text: "Change when (Ctrl+S)"
-                                            onClicked: root.openWhenFor(taskRow.taskId)
-                                        }
 
-                                        ToolButton {
-                                            id: deadlineControl
-                                            objectName: "schedule-deadline"
-                                            focusPolicy: Qt.NoFocus
-                                            font.pixelSize: 12
-                                            property string label: taskRow.deadline === "" ? "Deadline"
-                                                : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
-                                            readonly property bool hasValue: taskRow.deadline !== ""
-                                            Accessible.name: label
-                                            Accessible.role: Accessible.ButtonMenu
-                                            leftPadding: 10
-                                            rightPadding: 8
-                                            topPadding: 4
-                                            bottomPadding: 4
-                                            background: Rectangle {
-                                                implicitHeight: 26
-                                                radius: height / 2
-                                                color: deadlineControl.down ? root.colSidebarActive
-                                                    : deadlineControl.hovered ? root.colSidebarHover : "transparent"
-                                                border.width: 1
-                                                border.color: root.colBorder
+                                                MouseArea {
+                                                    id: checkMouse
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: controller.toggleTask(taskRow.taskId)
+                                                }
                                             }
-                                            contentItem: RowLayout {
-                                                spacing: 6
+
+                                            // Title: plain text while the task is closed, an
+                                            // editable field while it is open (#27).
+                                            Text {
+                                                visible: !taskRow.isExpanded
+                                                text: taskRow.title
+                                                font.pixelSize: 14
+                                                font.strikeout: taskRow.done
+                                                color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
+                                                Layout.fillWidth: true
+                                                elide: Text.ElideRight
+                                            }
+
+                                            TextInput {
+                                                id: titleInput
+                                                objectName: "titleInput"
+                                                visible: taskRow.isExpanded
+                                                text: taskRow.title
+                                                font.pixelSize: 14
+                                                font.strikeout: taskRow.done
+                                                color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
+                                                selectByMouse: true
+                                                clip: true
+                                                // Only as wide as the text, so a click on the
+                                                // empty space beside it still closes the row.
+                                                Layout.preferredWidth: Math.max(contentWidth + 8, 60)
+                                                Layout.minimumWidth: 40
+
+                                                // Saved when editing ends (Enter, focus leaves).
+                                                // A blank title is refused and the old one shown.
+                                                onEditingFinished: {
+                                                    if (text !== taskRow.title && !controller.renameTask(taskRow.taskId, text))
+                                                        text = taskRow.title;
+                                                }
+                                                onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
+                                                // Enter goes on to the notes.
+                                                Keys.onReturnPressed: notesInput.forceActiveFocus()
+                                                Keys.onEnterPressed: notesInput.forceActiveFocus()
+                                                // Escape abandons the edit; the row stays open.
+                                                Keys.onEscapePressed: {
+                                                    text = taskRow.title;
+                                                    taskListView.forceActiveFocus();
+                                                }
+
+                                                // Show changes made elsewhere, but never while
+                                                // the user is typing.
+                                                Connections {
+                                                    target: taskRow
+                                                    function onTitleChanged() {
+                                                        if (!titleInput.activeFocus)
+                                                            titleInput.text = taskRow.title;
+                                                    }
+                                                }
+                                            }
+
+                                            // Fills the space beside the title field.
+                                            Item {
+                                                visible: taskRow.isExpanded
+                                                Layout.fillWidth: true
+                                            }
+
+                                            // "This Evening" badge; Today has a This Evening
+                                            // heading instead.
+                                            Rectangle {
+                                                objectName: "eveningBadge"
+                                                visible: taskRow.evening && controller.currentView !== "today"
+                                                Layout.preferredHeight: 20
+                                                Layout.preferredWidth: eveningLabel.contentWidth + 28
+                                                radius: 4
+                                                color: root.isDark ? "#382D16" : "#FFF3BF"
+
                                                 Icon {
+                                                    id: eveningIcon
+                                                    name: "evening"
+                                                    size: 12
+                                                    color: root.colEvening
+                                                    anchors.left: parent.left
+                                                    anchors.leftMargin: 6
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                }
+
+                                                Text {
+                                                    id: eveningLabel
+                                                    anchors.left: eveningIcon.right
+                                                    anchors.leftMargin: 4
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: "Evening"
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                    color: root.colEvening
+                                                }
+                                            }
+
+                                            // Start date badge, where the list doesn't already
+                                            // say it (root.describeStart).
+                                            Rectangle {
+                                                objectName: "startBadge"
+                                                visible: dateLabel.text !== ""
+                                                Layout.preferredHeight: 20
+                                                Layout.preferredWidth: dateLabel.contentWidth + 12
+                                                radius: 4
+                                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+
+                                                Text {
+                                                    id: dateLabel
+                                                    objectName: "startLabel"
+                                                    anchors.centerIn: parent
+                                                    text: root.describeStart(taskRow.startDate)
+                                                    font.pixelSize: 11
+                                                    color: root.colTextSecondary
+                                                }
+                                            }
+
+                                            // Deadline badge: red when due today or overdue.
+                                            Rectangle {
+                                                objectName: "deadlineBadge"
+                                                readonly property bool urgent: taskRow.deadlineStatus === "today"
+                                                    || taskRow.deadlineStatus === "overdue"
+                                                visible: taskRow.deadline !== ""
+                                                Layout.preferredHeight: 20
+                                                Layout.preferredWidth: deadlineLabel.contentWidth + 28
+                                                radius: 4
+                                                color: urgent ? (root.isDark ? "#3B1F1F" : "#FFE3E3") : (root.isDark ? "#2C2E33" : "#E9ECEF")
+
+                                                Icon {
+                                                    id: deadlineIcon
                                                     name: "deadline"
-                                                    size: 14
-                                                    color: root.colTextSecondary
-                                                }
-                                                Text {
-                                                    objectName: "pillLabel"
-                                                    text: deadlineControl.label
-                                                    font: deadlineControl.font
-                                                    color: deadlineControl.hasValue ? root.colTextPrimary : root.colTextSecondary
-                                                }
-                                                Icon {
-                                                    objectName: "pillChevron"
-                                                    name: "chevron-down"
                                                     size: 12
+                                                    color: deadlineLabel.color
+                                                    anchors.left: parent.left
+                                                    anchors.leftMargin: 6
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                }
+
+                                                Text {
+                                                    id: deadlineLabel
+                                                    objectName: "deadlineLabel"
+                                                    anchors.left: deadlineIcon.right
+                                                    anchors.leftMargin: 4
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
+                                                    font.pixelSize: 11
+                                                    font.weight: parent.urgent ? Font.DemiBold : Font.Normal
+                                                    color: parent.urgent ? (root.isDark ? "#FFA8A8" : "#C92A2A") : root.colTextSecondary
+                                                }
+                                            }
+
+                                            // Checklist progress, while the row is closed.
+                                            Rectangle {
+                                                objectName: "checklistBadge"
+                                                visible: taskRow.checklistTotal > 0 && !taskRow.isExpanded
+                                                Layout.preferredHeight: 20
+                                                Layout.preferredWidth: checklistLabel.contentWidth + 28
+                                                radius: 4
+                                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                Accessible.role: Accessible.StaticText
+                                                Accessible.name: "Checklist: " + taskRow.checklistDone + " of " + taskRow.checklistTotal + " done"
+
+                                                Icon {
+                                                    id: checklistIcon
+                                                    name: "checklist"
+                                                    size: 12
+                                                    color: root.colTextSecondary
+                                                    anchors.left: parent.left
+                                                    anchors.leftMargin: 6
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                }
+
+                                                Text {
+                                                    id: checklistLabel
+                                                    objectName: "checklistProgress"
+                                                    anchors.left: checklistIcon.right
+                                                    anchors.leftMargin: 4
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: taskRow.checklistDone + "/" + taskRow.checklistTotal
+                                                    font.pixelSize: 11
                                                     color: root.colTextSecondary
                                                 }
                                             }
-                                            ToolTip.visible: hovered
-                                            ToolTip.text: "Change the deadline (Ctrl+D)"
-                                            onClicked: root.openDeadlineFor(taskRow.taskId)
+
+                                            // Move to Trash (shows on hover). Nothing is
+                                            // destroyed until the Trash is emptied.
+                                            ToolButton {
+                                                objectName: "deleteButton"
+                                                focusPolicy: Qt.NoFocus
+                                                contentItem: Icon {
+                                                    name: "close"
+                                                    size: 14
+                                                    color: root.colTextSecondary
+                                                }
+                                                visible: rowHover.hovered && controller.currentView !== "trash"
+                                                ToolTip.visible: hovered
+                                                ToolTip.text: "Move to Trash"
+                                                onClicked: {
+                                                    root.showUndo("task", taskRow.taskId, taskRow.title);
+                                                    controller.trashTask(taskRow.taskId);
+                                                }
+                                            }
+
+                                            // In the Trash, each task can be put back.
+                                            ToolButton {
+                                                objectName: "restoreButton"
+                                                focusPolicy: Qt.NoFocus
+                                                text: "Put Back"
+                                                visible: controller.currentView === "trash"
+                                                font.pixelSize: 11
+                                                onClicked: controller.restoreTask(taskRow.taskId)
+                                            }
+                                        }
+
+                                        // New task below this one (Enter on the selection).
+                                        Rectangle {
+                                            visible: taskRow.newBelowHere
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 34
+                                            Layout.leftMargin: 56 // in line with the title
+                                            radius: 6
+                                            color: root.isDark ? "#1A1B1E" : "#FFFFFF"
+                                            border.color: root.colAccent
+
+                                            TextInput {
+                                                id: newBelowInput
+                                                objectName: "newBelowInput"
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 8
+                                                anchors.rightMargin: 8
+                                                verticalAlignment: TextInput.AlignVCenter
+                                                font.pixelSize: 14
+                                                color: root.colTextPrimary
+                                                clip: true
+
+                                                Text {
+                                                    anchors.fill: parent
+                                                    verticalAlignment: Text.AlignVCenter
+                                                    text: "New to-do"
+                                                    color: root.colTextSecondary
+                                                    font.pixelSize: 14
+                                                    visible: !newBelowInput.text
+                                                }
+
+                                                Keys.onReturnPressed: root.commitNewBelow(taskRow.taskId, newBelowInput)
+                                                Keys.onEnterPressed: root.commitNewBelow(taskRow.taskId, newBelowInput)
+                                                Keys.onEscapePressed: {
+                                                    text = "";
+                                                    root.closeNewBelow();
+                                                }
+                                                // Clicking elsewhere keeps what was typed.
+                                                onActiveFocusChanged: {
+                                                    if (activeFocus || root.newBelowId !== taskRow.taskId)
+                                                        return;
+                                                    const title = text;
+                                                    text = "";
+                                                    root.newBelowId = "";
+                                                    if (title.trim() !== "")
+                                                        controller.addTaskBelow(title, taskRow.taskId);
+                                                }
+                                            }
+                                        }
+
+                                        // In-Place Expanded Detail: Notes & Quick Scheduler
+                                        ColumnLayout {
+                                            id: expandedContent
+                                            visible: taskRow.isExpanded
+                                            Layout.fillWidth: true
+                                            // In line with the title: past the grip (12),
+                                            // the checkbox (20) and their spacing (2 × 12).
+                                            Layout.leftMargin: 56
+                                            spacing: 10
+
+                                            // Notes Editor. Saves after a pause in typing and
+                                            // when editing ends, not on every keystroke.
+                                            TextArea {
+                                                id: notesInput
+                                                objectName: "notesInput"
+                                                // Editing a task's notes selects that task.
+                                                onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
+                                                Layout.fillWidth: true
+                                                // Grows with what is written.
+                                                Layout.preferredHeight: Math.max(44, contentHeight + topPadding + bottomPadding)
+                                                placeholderText: "Notes"
+                                                font.pixelSize: 13
+                                                color: root.colTextPrimary
+                                                wrapMode: TextArea.Wrap
+                                                leftPadding: 0
+                                                background: null
+
+                                                function save() {
+                                                    saveTimer.stop();
+                                                    if (text !== taskRow.notes)
+                                                        controller.updateTaskNotes(taskRow.taskId, text);
+                                                }
+
+                                                // Not a binding: while the user is typing, the
+                                                // stored notes must not overwrite the editor.
+                                                Component.onCompleted: text = taskRow.notes
+                                                Connections {
+                                                    target: taskRow
+                                                    function onNotesChanged() {
+                                                        if (!notesInput.activeFocus)
+                                                            notesInput.text = taskRow.notes;
+                                                    }
+                                                }
+
+                                                onTextChanged: if (activeFocus) saveTimer.restart()
+                                                onEditingFinished: save()
+                                                Component.onDestruction: save()
+
+                                                Timer {
+                                                    id: saveTimer
+                                                    interval: 600
+                                                    onTriggered: notesInput.save()
+                                                }
+                                            }
+
+                                            // The checklist (#21), made only while the row is
+                                            // open, so closed rows hold no model.
+                                            Loader {
+                                                id: checklistLoader
+                                                objectName: "checklistLoader"
+                                                active: taskRow.isExpanded
+                                                readonly property ChecklistEditor editor: item as ChecklistEditor
+                                                visible: editor !== null && editor.shown
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: visible ? editor.implicitHeight : 0
+                                                sourceComponent: ChecklistEditor {
+                                                    taskId: taskRow.taskId
+                                                    controller: controller
+                                                    textPrimary: root.colTextPrimary
+                                                    textSecondary: root.colTextSecondary
+                                                    accent: root.colAccent
+                                                    border: root.colBorder
+                                                    hover: root.colSidebarHover
+                                                    // Escape: back to the list; the row stays open.
+                                                    onLeave: taskListView.forceActiveFocus()
+                                                }
+                                            }
+
+                                            // When and Deadline, tucked into the corner: pills
+                                            // that show the current value, with a chevron to
+                                            // say a click changes it (in the popover).
+                                            // The label is the buttons' own property, not
+                                            // `text`: some styles (KDE's) paint `text` in
+                                            // the background, beside our contentItem.
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 4
+
+                                                Item { Layout.fillWidth: true }
+
+                                                // Adds an item at the end of the checklist.
+                                                ToolButton {
+                                                    id: checklistButton
+                                                    objectName: "checklistButton"
+                                                    focusPolicy: Qt.NoFocus
+                                                    Accessible.name: "Add a checklist item"
+                                                    leftPadding: 8
+                                                    rightPadding: 8
+                                                    topPadding: 4
+                                                    bottomPadding: 4
+                                                    background: Rectangle {
+                                                        implicitHeight: 26
+                                                        implicitWidth: 26
+                                                        radius: height / 2
+                                                        color: checklistButton.down ? root.colSidebarActive
+                                                            : checklistButton.hovered ? root.colSidebarHover : "transparent"
+                                                        border.width: 1
+                                                        border.color: root.colBorder
+                                                    }
+                                                    contentItem: Icon {
+                                                        name: "checklist"
+                                                        size: 14
+                                                        color: root.colTextSecondary
+                                                    }
+                                                    ToolTip.visible: hovered
+                                                    ToolTip.text: "Add a checklist item"
+                                                    onClicked: if (checklistLoader.editor) checklistLoader.editor.startAdding("")
+                                                }
+
+                                                ToolButton {
+                                                    id: whenControl
+                                                    objectName: "schedule-date"
+                                                    focusPolicy: Qt.NoFocus
+                                                    font.pixelSize: 12
+                                                    property string label: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                                    readonly property bool hasValue: taskRow.startDate !== "" || taskRow.evening || taskRow.someday
+                                                    Accessible.name: label
+                                                    Accessible.role: Accessible.ButtonMenu
+                                                    leftPadding: 10
+                                                    rightPadding: 8
+                                                    topPadding: 4
+                                                    bottomPadding: 4
+                                                    background: Rectangle {
+                                                        implicitHeight: 26
+                                                        radius: height / 2
+                                                        color: whenControl.down ? root.colSidebarActive
+                                                            : whenControl.hovered ? root.colSidebarHover : "transparent"
+                                                        border.width: 1
+                                                        border.color: root.colBorder
+                                                    }
+                                                    contentItem: RowLayout {
+                                                        spacing: 6
+                                                        Icon {
+                                                            name: "calendar"
+                                                            size: 14
+                                                            color: root.colTextSecondary
+                                                        }
+                                                        Text {
+                                                            objectName: "pillLabel"
+                                                            text: whenControl.label
+                                                            font: whenControl.font
+                                                            color: whenControl.hasValue ? root.colTextPrimary : root.colTextSecondary
+                                                        }
+                                                        Icon {
+                                                            objectName: "pillChevron"
+                                                            name: "chevron-down"
+                                                            size: 12
+                                                            color: root.colTextSecondary
+                                                        }
+                                                    }
+                                                    ToolTip.visible: hovered
+                                                    ToolTip.text: "Change when (Ctrl+S)"
+                                                    onClicked: root.openWhenFor(taskRow.taskId)
+                                                }
+
+                                                ToolButton {
+                                                    id: deadlineControl
+                                                    objectName: "schedule-deadline"
+                                                    focusPolicy: Qt.NoFocus
+                                                    font.pixelSize: 12
+                                                    property string label: taskRow.deadline === "" ? "Deadline"
+                                                        : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
+                                                    readonly property bool hasValue: taskRow.deadline !== ""
+                                                    Accessible.name: label
+                                                    Accessible.role: Accessible.ButtonMenu
+                                                    leftPadding: 10
+                                                    rightPadding: 8
+                                                    topPadding: 4
+                                                    bottomPadding: 4
+                                                    background: Rectangle {
+                                                        implicitHeight: 26
+                                                        radius: height / 2
+                                                        color: deadlineControl.down ? root.colSidebarActive
+                                                            : deadlineControl.hovered ? root.colSidebarHover : "transparent"
+                                                        border.width: 1
+                                                        border.color: root.colBorder
+                                                    }
+                                                    contentItem: RowLayout {
+                                                        spacing: 6
+                                                        Icon {
+                                                            name: "deadline"
+                                                            size: 14
+                                                            color: root.colTextSecondary
+                                                        }
+                                                        Text {
+                                                            objectName: "pillLabel"
+                                                            text: deadlineControl.label
+                                                            font: deadlineControl.font
+                                                            color: deadlineControl.hasValue ? root.colTextPrimary : root.colTextSecondary
+                                                        }
+                                                        Icon {
+                                                            objectName: "pillChevron"
+                                                            name: "chevron-down"
+                                                            size: 12
+                                                            color: root.colTextSecondary
+                                                        }
+                                                    }
+                                                    ToolTip.visible: hovered
+                                                    ToolTip.text: "Change the deadline (Ctrl+D)"
+                                                    onClicked: root.openDeadlineFor(taskRow.taskId)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -2495,9 +2593,12 @@ Item {
     Dialog {
         id: renameDialog
         objectName: "renameDialog"
-        // "project" or "area": what is being renamed.
+        // What is being named (`openRename`), and the heading's id.
         property string kind: "area"
-        title: kind === "project" ? "Rename Project" : "Rename Area"
+        property string targetId: ""
+        title: kind === "project" ? "Rename Project"
+            : kind === "heading" ? "Rename Heading"
+            : kind === "newHeading" ? "New Heading" : "Rename Area"
         standardButtons: Dialog.Ok | Dialog.Cancel
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -2514,6 +2615,10 @@ Item {
         onAccepted: {
             if (kind === "project")
                 controller.renameProject(controller.currentProjectId, renameInput.text);
+            else if (kind === "heading")
+                controller.renameHeading(targetId, renameInput.text);
+            else if (kind === "newHeading")
+                controller.addHeading(renameInput.text);
             else
                 controller.renameArea(controller.currentAreaId, renameInput.text);
         }

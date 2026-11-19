@@ -2,7 +2,7 @@ use jiff::civil::Date;
 use rusqlite::params;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::domain::{Area, Project, ProjectProgress, Task, View};
+use crate::domain::{Area, Heading, Project, ProjectProgress, Task, View};
 use crate::error::Result;
 use crate::storage::db::{Database, AREA_COLUMNS, PROJECT_COLUMNS, TASK_COLUMNS};
 use crate::storage::trash::{self, LISTED_TRASHED_TASK as TRASH_WHERE, LIVE_TASK as LIVE};
@@ -25,6 +25,20 @@ pub struct ProjectView {
     pub progress: ProjectProgress,
     pub headings: Vec<(String, Vec<Task>)>, // (heading_title, tasks)
     pub unsectioned_tasks: Vec<Task>,
+}
+
+/// A row of a task list as frontends show it: a task, or a project's heading
+/// with no tasks listed under it (#22). A heading with tasks needs no row of
+/// its own: it is their section ([`QueryEngine::section_keys`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListRow {
+    Task(Task),
+    EmptyHeading(Heading),
+}
+
+/// The section key of tasks under heading `id` titled `title`.
+pub fn heading_section_key(id: &str, title: &str) -> String {
+    format!("heading:{id}:{title}")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -351,7 +365,7 @@ impl<'a> QueryEngine<'a> {
                         t.heading_id
                             .as_ref()
                             .and_then(|h| {
-                                headings.get(h).map(|title| format!("heading:{h}:{title}"))
+                                headings.get(h).map(|title| heading_section_key(h, title))
                             })
                             .unwrap_or_default()
                     })
@@ -383,6 +397,43 @@ impl<'a> QueryEngine<'a> {
     /// Every trashed task, most recently trashed first.
     pub fn trash(&self) -> Result<Vec<Task>> {
         self.select_tasks(TRASH_WHERE, TRASH_ORDER, [])
+    }
+
+    /// The rows of `view` showing `tasks` (as [`Self::tasks_in`] lists
+    /// them): in a project, each heading with no task among `tasks` gets a
+    /// row of its own where its tasks would be, so it can be seen and moved
+    /// into. Other views list only their tasks.
+    pub fn list_rows(&self, view: &View, tasks: Vec<Task>) -> Result<Vec<ListRow>> {
+        let View::Project(project_id) = view else {
+            return Ok(tasks.into_iter().map(ListRow::Task).collect());
+        };
+        let headings = self.db.list_headings_for_project(project_id)?;
+        // Group 0 is above the headings; group i + 1 is heading i. A task
+        // under a heading that no longer exists is above them.
+        let mut groups: Vec<Vec<Task>> = vec![Vec::new(); headings.len() + 1];
+        for task in tasks {
+            let group = task
+                .heading_id
+                .as_ref()
+                .and_then(|h| headings.iter().position(|x| &x.id == h))
+                .map_or(0, |i| i + 1);
+            groups[group].push(task);
+        }
+        let mut groups = groups.into_iter();
+        let mut rows: Vec<ListRow> = groups
+            .next()
+            .unwrap_or_default()
+            .into_iter()
+            .map(ListRow::Task)
+            .collect();
+        for (heading, group) in headings.into_iter().zip(groups) {
+            if group.is_empty() {
+                rows.push(ListRow::EmptyHeading(heading));
+            } else {
+                rows.extend(group.into_iter().map(ListRow::Task));
+            }
+        }
+        Ok(rows)
     }
 
     /// PROJECT PROGRESS:
