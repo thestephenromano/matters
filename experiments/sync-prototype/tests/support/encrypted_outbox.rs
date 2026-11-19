@@ -1,12 +1,13 @@
 //! Test-only transactional outbox. The synchronous FnOnce sealer is trusted and
 //! receives a durably reserved header exactly once. No keys or network code here.
 use crate::record_chain::{hash, Hash, Id};
+use crate::support::{parse, Body, Message, Route};
 use matters_sync_prototype::{wire, Result};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FORMAT: &str = "matters-encrypted-outbox/0";
+const FORMAT: &str = "matters-encrypted-outbox/1";
 // Small retained-history experiment: at most 16 MiB each of intent plaintext and
 // ciphertext payload. Writer and reservation history is retained without a
 // lifetime cap: transient contention/restarts must not exhaust recovery access.
@@ -60,6 +61,8 @@ pub enum Point {
     AfterOutboxCommit,
     BeforeAckCommit,
     AfterAckCommit,
+    BeforeWriterCommit,
+    AfterWriterCommit,
 }
 // Hooks are explicit fault injection for this test-only component. They never
 // receive payloads/keys; callbacks can return an error or terminate a subprocess.
@@ -174,6 +177,14 @@ impl Delivery {
         conn.busy_timeout(std::time::Duration::ZERO)?;
         Ok(Self { conn })
     }
+    /// Exact signed roots/handoffs, retained in creation order for replay.
+    pub fn announcements(&self) -> Result<Vec<Vec<u8>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT announcement FROM writers WHERE announcement IS NOT NULL ORDER BY rowid",
+        )?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
     pub fn record(&self, batch: Id) -> Result<Option<Stored>> {
         stored(&self.conn, &batch)
     }
@@ -206,7 +217,34 @@ impl Outbox {
     pub fn open(
         path: impl AsRef<Path>,
         binding: Binding,
+        random: impl FnMut() -> Result<Id>,
+    ) -> Result<Self> {
+        Self::open_inner(
+            path,
+            binding,
+            random,
+            None::<fn(&Message) -> Result<Vec<u8>>>,
+            |_| Ok(()),
+        )
+    }
+    /// Atomically retain a signed admission with the fresh writer before any
+    /// content can be sealed. The signing callback is trusted and must not send
+    /// or publish bytes; delivery reads only committed announcements.
+    pub fn open_announced(
+        path: impl AsRef<Path>,
+        binding: Binding,
+        random: impl FnMut() -> Result<Id>,
+        sign: impl FnOnce(&Message) -> Result<Vec<u8>>,
+        hook: impl FnMut(Point) -> Result<()>,
+    ) -> Result<Self> {
+        Self::open_inner(path, binding, random, Some(sign), hook)
+    }
+    fn open_inner(
+        path: impl AsRef<Path>,
+        binding: Binding,
         mut random: impl FnMut() -> Result<Id>,
+        sign: Option<impl FnOnce(&Message) -> Result<Vec<u8>>>,
+        mut hook: impl FnMut(Point) -> Result<()>,
     ) -> Result<Self> {
         binding.validate()?;
         let mut conn = Connection::open(path)?;
@@ -225,25 +263,87 @@ impl Outbox {
         if exists {
             check_binding(&tx, &binding)?;
         }
+        let announced = sign.is_some();
+        let previous = if exists {
+            let old_mode: bool = tx.query_row(
+                "SELECT announced FROM outbox_meta WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?;
+            if old_mode != announced {
+                return Err(error("cannot change outbox admission mode"));
+            }
+            Some(tx.query_row("SELECT owner,head FROM outbox_meta JOIN writers ON owner=incarnation WHERE singleton=1", [], |r| {
+                let head: Option<Vec<u8>> = r.get(1)?;
+                Ok((blob::<32>(r,0)?, head.map(|v| v.try_into().map_err(|_| rusqlite::Error::InvalidQuery)).transpose()?))
+            })?)
+        } else {
+            None
+        };
         let incarnation = random()?;
         let actor = u64::from_le_bytes(random()?[..8].try_into()?);
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS writers(incarnation BLOB PRIMARY KEY CHECK(length(incarnation)=32),actor BLOB NOT NULL UNIQUE CHECK(length(actor)=8),head BLOB CHECK(head IS NULL OR length(head)=48));
-            CREATE TABLE IF NOT EXISTS outbox_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,binding BLOB NOT NULL,owner BLOB NOT NULL REFERENCES writers(incarnation));
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS writers(incarnation BLOB PRIMARY KEY CHECK(length(incarnation)=32),actor BLOB NOT NULL UNIQUE CHECK(length(actor)=8),head BLOB CHECK(head IS NULL OR length(head)=48),announcement BLOB);
+            CREATE TABLE IF NOT EXISTS outbox_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,binding BLOB NOT NULL,owner BLOB NOT NULL REFERENCES writers(incarnation),announced INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS intents(seq INTEGER PRIMARY KEY,batch BLOB NOT NULL UNIQUE CHECK(length(batch)=32),writer BLOB NOT NULL REFERENCES writers(incarnation),plaintext BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(seq INTEGER PRIMARY KEY,id BLOB NOT NULL UNIQUE CHECK(length(id)=32),intent INTEGER NOT NULL REFERENCES intents(seq),header BLOB NOT NULL,status TEXT NOT NULL CHECK(status IN ('reserved','abandoned','sealed')));
             CREATE TABLE IF NOT EXISTS sealed(intent INTEGER PRIMARY KEY REFERENCES intents(seq),record_id BLOB NOT NULL UNIQUE REFERENCES attempts(id),bytes BLOB NOT NULL,acked INTEGER NOT NULL DEFAULT 0 CHECK(acked IN (0,1)));")?;
+        let announcement = if let Some(sign) = sign {
+            let manifest: Hash = binding.manifest.as_slice().try_into()?;
+            let device: Hash = binding.author.as_slice().try_into()?;
+            let body = match previous {
+                None => Body::Writer {
+                    manifest,
+                    document: binding.document,
+                    device,
+                    incarnation,
+                    actor,
+                    previous: None,
+                },
+                Some((previous, closing)) => Body::Handoff {
+                    manifest,
+                    document: binding.document,
+                    device,
+                    incarnation,
+                    actor,
+                    previous,
+                    closing,
+                },
+            };
+            let message = Message {
+                route: Route {
+                    app: binding.application,
+                    tenant: binding.tenant,
+                    collection: binding.collection,
+                },
+                signer: device,
+                body,
+            };
+            let bytes = sign(&message)?;
+            if parse(&bytes)?.message != message {
+                return Err(error("signer changed writer admission"));
+            }
+            Some(bytes)
+        } else {
+            None
+        };
         tx.execute(
-            "INSERT INTO writers(incarnation,actor) VALUES (?1,?2)",
-            params![incarnation.as_slice(), actor.to_le_bytes().as_slice()],
+            "INSERT INTO writers(incarnation,actor,announcement) VALUES (?1,?2,?3)",
+            params![
+                incarnation.as_slice(),
+                actor.to_le_bytes().as_slice(),
+                announcement
+            ],
         )?;
-        tx.execute("INSERT INTO outbox_meta VALUES (1,?1,?2,?3) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner", params![FORMAT, encoded, incarnation.as_slice()])?;
+        tx.execute("INSERT INTO outbox_meta VALUES (1,?1,?2,?3,?4) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner", params![FORMAT, encoded, incarnation.as_slice(), announced])?;
         // Reservations are never resumed, even when the process may have died
         // before entering the crypto provider. Retain every consumed ID.
         tx.execute(
             "UPDATE attempts SET status='abandoned' WHERE status='reserved'",
             [],
         )?;
+        hook(Point::BeforeWriterCommit)?;
         tx.commit()?;
+        hook(Point::AfterWriterCommit)?;
         Ok(Self {
             conn,
             binding,

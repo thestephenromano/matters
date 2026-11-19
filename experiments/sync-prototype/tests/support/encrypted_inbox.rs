@@ -1,6 +1,6 @@
-//! Bounded durable inbox: fixed trusted membership/writers, one route/document.
+//! Bounded durable inbox: fixed membership, durable writers, one route/document.
 //! The service cursor denotes retained bytes, never successful CRDT application.
-use crate::support::{hash, parse, Authority, Body, EpochKey, Hash, Id, Route};
+use crate::support::{hash, parse, Authority, Body, EpochKey, Error, Hash, Id, Route, MAX_CONTROL};
 use loro::{EncodedBlobMode, ExportMode, LoroDoc, ID};
 use matters_sync_prototype::{
     causal_past_verdict, has_user_schema, invalid as error, project_document, wire, Projection,
@@ -13,7 +13,7 @@ use std::{
     path::Path,
 };
 
-const FORMAT: &str = "matters-encrypted-inbox/1";
+const FORMAT: &str = "matters-encrypted-inbox/2";
 // Chosen fixture budget: at most 32 wire records (~32 MiB), plus projections,
 // SQLite overhead and staged engine state. Not a hostile-import memory bound.
 pub const MAX_RECORDS: i64 = 32;
@@ -67,6 +67,8 @@ pub enum Point {
     AfterReceipt,
     BeforeApply,
     AfterApply,
+    BeforeWriterReceipt,
+    AfterWriterReceipt,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -101,11 +103,10 @@ fn count(f: impl FnOnce(&mut Work)) {
 pub struct Inbox {
     conn: Connection,
     config: Config,
-    authority: Authority,
 }
 impl Inbox {
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
-        let authority = config.authority()?;
+        config.authority()?;
         let binding = config.binding()?;
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(1))?;
@@ -117,9 +118,9 @@ impl Inbox {
         conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         validate_database(&tx, &binding)?;
-        // Authentication facts depend only on the retained bytes and the bound
-        // configuration, so they are derived once and committed with the row's
-        // classification. The engine snapshot always commits together with the
+        // Successful signature facts depend on retained bytes and immutable
+        // admitted actor/key bindings. Retirement eligibility is checked afresh;
+        // missing writer admissions remain retryable. The engine snapshot always commits together with the
         // application ordinals and projection it reflects.
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS inbox_meta (
@@ -131,7 +132,10 @@ impl Inbox {
             sequence INTEGER PRIMARY KEY, bytes BLOB NOT NULL, status TEXT NOT NULL,
             reason TEXT NOT NULL, applied INTEGER UNIQUE,
             record_id_conflict INTEGER NOT NULL DEFAULT 0, auth TEXT,
-            record_id BLOB, incarnation BLOB, previous BLOB, digest BLOB, actor INTEGER);",
+            record_id BLOB, incarnation BLOB, previous BLOB, digest BLOB, actor BLOB CHECK(actor IS NULL OR length(actor)=8));
+            CREATE TABLE IF NOT EXISTS writer_receipts (
+            id INTEGER PRIMARY KEY, digest BLOB NOT NULL UNIQUE, bytes BLOB NOT NULL,
+            status TEXT NOT NULL, reason TEXT NOT NULL, admitted INTEGER UNIQUE);",
         )?;
         tx.execute(
             "INSERT OR IGNORE INTO inbox_meta VALUES (1,?1,?2,0,?3,NULL,NULL)",
@@ -142,11 +146,48 @@ impl Inbox {
             ],
         )?;
         tx.commit()?;
-        Ok(Self {
-            conn,
-            config,
-            authority,
-        })
+        Ok(Self { conn, config })
+    }
+    /// Persist exact signed control bytes before attempting admission. This
+    /// bounded control inbox has no remote cursor/ACK semantics.
+    pub fn receive_writer(
+        &mut self,
+        bytes: &[u8],
+        mut hook: impl FnMut(Point) -> Result<()>,
+    ) -> Result<()> {
+        if bytes.len() > MAX_CONTROL {
+            return Err(error("writer control exceeds input budget"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let digest = hash(bytes);
+        let old: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT bytes FROM writer_receipts WHERE digest=?1",
+                [digest.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(old) = old {
+            return if old == bytes {
+                Ok(())
+            } else {
+                Err(error("control digest conflict"))
+            };
+        }
+        let count: i64 = tx.query_row("SELECT count(*) FROM writer_receipts", [], |r| r.get(0))?;
+        if count >= MAX_RECORDS {
+            return Err(error("writer receipt capacity"));
+        }
+        tx.execute("INSERT INTO writer_receipts(digest,bytes,status,reason) VALUES (?1,?2,'waiting','unprocessed')",
+            params![digest.as_slice(), bytes])?;
+        hook(Point::BeforeWriterReceipt)?;
+        tx.commit()?;
+        hook(Point::AfterWriterReceipt)
+    }
+    pub fn writer_entries(&self) -> Result<Vec<WriterEntry>> {
+        writer_entries(&self.conn)
     }
     pub fn cursor(&self) -> Result<i64> {
         Ok(self
@@ -241,16 +282,22 @@ impl Inbox {
         mut hook: impl FnMut(Point) -> Result<()>,
     ) -> Result<()> {
         // A key for another route, manifest or epoch is an operational error.
-        self.authority.check_epoch_key(key)?;
+        let authority = self.config.authority()?;
+        authority.check_epoch_key(key)?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let authority = admit_receipts(&tx, &self.config, authority)?;
         let mut rows = rows(&tx)?;
         for row in &mut rows {
-            if row.auth.is_none() {
+            if row
+                .auth
+                .as_ref()
+                .is_none_or(|a| matches!(a, Err(reason) if reason == "writer-admission"))
+            {
                 count(|w| w.authentications += 1);
                 row.auth = Some(
-                    match self.authority.authenticate_data(
+                    match authority.authenticate_history(
                         &row.entry.bytes,
                         key,
                         &self.config.document,
@@ -265,6 +312,7 @@ impl Inbox {
                                 actor: v.actor(),
                             })
                         }
+                        Err(Error::MissingWriter) => Err("writer-admission".into()),
                         Err(e) => Err(format!("authentication:{e}")),
                     },
                 );
@@ -284,7 +332,12 @@ impl Inbox {
             let facts = match row.auth.as_ref().expect("authenticated above") {
                 Ok(facts) => facts.clone(),
                 Err(reason) => {
-                    reject(&mut row.entry, reason);
+                    if reason == "writer-admission" {
+                        row.entry.status = "waiting".into();
+                        row.entry.reason = reason.clone();
+                    } else {
+                        reject(&mut row.entry, reason);
+                    }
                     continue;
                 }
             };
@@ -319,6 +372,20 @@ impl Inbox {
                 }
             }
             candidates.push((index, facts));
+        }
+
+        // Retirement eligibility is mutable; cached signature facts are not.
+        // Re-evaluate closing prefixes and device freezes on every pass.
+        let (history_wait, device_frozen) =
+            history_gates(&authority, self.config.document, &candidates, &frozen)?;
+        for (_, facts) in &candidates {
+            if device_frozen.contains(
+                &authority
+                    .writer_history(self.config.document, facts.incarnation)?
+                    .device,
+            ) {
+                frozen.insert(facts.incarnation);
+            }
         }
 
         let mut doc = LoroDoc::new();
@@ -379,6 +446,18 @@ impl Inbox {
                 if settled.contains(index) {
                     continue;
                 }
+                if history_wait.contains(&facts.incarnation)
+                    || !predecessors_applied(
+                        &authority,
+                        self.config.document,
+                        facts.incarnation,
+                        &heads,
+                    )?
+                {
+                    row.status = "waiting".into();
+                    row.reason = "writer-closing-history".into();
+                    continue;
+                }
                 if facts.previous != heads.get(&facts.incarnation).copied() {
                     row.status = "waiting".into();
                     row.reason = "predecessor-not-applied".into();
@@ -388,7 +467,7 @@ impl Inbox {
                 if !plain.contains_key(index) {
                     plain.insert(
                         *index,
-                        decrypt(&self.authority, &self.config.document, &row.bytes, key)?,
+                        decrypt(&authority, &self.config.document, &row.bytes, key)?,
                     );
                 }
                 let Ok(bytes) = &plain[index] else {
@@ -457,7 +536,7 @@ impl Inbox {
                     facts.map(|f| f.incarnation.to_vec()),
                     facts.and_then(|f| f.previous.map(|p| p.to_vec())),
                     facts.map(|f| f.digest.to_vec()),
-                    facts.map(|f| f.actor as i64),
+                    facts.map(|f| f.actor.to_le_bytes().to_vec()),
                     row.entry.sequence,
                 ],
             )?;
@@ -487,7 +566,7 @@ fn decrypt(
 ) -> Result<std::result::Result<Vec<u8>, ()>> {
     count(|w| w.authentications += 1);
     let verified = authority
-        .authenticate_data(bytes, key, document)
+        .authenticate_history(bytes, key, document)
         .map_err(|_| error("retained authentication changed"))?;
     Ok(verified.open().map_err(|_| ()))
 }
@@ -529,13 +608,7 @@ fn rows(conn: &Connection) -> Result<Vec<Row>> {
             None => None,
             Some("ok") => {
                 let previous: Option<Vec<u8>> = r.get(9)?;
-                Some(Ok((
-                    fixed(7)?,
-                    fixed(8)?,
-                    previous,
-                    fixed(10)?,
-                    r.get::<_, i64>(11)?,
-                )))
+                Some(Ok((fixed(7)?, fixed(8)?, previous, fixed(10)?, fixed(11)?)))
             }
             Some(reason) => Some(Err(reason.to_string())),
         };
@@ -568,7 +641,7 @@ fn rows(conn: &Connection) -> Result<Vec<Row>> {
                     .map(|p| p.try_into().map_err(|_| error("stored predecessor")))
                     .transpose()?,
                 digest: digest.try_into().map_err(|_| error("stored digest"))?,
-                actor: actor.try_into()?,
+                actor: u64::from_le_bytes(actor.try_into().map_err(|_| error("stored actor"))?),
             })),
         };
         out.push(Row { entry, auth });
@@ -636,4 +709,172 @@ fn stage(doc: &LoroDoc, plain: &[u8], actor: u64) -> Result<Stage> {
         return Ok(Stage::Rejected(reason));
     }
     Ok(Stage::Ready(staged))
+}
+
+/// Durable public signed control input and its replay/admission verdict.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WriterEntry {
+    pub id: i64,
+    pub bytes: Vec<u8>,
+    pub status: String,
+    pub reason: String,
+    pub admitted: Option<i64>,
+}
+fn writer_entries(conn: &Connection) -> Result<Vec<WriterEntry>> {
+    let mut stmt =
+        conn.prepare("SELECT id,bytes,status,reason,admitted FROM writer_receipts ORDER BY id")?;
+    let entries = stmt
+        .query_map([], |r| {
+            Ok(WriterEntry {
+                id: r.get(0)?,
+                bytes: r.get(1)?,
+                status: r.get(2)?,
+                reason: r.get(3)?,
+                admitted: r.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(entries)
+}
+fn admit_receipts(
+    conn: &Connection,
+    config: &Config,
+    mut authority: Authority,
+) -> Result<Authority> {
+    let mut receipts = writer_entries(conn)?;
+    let mut replay: Vec<_> = receipts.iter().filter(|r| r.admitted.is_some()).collect();
+    replay.sort_by_key(|r| r.admitted);
+    let mut ordinal = 0;
+    for r in replay {
+        let result = authority.admit_writer(&r.bytes, config.document);
+        if !(result.is_ok() && r.status == "admitted"
+            || result == Err(Error::Fork) && r.status == "fork")
+        {
+            return Err(error("writer admission replay mismatch"));
+        }
+        ordinal += 1;
+        if r.admitted != Some(ordinal) {
+            return Err(error("writer admission order gap"));
+        }
+    }
+    loop {
+        let mut progress = false;
+        for r in &mut receipts {
+            if r.admitted.is_some() || r.status == "quarantined" {
+                continue;
+            }
+            let result = match parse(&r.bytes) {
+                Ok(p)
+                    if matches!(
+                        p.message.body,
+                        Body::Writer { previous: None, .. } | Body::Handoff { .. }
+                    ) =>
+                {
+                    authority.admit_writer(&r.bytes, config.document)
+                }
+                Ok(_) => Err(Error::Unsupported),
+                Err(e) => Err(e),
+            };
+            match result {
+                Ok(_) | Err(Error::Fork) => {
+                    ordinal += 1;
+                    r.admitted = Some(ordinal);
+                    progress = true;
+                    r.status = if result.is_ok() { "admitted" } else { "fork" }.into();
+                    r.reason = if result.is_ok() {
+                        ""
+                    } else {
+                        "signed-writer-branch"
+                    }
+                    .into();
+                }
+                Err(Error::MissingPrevious) => {
+                    r.status = "waiting".into();
+                    r.reason = "writer-predecessor".into();
+                }
+                Err(e) => {
+                    r.status = "quarantined".into();
+                    r.reason = format!("writer:{e}");
+                }
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+    for r in receipts {
+        conn.execute(
+            "UPDATE writer_receipts SET status=?1,reason=?2,admitted=?3 WHERE id=?4",
+            params![r.status, r.reason, r.admitted, r.id],
+        )?;
+    }
+    Ok(authority)
+}
+fn history_gates(
+    authority: &Authority,
+    document: [u8; 16],
+    candidates: &[(usize, Facts)],
+    frozen: &BTreeSet<Id>,
+) -> Result<(BTreeSet<Id>, BTreeSet<Hash>)> {
+    let by_digest: BTreeMap<_, _> = candidates.iter().map(|(_, f)| (f.digest, f)).collect();
+    let mut incarnations: BTreeSet<_> = candidates.iter().map(|(_, f)| f.incarnation).collect();
+    for (_, facts) in candidates {
+        let mut cursor = facts.incarnation;
+        while let Some((previous, _)) = authority.writer_history(document, cursor)?.predecessor {
+            incarnations.insert(previous);
+            cursor = previous;
+        }
+    }
+    let mut waiting = BTreeSet::new();
+    let mut devices = BTreeSet::new();
+    for incarnation in incarnations {
+        let history = authority.writer_history(document, incarnation)?;
+        if history.frozen || frozen.contains(&incarnation) {
+            devices.insert(history.device);
+        }
+        if let Some(closing) = history.closed {
+            let mut cursor = closing;
+            let mut prefix = BTreeSet::new();
+            let mut complete = true;
+            while let Some(digest) = cursor {
+                let Some(f) = by_digest.get(&digest) else {
+                    complete = false;
+                    break;
+                };
+                if f.incarnation != incarnation || !prefix.insert(digest) {
+                    devices.insert(history.device);
+                    complete = false;
+                    break;
+                }
+                cursor = f.previous;
+            }
+            if !complete {
+                waiting.insert(incarnation);
+            } else if candidates
+                .iter()
+                .any(|(_, f)| f.incarnation == incarnation && !prefix.contains(&f.digest))
+            {
+                // A signed handoff excludes signed history already observed.
+                // Preserve all bytes and previous application; don't pick a branch.
+                devices.insert(history.device);
+            }
+        }
+    }
+    Ok((waiting, devices))
+}
+fn predecessors_applied(
+    authority: &Authority,
+    document: [u8; 16],
+    mut incarnation: Id,
+    heads: &BTreeMap<Id, Hash>,
+) -> Result<bool> {
+    while let Some((previous, closing)) =
+        authority.writer_history(document, incarnation)?.predecessor
+    {
+        if heads.get(&previous).copied() != closing {
+            return Ok(false);
+        }
+        incarnation = previous;
+    }
+    Ok(true)
 }
