@@ -1,3 +1,7 @@
+# Python bytecode (oracle and evidence scripts)
+__pycache__/
+*.py[cod]
+
 # Rust
 /target/
 **/*.rs.bk
