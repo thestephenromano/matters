@@ -1649,5 +1649,109 @@ Item {
             compare(checklistItem(row, "a"), a, "the item was moved, not recreated");
             verify(rowFor("cl-drag") !== null && indexOf("cl-drag") >= 0, "the task didn't move");
         }
+
+        function checklistEditor(row) {
+            return findChild(row, "checklistLoader").editor;
+        }
+
+        function hoverDelete(item) {
+            mouseMove(item, item.width / 2, 10);
+            const del = findChild(item, "checklistDelete");
+            tryVerify(() => del.visible, 1000, "delete shows on hover");
+            mouseClick(del);
+        }
+
+        function test_review_text_below_an_item_is_kept_when_the_end_field_opens() {
+            const row = checklistFixture("cl-handover", ["a", "b"]);
+            mouseClick(findChild(checklistItem(row, "a"), "checklistTitle"));
+            keyClick(Qt.Key_End);
+            keyClick(Qt.Key_Return);
+            typeText("buy stamps");
+            // The Checklist button takes no focus: it only moves the open field.
+            mouseClick(findChild(row, "checklistButton"));
+            waitForChecklist(row, ["a", "buy stamps", "b"], "the typed text was kept below a");
+            const end = findChild(findChild(row, "checklistNewEnd"), "checklistNewInput");
+            tryVerify(() => end.activeFocus, 1000, "the field at the end took over");
+            keyClick(Qt.Key_Escape);
+            // Opening the field under a again starts empty.
+            mouseClick(findChild(checklistItem(row, "a"), "checklistTitle"));
+            keyClick(Qt.Key_Return);
+            const below = childrenNamed(checklistItem(row, "a"), "checklistNewInput")[0];
+            tryVerify(() => below.activeFocus, 1000, "the field under a is open");
+            compare(below.text, "");
+        }
+
+        function test_review_hover_deleting_keeps_typed_text_and_drops_a_pending_rename() {
+            const row = checklistFixture("cl-hover-delete", ["a", "b", "c"]);
+            controller.errorMessage = "";
+            // Typing a new item under a, then deleting a: the text is kept.
+            mouseClick(findChild(checklistItem(row, "a"), "checklistTitle"));
+            keyClick(Qt.Key_End);
+            keyClick(Qt.Key_Return);
+            typeText("x");
+            hoverDelete(checklistItem(row, "a"));
+            waitForChecklist(row, ["x", "b", "c"], "x replaced a");
+            compare(controller.errorMessage, "", "no error");
+
+            // Renaming b without saving, then deleting it: no stale rename.
+            const title = findChild(checklistItem(row, "b"), "checklistTitle");
+            mouseClick(title);
+            title.selectAll();
+            typeText("new text");
+            hoverDelete(checklistItem(row, "b"));
+            waitForChecklist(row, ["x", "c"], "b deleted");
+            settle();
+            compare(controller.errorMessage, "", "no error after the delete");
+        }
+
+        function test_review_an_item_deleted_elsewhere_keeps_typed_text_without_an_error() {
+            const row = checklistFixture("cl-deleted-elsewhere", ["a", "b"]);
+            controller.errorMessage = "";
+            mouseClick(findChild(checklistItem(row, "a"), "checklistTitle"));
+            keyClick(Qt.Key_End);
+            keyClick(Qt.Key_Return);
+            typeText("x");
+            // As another window or device would: a goes while x is typed under it.
+            controller.deleteChecklistItem(checklistItem(row, "a").itemId);
+            waitForChecklist(row, ["b", "x"], "x was kept, at the end");
+            settle();
+            compare(controller.errorMessage, "", "no error");
+        }
+
+        function test_review_ctrl_period_ticks_an_item_and_f2_stays_in_it() {
+            const row = checklistFixture("cl-tick", ["one", "two"]);
+            const one = findChild(checklistItem(row, "one"), "checklistTitle");
+            mouseClick(one);
+            keyClick(Qt.Key_Period, Qt.ControlModifier);
+            tryVerify(() => checklistItem(row, "one").done, 1000, "Ctrl+. ticks");
+            verify(one.activeFocus, "and keeps the cursor");
+            keyClick(Qt.Key_Period, Qt.ControlModifier);
+            tryVerify(() => !checklistItem(row, "one").done, 1000, "and unticks");
+
+            // F2 renames the selected task from the list; typed in an item it
+            // does nothing.
+            list.selectedTaskId = row.taskId;
+            keyClick(Qt.Key_F2);
+            settle();
+            verify(one.activeFocus, "F2 did not leave the checklist");
+            compare(view.titleEditId, "", "the task title is not being edited");
+        }
+
+        function test_review_a_stale_focus_request_does_not_stop_enter_focusing_the_field() {
+            const row = checklistFixture("cl-stale-focus", ["a", "b"]);
+            const editor = checklistEditor(row);
+            const a = checklistItem(row, "a");
+            // A request left over from a field that closed before taking it.
+            editor.newFocusId = a.itemId;
+            wait(30);
+            mouseClick(findChild(a, "checklistTitle"));
+            keyClick(Qt.Key_End);
+            keyClick(Qt.Key_Return);
+            const below = childrenNamed(a, "checklistNewInput")[0];
+            tryVerify(() => below.visible && below.activeFocus, 1000, "the new field under a has the cursor");
+            typeText("z");
+            keyClick(Qt.Key_Return);
+            waitForChecklist(row, ["a", "z", "b"]);
+        }
     }
 }

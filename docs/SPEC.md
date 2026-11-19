@@ -145,6 +145,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Ctrl + Shift + M` | Selected task(s) | Opens **Move** popover (select destination Area / Project / Heading) |
 | `Enter` | Checklist item | Opens a field for a new item directly below; `Enter` again saves it and opens the next. `Escape` leaves the checklist, with the task still open |
 | `Up` / `Down` | Checklist item | Goes to the item above or below; `Ctrl + Up` / `Ctrl + Down` move the item |
+| `Ctrl + .` | Checklist item | Ticks or unticks the item |
 | `Backspace` | Empty checklist item | Deletes the item and goes to the one above |
 | `Ctrl + K` or `/` | Anywhere | Opens **Quick Find** (instant fuzzy search across all items) |
 | `Ctrl + N` | Anywhere | Creates a new task in the current view |

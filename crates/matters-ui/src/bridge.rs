@@ -929,7 +929,8 @@ impl qobject::AppController {
         self.changed();
     }
 
-    /// Report a command's outcome and publish the new state.
+    /// Add a checklist item below `after_id` ("" for the end). Returns the
+    /// new item's ID, or "" when nothing was added.
     pub fn add_checklist_item(
         self: Pin<&mut Self>,
         task_id: &QString,
@@ -1005,6 +1006,7 @@ impl qobject::AppController {
         self.finish(result);
     }
 
+    /// Report a command's outcome and publish the new state.
     fn finish(mut self: Pin<&mut Self>, result: matters_core::Result<()>) {
         if let Err(err) = result {
             self.as_mut().report(err.to_string());
@@ -1354,55 +1356,68 @@ impl qobject::TaskListModel {
     }
 }
 
-/// Adapts the Qt model to [`ListSink`] so [`reconcile`] drives the
-/// `begin*`/`end*` notifications around each mutation.
-struct QtRows<'a>(Pin<&'a mut qobject::TaskListModel>);
-
 fn qt_row(row: usize) -> i32 {
     i32::try_from(row).expect("row index fits in i32")
 }
 
-impl ListSink<Task> for QtRows<'_> {
-    fn rows(&mut self) -> &mut Vec<Task> {
-        &mut self.0.as_mut().rust_mut().get_mut().rows
-    }
-    fn begin_remove(&mut self, row: usize) {
-        let row = qt_row(row);
-        self.0
-            .as_mut()
-            .begin_remove_rows(&QModelIndex::default(), row, row);
-    }
-    fn end_remove(&mut self) {
-        self.0.as_mut().end_remove_rows();
-    }
-    fn begin_insert(&mut self, row: usize) {
-        let row = qt_row(row);
-        self.0
-            .as_mut()
-            .begin_insert_rows(&QModelIndex::default(), row, row);
-    }
-    fn end_insert(&mut self) {
-        self.0.as_mut().end_insert_rows();
-    }
-    fn begin_move(&mut self, from: usize, to: usize) {
-        let root = QModelIndex::default();
-        let from = qt_row(from);
-        let moved = self
-            .0
-            .as_mut()
-            .begin_move_rows(&root, from, from, &root, qt_row(to));
-        assert!(moved, "beginMoveRows rejected a move from {from} to {to}");
-    }
-    fn end_move(&mut self) {
-        self.0.as_mut().end_move_rows();
-    }
-    fn changed(&mut self, row: usize) {
-        let index = self.0.index(qt_row(row), 0, &QModelIndex::default());
-        self.0
-            .as_mut()
-            .data_changed(&index, &index, &QList::<i32>::default());
-    }
+/// Declares a [`ListSink`] adapter for a flat Qt list model, so
+/// [`reconcile`] drives the `begin*`/`end*` notifications around each
+/// mutation. One definition serves every model.
+macro_rules! qt_list_sink {
+    ($(#[$doc:meta])* $sink:ident, $model:ty, $row:ty) => {
+        $(#[$doc])*
+        struct $sink<'a>(Pin<&'a mut $model>);
+
+        impl ListSink<$row> for $sink<'_> {
+            fn rows(&mut self) -> &mut Vec<$row> {
+                &mut self.0.as_mut().rust_mut().get_mut().rows
+            }
+            fn begin_remove(&mut self, row: usize) {
+                let row = qt_row(row);
+                self.0
+                    .as_mut()
+                    .begin_remove_rows(&QModelIndex::default(), row, row);
+            }
+            fn end_remove(&mut self) {
+                self.0.as_mut().end_remove_rows();
+            }
+            fn begin_insert(&mut self, row: usize) {
+                let row = qt_row(row);
+                self.0
+                    .as_mut()
+                    .begin_insert_rows(&QModelIndex::default(), row, row);
+            }
+            fn end_insert(&mut self) {
+                self.0.as_mut().end_insert_rows();
+            }
+            fn begin_move(&mut self, from: usize, to: usize) {
+                let root = QModelIndex::default();
+                let from = qt_row(from);
+                let moved = self
+                    .0
+                    .as_mut()
+                    .begin_move_rows(&root, from, from, &root, qt_row(to));
+                assert!(moved, "beginMoveRows rejected a move from {from} to {to}");
+            }
+            fn end_move(&mut self) {
+                self.0.as_mut().end_move_rows();
+            }
+            fn changed(&mut self, row: usize) {
+                let index = self.0.index(qt_row(row), 0, &QModelIndex::default());
+                self.0
+                    .as_mut()
+                    .data_changed(&index, &index, &QList::<i32>::default());
+            }
+        }
+    };
 }
+
+qt_list_sink!(
+    /// The task list model as a [`ListSink`].
+    QtRows,
+    qobject::TaskListModel,
+    Task
+);
 
 // =============================================================================
 // ChecklistModel
@@ -1491,47 +1506,9 @@ impl qobject::ChecklistModel {
     }
 }
 
-/// [`ListSink`] for the checklist model, like [`QtRows`] for tasks.
-struct ChecklistRows<'a>(Pin<&'a mut qobject::ChecklistModel>);
-
-impl ListSink<ChecklistItem> for ChecklistRows<'_> {
-    fn rows(&mut self) -> &mut Vec<ChecklistItem> {
-        &mut self.0.as_mut().rust_mut().get_mut().rows
-    }
-    fn begin_remove(&mut self, row: usize) {
-        let row = qt_row(row);
-        self.0
-            .as_mut()
-            .begin_remove_rows(&QModelIndex::default(), row, row);
-    }
-    fn end_remove(&mut self) {
-        self.0.as_mut().end_remove_rows();
-    }
-    fn begin_insert(&mut self, row: usize) {
-        let row = qt_row(row);
-        self.0
-            .as_mut()
-            .begin_insert_rows(&QModelIndex::default(), row, row);
-    }
-    fn end_insert(&mut self) {
-        self.0.as_mut().end_insert_rows();
-    }
-    fn begin_move(&mut self, from: usize, to: usize) {
-        let root = QModelIndex::default();
-        let from = qt_row(from);
-        let moved = self
-            .0
-            .as_mut()
-            .begin_move_rows(&root, from, from, &root, qt_row(to));
-        assert!(moved, "beginMoveRows rejected a move from {from} to {to}");
-    }
-    fn end_move(&mut self) {
-        self.0.as_mut().end_move_rows();
-    }
-    fn changed(&mut self, row: usize) {
-        let index = self.0.index(qt_row(row), 0, &QModelIndex::default());
-        self.0
-            .as_mut()
-            .data_changed(&index, &index, &QList::<i32>::default());
-    }
-}
+qt_list_sink!(
+    /// The checklist model as a [`ListSink`].
+    ChecklistRows,
+    qobject::ChecklistModel,
+    ChecklistItem
+);

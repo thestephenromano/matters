@@ -7,10 +7,11 @@ import matters
 // items, and add new ones. Items are saved as they change; a blank one is
 // never stored.
 //
-// Keys in an item: Enter opens a new item below it, Backspace in an empty
-// item deletes it, Up and Down go to the item above or below, Ctrl+Up and
-// Ctrl+Down move it, and Escape leaves the checklist (`leave`). The keys are
-// accepted here, so they never reach the task list underneath.
+// Keys in an item: Enter opens a new item below it, Ctrl+. ticks or unticks
+// it, Backspace in an empty item deletes it, Up and Down go to the item above
+// or below, Ctrl+Up and Ctrl+Down move it, and Escape leaves the checklist
+// (`leave`). Every key typed here stays here (Tab aside, which moves focus):
+// none reaches the task list underneath.
 Item {
     id: editor
 
@@ -49,6 +50,15 @@ Item {
     implicitHeight: column.implicitHeight
     visible: shown
 
+    // Keys the fields leave alone (F2, say) would otherwise bubble up to the
+    // task list and act on the task.
+    Keys.onPressed: event => {
+        if (event.key !== Qt.Key_Tab && event.key !== Qt.Key_Backtab)
+            event.accepted = true;
+    }
+    // A focus request is only for the field open now.
+    onAddingChanged: if (!adding) newFocusId = ""
+
     ChecklistModel {
         id: items
     }
@@ -74,10 +84,21 @@ Item {
     function focusNewField() {
         if (!adding)
             return;
-        if (newAfterId === "")
+        if (newAfterId === "") {
             endField.focusInput();
-        else
+        } else {
+            // Ask afresh, even if an unanswered request names the same row.
+            newFocusId = "";
             newFocusId = newAfterId;
+        }
+    }
+
+    function hasItem(id) {
+        for (let i = 0; i < items.rowCount(); ++i) {
+            if (items.idAt(i) === id)
+                return true;
+        }
+        return false;
     }
 
     function focusItem(index) {
@@ -99,16 +120,19 @@ Item {
         }
     }
 
-    // A new-item field lost focus: keep what was typed and close it, unless
-    // it has only handed over to the field under the item just added.
+    // A new-item field lost focus: keep what was typed. It closes the editor's
+    // new item only if it is still the open field; otherwise it has handed
+    // over (to the field under an item just added, or elsewhere) and keeps
+    // what was typed all the same. An item deleted meanwhile (elsewhere) is
+    // no place to add below: the text goes at the end instead.
     function newFieldLeft(field, afterId) {
-        if (!adding || newAfterId !== afterId)
-            return;
         const title = field.text;
         field.text = "";
-        adding = false;
-        if (title.trim() !== "")
-            controller.addChecklistItem(taskId, title, afterId);
+        if (adding && newAfterId === afterId)
+            adding = false;
+        if (title.trim() === "")
+            return;
+        controller.addChecklistItem(taskId, title, afterId === "" || hasItem(afterId) ? afterId : "");
     }
 
     function cancelNew(field) {
@@ -235,6 +259,17 @@ Item {
                 onTitleFocusRequestedChanged: if (titleFocusRequested) Qt.callLater(itemRow.takeFocus)
                 onNewFocusRequestedChanged: if (newFocusRequested) Qt.callLater(itemRow.takeFocus)
                 Component.onCompleted: if (titleFocusRequested || newFocusRequested) Qt.callLater(itemRow.takeFocus)
+                // Delete this item. What is being typed under it is kept, in
+                // its place; an unsaved rename of it is dropped.
+                function remove() {
+                    if (newBelow.visible)
+                        editor.newFieldLeft(newBelow.input, itemId);
+                    titleInput.text = itemRow.title;
+                    editor.controller.deleteChecklistItem(itemId);
+                }
+                function toggleDone() {
+                    editor.controller.setChecklistItemDone(itemId, !done);
+                }
                 function takeFocus() {
                     if (titleFocusRequested) {
                         editor.focusId = "";
@@ -324,7 +359,7 @@ Item {
                             anchors.margins: -4
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: editor.controller.setChecklistItemDone(itemRow.itemId, !itemRow.done)
+                            onClicked: itemRow.toggleDone()
                         }
                     }
 
@@ -345,8 +380,12 @@ Item {
 
                         // Saved when editing ends. A blank title is refused and
                         // the old one shown; Backspace deletes an empty item.
+                        // A row deleted elsewhere ends editing as it goes: there
+                        // is nothing left to rename.
                         onEditingFinished: {
-                            if (text !== itemRow.title && !editor.controller.renameChecklistItem(itemRow.itemId, text))
+                            if (text === itemRow.title || !editor.hasItem(itemRow.itemId))
+                                return;
+                            if (!editor.controller.renameChecklistItem(itemRow.itemId, text))
                                 text = itemRow.title;
                         }
                         // Show changes made elsewhere, but never while typing.
@@ -379,6 +418,11 @@ Item {
                                 editor.focusItem(itemRow.index + 1);
                         }
                         Keys.onPressed: event => {
+                            if (event.key === Qt.Key_Period && (event.modifiers & Qt.ControlModifier)) {
+                                event.accepted = true;
+                                itemRow.toggleDone();
+                                return;
+                            }
                             if (event.key !== Qt.Key_Backspace || titleInput.text !== "")
                                 return;
                             event.accepted = true;
@@ -404,7 +448,7 @@ Item {
                         }
                         ToolTip.visible: hovered
                         ToolTip.text: "Delete"
-                        onClicked: editor.controller.deleteChecklistItem(itemRow.itemId)
+                        onClicked: itemRow.remove()
                     }
                 }
 
