@@ -8,7 +8,8 @@
 //!   rearranges a project, and the reverse. This Evening is ordered within
 //!   itself; moving a task past its boundary moves the task into the other
 //!   section, switching This Evening on or off (decided on #53);
-//! * the sidebar orders projects and areas by their `sort_order`.
+//! * the sidebar orders projects and areas by their `sort_order`;
+//! * a task's checklist orders its items by their `sort_order`.
 //!
 //! A moved item takes the midpoint of its new neighbours' keys. When the
 //! list has tied keys (a list never arranged before, whose ties are broken by
@@ -20,7 +21,7 @@
 use jiff::civil::Date;
 use rusqlite::params;
 
-use crate::domain::{Task, View};
+use crate::domain::{ChecklistItem, Task, View};
 use crate::error::{MattersError, Result};
 use crate::query::QueryEngine;
 use crate::storage::Database;
@@ -62,17 +63,24 @@ pub fn move_task(db: &Database, view: &View, today: Date, id: &str, step: isize)
         return move_in_today(db, today, id, step);
     }
     let (_, list) = section_of(db, view, today, id)?;
-    let from = list
-        .iter()
-        .position(|t| t.id == id)
-        .expect("section_of includes the task");
-    let to = from.saturating_add_signed(step).min(list.len() - 1);
-    if to == from {
-        return Ok(());
+    let ids: Vec<&str> = list.iter().map(|t| t.id.as_str()).collect();
+    match after_step(&ids, id, step) {
+        Some(after) => place_task(db, view, today, id, after),
+        None => Ok(()),
     }
-    let rest: Vec<&Task> = list.iter().filter(|t| t.id != id).collect();
-    let after = to.checked_sub(1).map(|i| rest[i].id.as_str());
-    place_task(db, view, today, id, after)
+}
+
+/// Where `id` goes when moved `step` places in `ids` (which holds it),
+/// stopping at the ends: the item to follow (`None` for first), or `None`
+/// when it doesn't move.
+fn after_step<'a>(ids: &[&'a str], id: &str, step: isize) -> Option<Option<&'a str>> {
+    let from = ids.iter().position(|i| *i == id)?;
+    let to = from.saturating_add_signed(step).min(ids.len() - 1);
+    if to == from {
+        return None;
+    }
+    let rest: Vec<&str> = ids.iter().copied().filter(|i| *i != id).collect();
+    Some(to.checked_sub(1).map(|i| rest[i]))
 }
 
 fn move_in_today(db: &Database, today: Date, id: &str, step: isize) -> Result<()> {
@@ -213,6 +221,66 @@ pub fn place_area(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
         .collect();
     check_member(&list, id, after)?;
     write(db, "areas", "sort_order", &place(&list, id, after))
+}
+
+/// Move a checklist item so it follows `after` (or comes first) in its
+/// task's checklist.
+pub fn place_checklist_item(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
+    let list = checklist_of(db, id)?;
+    check_member(&list, id, after)?;
+    write(
+        db,
+        "checklist_items",
+        "sort_order",
+        &place(&list, id, after),
+    )
+}
+
+/// Move a checklist item `step` places up (negative) or down (positive),
+/// stopping at the ends of its checklist.
+pub fn move_checklist_item(db: &Database, id: &str, step: isize) -> Result<()> {
+    let list = checklist_of(db, id)?;
+    let ids: Vec<&str> = list.iter().map(|(i, _)| i.as_str()).collect();
+    match after_step(&ids, id, step) {
+        Some(after) => place_checklist_item(db, id, after),
+        None => Ok(()),
+    }
+}
+
+/// Add `item` to its task's checklist right below `below`, which must be in
+/// that checklist; nothing is added otherwise.
+pub fn add_checklist_item_below(
+    db: &Database,
+    item: &mut ChecklistItem,
+    below: &str,
+) -> Result<()> {
+    if !db
+        .list_checklist_items(&item.task_id)?
+        .iter()
+        .any(|i| i.id == below)
+    {
+        return Err(invalid(format!(
+            "'{below}' is not in the checklist of task '{}'",
+            item.task_id
+        )));
+    }
+    db.add_checklist_item(item)?;
+    place_checklist_item(db, &item.id, Some(below))
+}
+
+/// The checklist holding item `id`, in order, with each item's key.
+fn checklist_of(db: &Database, id: &str) -> Result<Vec<(String, f64)>> {
+    let Some(item) = db.get_checklist_item(id)? else {
+        return Err(MattersError::NotFound {
+            entity: "checklist item",
+            id: id.to_string(),
+        });
+    };
+    Ok(db
+        .list_checklist_items(&item.task_id)?
+        .into_iter()
+        .map(|i| (i.id, i.sort_order))
+        .collect())
 }
 
 /// The tasks `id` is ordered among in `view`, and the key column for it.

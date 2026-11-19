@@ -209,11 +209,13 @@ fn test_checklist_items_toggle() {
     assert_eq!(items.len(), 2);
     assert!(!items[0].is_completed);
 
-    // Toggle c1
-    db.toggle_checklist_item("c1").unwrap();
+    db.set_checklist_item_done("c1", true).unwrap();
+    db.set_checklist_item_done("c1", true).unwrap(); // setting, not flipping
     let items_after = db.list_checklist_items("t-pack").unwrap();
     assert!(items_after[0].is_completed);
     assert!(!items_after[1].is_completed);
+    db.set_checklist_item_done("c1", false).unwrap();
+    assert!(!db.list_checklist_items("t-pack").unwrap()[0].is_completed);
 }
 
 #[test]
