@@ -73,3 +73,7 @@ Pending plaintext is intentionally retained locally; SQLite, journals and backup
 ## Announced writer mode
 
 [Writer lifecycle](SYNC_WRITER_LIFECYCLE.md) adds `open_announced`: the fresh writer and its signed root/handoff commit together, including the previous writer's closed content head. `Delivery::announcements` returns exact stored control bytes. Announced and standalone modes cannot be mixed. Both retain the existing old-intent recovery requirement and exact ciphertext retries; only the announced mode provides the receiver's signed handoff chain.
+
+## Atomic domain composition
+
+The [atomic sender experiment](SYNC_ATOMIC_SENDER.md) reuses this writer and intent insertion code inside the prototype domain transaction. Its dedicated combined store uses WAL/FULL and separate mode-specific tests; the standalone API described above remains DELETE/FULL. Combined-store opens cannot use standalone writer allocation. Delivery still reads the existing outbox tables. The composed sender blocks new domain changes while retired unsealed intents require recovery, because those operations are already part of its local causal history. Production task integration and migration remain open.

@@ -829,3 +829,6 @@ fn review_replacement_writer_starts_are_refused_at_open() -> TestResult<()> {
 
 #[path = "writer_lifecycle.rs"]
 mod lifecycle;
+
+#[path = "atomic_sender.rs"]
+mod atomic_sender_cases;
