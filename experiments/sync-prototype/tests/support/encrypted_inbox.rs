@@ -1,6 +1,9 @@
 //! Bounded durable inbox: fixed membership, durable writers, one route/document.
 //! The service cursor denotes retained bytes, never successful CRDT application.
-use crate::support::{hash, parse, Authority, Body, EpochKey, Error, Hash, Id, Route, MAX_CONTROL};
+use crate::support::{
+    hash, parse, Authority, Body, Boundary, EpochKey, Error, Hash, Id, Route, WriterHistory,
+    MAX_CONTROL,
+};
 use loro::{EncodedBlobMode, ExportMode, LoroDoc, ID};
 use matters_sync_prototype::{
     causal_past_verdict, has_user_schema, invalid as error, project_document, wire, Projection,
@@ -87,8 +90,12 @@ pub struct Entry {
 pub struct Work {
     pub authentications: u32,
     pub stagings: u32,
+    /// Writer control admission attempts (each verifies an ML-DSA signature).
+    pub writer_checks: u32,
 }
-thread_local!(static WORK: Cell<Work> = const { Cell::new(Work { authentications: 0, stagings: 0 }) });
+thread_local!(static WORK: Cell<Work> = const {
+    Cell::new(Work { authentications: 0, stagings: 0, writer_checks: 0 })
+});
 pub fn take_work() -> Work {
     WORK.with(|w| w.replace(Work::default()))
 }
@@ -100,13 +107,23 @@ fn count(f: impl FnOnce(&mut Work)) {
     });
 }
 
+const WRITER_ADMISSION: &str = "writer-admission";
+const CLOSING_HISTORY: &str = "writer-closing-history";
+const BLOCKED: &str = "blocked-by-rejected-predecessor";
+
 pub struct Inbox {
     conn: Connection,
     config: Config,
+    /// Verified configuration authority, built once per open.
+    base: Authority,
+    /// Committed admission ordinal and the authority it produced. Admission
+    /// ordinals are immutable once committed, so only later ones are replayed.
+    /// Updated only after the processing transaction commits.
+    admitted: (i64, Authority),
 }
 impl Inbox {
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
-        config.authority()?;
+        let base = config.authority()?;
         let binding = config.binding()?;
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(1))?;
@@ -146,7 +163,12 @@ impl Inbox {
             ],
         )?;
         tx.commit()?;
-        Ok(Self { conn, config })
+        Ok(Self {
+            conn,
+            config,
+            admitted: (0, base.clone()),
+            base,
+        })
     }
     /// Persist exact signed control bytes before attempting admission. This
     /// bounded control inbox has no remote cursor/ACK semantics.
@@ -282,19 +304,28 @@ impl Inbox {
         mut hook: impl FnMut(Point) -> Result<()>,
     ) -> Result<()> {
         // A key for another route, manifest or epoch is an operational error.
-        let authority = self.config.authority()?;
-        authority.check_epoch_key(key)?;
+        self.base.check_epoch_key(key)?;
+        let document = self.config.document;
+        let context = self.config.route.content(&document);
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let authority = admit_receipts(&tx, &self.config, authority)?;
+        let admitted = admit_receipts(&tx, document, self.admitted.clone())?;
+        let authority = &admitted.1;
+        let histories = authority.writer_histories(document);
         let mut rows = rows(&tx)?;
         for row in &mut rows {
-            if row
-                .auth
-                .as_ref()
-                .is_none_or(|a| matches!(a, Err(reason) if reason == "writer-admission"))
-            {
+            // A member-signed record waiting for its writer is re-authenticated
+            // only once that writer has been admitted.
+            let retry = match row.auth.as_ref() {
+                None => true,
+                Some(Err(reason)) if reason == WRITER_ADMISSION => {
+                    wire::parse(&row.entry.bytes, context)
+                        .is_ok_and(|p| histories.contains_key(p.header.incarnation))
+                }
+                Some(_) => false,
+            };
+            if retry {
                 count(|w| w.authentications += 1);
                 row.auth = Some(
                     match authority.authenticate_history(
@@ -312,7 +343,7 @@ impl Inbox {
                                 actor: v.actor(),
                             })
                         }
-                        Err(Error::MissingWriter) => Err("writer-admission".into()),
+                        Err(Error::MissingWriter) => Err(WRITER_ADMISSION.into()),
                         Err(e) => Err(format!("authentication:{e}")),
                     },
                 );
@@ -332,9 +363,19 @@ impl Inbox {
             let facts = match row.auth.as_ref().expect("authenticated above") {
                 Ok(facts) => facts.clone(),
                 Err(reason) => {
-                    if reason == "writer-admission" {
-                        row.entry.status = "waiting".into();
-                        row.entry.reason = reason.clone();
+                    if reason == WRITER_ADMISSION {
+                        // The signature is verified; only the writer binding is
+                        // unknown. A refused competing handoff is never
+                        // admitted, so content in a frozen lineage is a fork.
+                        let frozen = wire::parse(&row.entry.bytes, context)
+                            .is_ok_and(|p| authority.lineage_frozen(document, p.header.author));
+                        if frozen {
+                            row.entry.status = "fork".into();
+                            row.entry.reason = "frozen-writer-lineage".into();
+                        } else {
+                            row.entry.status = "waiting".into();
+                            row.entry.reason = reason.clone();
+                        }
                     } else {
                         reject(&mut row.entry, reason);
                     }
@@ -376,17 +417,18 @@ impl Inbox {
 
         // Retirement eligibility is mutable; cached signature facts are not.
         // Re-evaluate closing prefixes and device freezes on every pass.
-        let (history_wait, device_frozen) =
-            history_gates(&authority, self.config.document, &candidates, &frozen)?;
+        let gates = history_gates(&histories, &candidates, &frozen)?;
         for (_, facts) in &candidates {
-            if device_frozen.contains(
-                &authority
-                    .writer_history(self.config.document, facts.incarnation)?
-                    .device,
-            ) {
+            if gates
+                .frozen_devices
+                .contains(&histories[&facts.incarnation].device)
+            {
                 frozen.insert(facts.incarnation);
             }
         }
+        // Closing heads only advance to their signed value (a record past one
+        // freezes the device above), so eligibility is monotonic in a pass.
+        let mut eligible: BTreeSet<Id> = BTreeSet::new();
 
         let mut doc = LoroDoc::new();
         let engine: Option<Vec<u8>> =
@@ -446,17 +488,16 @@ impl Inbox {
                 if settled.contains(index) {
                     continue;
                 }
-                if history_wait.contains(&facts.incarnation)
-                    || !predecessors_applied(
-                        &authority,
-                        self.config.document,
-                        facts.incarnation,
-                        &heads,
-                    )?
-                {
-                    row.status = "waiting".into();
-                    row.reason = "writer-closing-history".into();
-                    continue;
+                if !eligible.contains(&facts.incarnation) {
+                    if !gates.chains[&facts.incarnation]
+                        .iter()
+                        .all(|(previous, closing)| heads.get(previous).copied() == *closing)
+                    {
+                        row.status = "waiting".into();
+                        row.reason = CLOSING_HISTORY.into();
+                        continue;
+                    }
+                    eligible.insert(facts.incarnation);
                 }
                 if facts.previous != heads.get(&facts.incarnation).copied() {
                     row.status = "waiting".into();
@@ -465,10 +506,7 @@ impl Inbox {
                 }
                 let row = &mut rows[*index].entry;
                 if !plain.contains_key(index) {
-                    plain.insert(
-                        *index,
-                        decrypt(&authority, &self.config.document, &row.bytes, key)?,
-                    );
+                    plain.insert(*index, decrypt(authority, &document, &row.bytes, key)?);
                 }
                 let Ok(bytes) = &plain[index] else {
                     // The epoch key handle can only hold the key its signed
@@ -513,7 +551,23 @@ impl Inbox {
             let row = &mut rows[*index].entry;
             row.record_id_conflict = shared_ids.contains(&facts.record_id);
             if row.status == "waiting" && facts.previous.is_some_and(|p| blocked.contains(&p)) {
-                row.reason = "blocked-by-rejected-predecessor".into();
+                row.reason = BLOCKED.into();
+            }
+            // A closed predecessor whose complete signed prefix holds a
+            // rejected record can never reach its closing head: the handoff
+            // chains through it exactly as a same-writer successor would.
+            if row.status == "waiting"
+                && row.reason == CLOSING_HISTORY
+                && gates.chains[&facts.incarnation]
+                    .iter()
+                    .any(|(previous, _)| {
+                        gates
+                            .prefixes
+                            .get(previous)
+                            .is_some_and(|prefix| !prefix.is_disjoint(&blocked))
+                    })
+            {
+                row.reason = BLOCKED.into();
             }
         }
         for row in &rows {
@@ -554,6 +608,7 @@ impl Inbox {
         )?;
         hook(Point::BeforeApply)?;
         tx.commit()?;
+        self.admitted = admitted;
         hook(Point::AfterApply)
     }
 }
@@ -738,15 +793,27 @@ fn writer_entries(conn: &Connection) -> Result<Vec<WriterEntry>> {
 }
 fn admit_receipts(
     conn: &Connection,
-    config: &Config,
-    mut authority: Authority,
-) -> Result<Authority> {
+    document: [u8; 16],
+    (mut ordinal, mut authority): (i64, Authority),
+) -> Result<(i64, Authority)> {
     let mut receipts = writer_entries(conn)?;
-    let mut replay: Vec<_> = receipts.iter().filter(|r| r.admitted.is_some()).collect();
+    // Committed ordinals are immutable; the cached authority already holds
+    // 1..=ordinal. Replay only admissions committed after it was built.
+    let cached = receipts
+        .iter()
+        .filter(|r| r.admitted.is_some_and(|n| n <= ordinal))
+        .count();
+    if i64::try_from(cached)? != ordinal {
+        return Err(error("writer admission order gap"));
+    }
+    let mut replay: Vec<_> = receipts
+        .iter()
+        .filter(|r| r.admitted.is_some_and(|n| n > ordinal))
+        .collect();
     replay.sort_by_key(|r| r.admitted);
-    let mut ordinal = 0;
     for r in replay {
-        let result = authority.admit_writer(&r.bytes, config.document);
+        count(|w| w.writer_checks += 1);
+        let result = authority.admit_writer(&r.bytes, document);
         if !(result.is_ok() && r.status == "admitted"
             || result == Err(Error::Fork) && r.status == "fork")
         {
@@ -773,7 +840,8 @@ fn admit_receipts(
                         Body::Writer { previous: None, .. } | Body::Handoff { .. }
                     ) =>
                 {
-                    authority.admit_writer(&r.bytes, config.document)
+                    count(|w| w.writer_checks += 1);
+                    authority.admit_writer(&r.bytes, document)
                 }
                 Ok(_) => Err(Error::Unsupported),
                 Err(e) => Err(e),
@@ -783,13 +851,14 @@ fn admit_receipts(
                     ordinal += 1;
                     r.admitted = Some(ordinal);
                     progress = true;
-                    r.status = if result.is_ok() { "admitted" } else { "fork" }.into();
-                    r.reason = if result.is_ok() {
-                        ""
-                    } else {
-                        "signed-writer-branch"
-                    }
-                    .into();
+                    let (status, reason) = match result {
+                        Ok(true) => ("admitted", ""),
+                        // Same claim, fresh randomized signature.
+                        Ok(false) => ("admitted", "same-writer-claim"),
+                        Err(_) => ("fork", "signed-writer-branch"),
+                    };
+                    r.status = status.into();
+                    r.reason = reason.into();
                 }
                 Err(Error::MissingPrevious) => {
                     r.status = "waiting".into();
@@ -811,73 +880,97 @@ fn admit_receipts(
             params![r.status, r.reason, r.admitted, r.id],
         )?;
     }
-    Ok(authority)
+    Ok((ordinal, authority))
 }
+struct Gates {
+    /// Devices whose writer lineage holds signed contradictory history.
+    frozen_devices: BTreeSet<Hash>,
+    /// Each candidate incarnation's retired predecessors and closing heads.
+    chains: BTreeMap<Id, Vec<(Id, Option<Hash>)>>,
+    /// Complete signed prefixes of closed incarnations.
+    prefixes: BTreeMap<Id, BTreeSet<Hash>>,
+}
+/// Retirement eligibility is mutable; cached signature facts are not.
+/// Re-evaluated on every pass from the admitted writer histories.
 fn history_gates(
-    authority: &Authority,
-    document: [u8; 16],
+    histories: &BTreeMap<Id, WriterHistory>,
     candidates: &[(usize, Facts)],
     frozen: &BTreeSet<Id>,
-) -> Result<(BTreeSet<Id>, BTreeSet<Hash>)> {
+) -> Result<Gates> {
+    let closing = |boundary: Boundary| match boundary {
+        Boundary::Closed(head) => Ok(head),
+        // admit_receipts refuses legacy replacements; a durable lineage
+        // without a signed closing head would have no retained prefix.
+        Boundary::Unbounded => Err(error("unbounded writer replacement in durable authority")),
+    };
+    let history = |incarnation: &Id| {
+        histories
+            .get(incarnation)
+            .ok_or_else(|| error("authenticated writer missing from authority"))
+    };
     let by_digest: BTreeMap<_, _> = candidates.iter().map(|(_, f)| (f.digest, f)).collect();
-    let mut incarnations: BTreeSet<_> = candidates.iter().map(|(_, f)| f.incarnation).collect();
+    let mut chains = BTreeMap::new();
+    let mut incarnations = BTreeSet::new();
     for (_, facts) in candidates {
+        if chains.contains_key(&facts.incarnation) {
+            continue;
+        }
+        // Admission requires an admitted predecessor, so this walk ends.
+        let mut chain = Vec::new();
         let mut cursor = facts.incarnation;
-        while let Some((previous, _)) = authority.writer_history(document, cursor)?.predecessor {
+        incarnations.insert(cursor);
+        while let Some((previous, boundary)) = history(&cursor)?.predecessor {
+            chain.push((previous, closing(boundary)?));
             incarnations.insert(previous);
             cursor = previous;
         }
+        chains.insert(facts.incarnation, chain);
     }
-    let mut waiting = BTreeSet::new();
-    let mut devices = BTreeSet::new();
+    let mut frozen_devices = BTreeSet::new();
+    let mut prefixes = BTreeMap::new();
     for incarnation in incarnations {
-        let history = authority.writer_history(document, incarnation)?;
+        let history = history(&incarnation)?;
         if history.frozen || frozen.contains(&incarnation) {
-            devices.insert(history.device);
+            frozen_devices.insert(history.device);
         }
-        if let Some(closing) = history.closed {
-            let mut cursor = closing;
-            let mut prefix = BTreeSet::new();
-            let mut complete = true;
-            while let Some(digest) = cursor {
-                let Some(f) = by_digest.get(&digest) else {
-                    complete = false;
-                    break;
-                };
-                if f.incarnation != incarnation || !prefix.insert(digest) {
-                    devices.insert(history.device);
-                    complete = false;
-                    break;
-                }
-                cursor = f.previous;
+        let Some(boundary) = history.closed else {
+            continue;
+        };
+        // Walk the signed content chain back from the closing head. Until the
+        // whole prefix is present, the retired writer's own records still
+        // apply in chain order: none can pass an absent closing head, and a
+        // record outside the prefix freezes the device once it is complete.
+        let mut cursor = closing(boundary)?;
+        let mut prefix = BTreeSet::new();
+        let mut complete = true;
+        while let Some(digest) = cursor {
+            let Some(f) = by_digest.get(&digest) else {
+                complete = false;
+                break;
+            };
+            if f.incarnation != incarnation || !prefix.insert(digest) {
+                frozen_devices.insert(history.device);
+                complete = false;
+                break;
             }
-            if !complete {
-                waiting.insert(incarnation);
-            } else if candidates
-                .iter()
-                .any(|(_, f)| f.incarnation == incarnation && !prefix.contains(&f.digest))
-            {
-                // A signed handoff excludes signed history already observed.
-                // Preserve all bytes and previous application; don't pick a branch.
-                devices.insert(history.device);
-            }
+            cursor = f.previous;
         }
-    }
-    Ok((waiting, devices))
-}
-fn predecessors_applied(
-    authority: &Authority,
-    document: [u8; 16],
-    mut incarnation: Id,
-    heads: &BTreeMap<Id, Hash>,
-) -> Result<bool> {
-    while let Some((previous, closing)) =
-        authority.writer_history(document, incarnation)?.predecessor
-    {
-        if heads.get(&previous).copied() != closing {
-            return Ok(false);
+        if !complete {
+            continue;
         }
-        incarnation = previous;
+        if candidates
+            .iter()
+            .any(|(_, f)| f.incarnation == incarnation && !prefix.contains(&f.digest))
+        {
+            // A signed handoff excludes signed history already observed.
+            // Preserve all bytes and previous application; don't pick a branch.
+            frozen_devices.insert(history.device);
+        }
+        prefixes.insert(incarnation, prefix);
     }
-    Ok(true)
+    Ok(Gates {
+        frozen_devices,
+        chains,
+        prefixes,
+    })
 }

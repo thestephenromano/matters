@@ -1,0 +1,27 @@
+# Writer lifecycle review follow-up
+
+Review of #132 (durable writer handoffs and closed history prefixes) against base `2d51ce4`. Contract: [writer lifecycle](../../docs/SYNC_WRITER_LIFECYCLE.md). Each finding lists its root cause, the owning boundary and the regression witness. Every behavioral witness below failed against the #132 support code and passes after the change.
+
+| # | Finding | Root cause and owning boundary | Change | Witness |
+|---|---|---|---|---|
+| 1 | Re-signing an identical writer claim froze the device lineage | `Authority::admit_writer` compared signed bytes, but ML-DSA signing is randomized, so bytes do not identify a claim | Writers store a typed `WriterClaim`; an equal claim is idempotent (`Ok(false)`, receipt `same-writer-claim`); only a different claim freezes | `review_resigned_identical_handoff_is_the_same_claim_not_a_fork`, `review_resigned_identical_writer_claim_is_idempotent_and_freezes_nothing` |
+| 2 | A rejected record in a closing prefix left successors waiting as `writer-closing-history` forever | The successor gate had no terminal state for a complete prefix that can never be applied | Decision: a handoff chains through its prefix as a same-writer successor would, so it stays blocked; the inbox now labels it `blocked-by-rejected-predecessor` | `review_rejected_record_in_closing_prefix_blocks_successor_with_accurate_reason` |
+| 3 | An incomplete closing prefix stopped the retired writer's own records from applying | `history_gates` held back the whole retired incarnation; chain order already prevents passing an absent closing head | The retired writer applies in chain order; records outside a complete prefix still freeze the device | `review_retired_writer_prefix_keeps_applying_while_its_closing_head_is_delayed` (and the updated reason in `closing_prefix_accepts_delayed_ancestors_but_no_signed_extension`) |
+| 4 | Legacy predecessor-bearing `writer_start` made `writer_history` fail or report a root | `WriterHistory` could not represent a retirement without a signed boundary | The earlier key-distribution contract still admits the form, so `Authority` keeps it; `Boundary::Unbounded` reports it truthfully. The durable inbox still refuses it at admission | `review_writer_history_reports_legacy_replacement_as_unbounded_not_as_a_root` |
+| 5 | Forged content naming an unknown incarnation waited forever | `authenticate_history` returned `MissingWriter` before signature verification | The author's member signature is verified before `MissingWriter`; waiting rows are re-authenticated only once their incarnation is admitted | `review_forged_content_for_an_unknown_writer_is_rejected_not_retained_as_waiting` |
+| 6 | Content of a refused competing handoff waited as `writer-admission` | A refused handoff is never admitted, and classification did not consult the frozen lineage | Unknown-incarnation content whose author's lineage is frozen is classified `fork` (`frozen-writer-lineage`) | `review_content_of_a_refused_competing_handoff_is_classified_as_fork` |
+| 7 | Announcement order relied on rowids of a BLOB-keyed table | No explicit creation-order column | Explicit `seq` column; outbox format `matters-encrypted-outbox/2` | `review_announcements_keep_creation_order_when_rowids_are_rewritten` |
+| 8 | Each pass rebuilt the authority and re-verified every control | No reuse of committed admissions; `open` discarded its verified authority | The configuration authority is kept from open; committed admissions are cached and only later ordinals replayed; the cache advances after commit | `review_processing_replays_only_newly_committed_writer_admissions` (new `Work::writer_checks` counter) |
+| 9 | Predecessor walks repeated per candidate and per fixed-point iteration | Per-pass facts were re-derived in the hot loop | `Authority::writer_histories` is read once per pass; chains are computed once per incarnation; eligibility is cached once true (closing heads only advance to their signed value) | Behavior unchanged; covered by the existing lifecycle suite |
+| 10 | `freeze_writer` was typed `Result<bool>` and claims were unpacked into a 7-tuple | Ad hoc representation | `freeze_writer` returns `Error`; `Body::writer_claim()` builds the claim | Structural |
+
+## Sibling search
+
+- Byte-level equality used as claim identity: `apply_membership` also treats a re-signed transition as a competing successor, but there the full signed-record hash *is* the manifest identity that later writer starts, envelopes and content records name, so two signings are two distinct manifests. Writer controls are never referenced by hash (content names the incarnation), so for them the claim, not the bytes, is the identity. No other signed-control byte comparison freezes state.
+- Retryable verdicts before signature work: `authenticate_data` (active-only) still rejects unknown writers with `Actor` before signature work, which is terminal and is unchanged.
+- Rowid ordering: `inbox` and `intents` order by `INTEGER PRIMARY KEY` columns; `writer_receipts` orders by its `INTEGER PRIMARY KEY` `id`. Only `writers` used an implicit rowid.
+
+## Remaining
+
+- Waiting member-signed records for incarnations that are never admitted still occupy content slots within the fixture's 32-record budget. They are authenticated, so this is accountable member behavior rather than relay injection.
+- Retries of waiting or `writer:Actor` controls still verify their signatures on each pass. These are bounded by the 32-control budget.

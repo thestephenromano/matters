@@ -968,6 +968,62 @@ fn replacement_retires_old_writer_and_replay_does_not_reactivate_it() {
 }
 
 #[test]
+fn review_writer_history_reports_legacy_replacement_as_unbounded_not_as_a_root() {
+    let mut s = setup();
+    let (old, next, third) = ([21; 32], [22; 32], [23; 32]);
+    let root = sign(&writer(&s.authority, &s.a, old, 71, None), &s.a).unwrap();
+    let legacy = sign(&writer(&s.authority, &s.a, next, 72, Some(old)), &s.a).unwrap();
+    let handoff = Message {
+        route: route(),
+        signer: s.a.id().unwrap(),
+        body: Body::Handoff {
+            manifest: s.authority.manifest(),
+            document: DOC,
+            device: s.a.id().unwrap(),
+            incarnation: third,
+            actor: 73,
+            previous: next,
+            closing: None,
+        },
+    };
+    for bytes in [root, legacy, sign(&handoff, &s.a).unwrap()] {
+        assert_eq!(s.authority.admit_writer(&bytes, DOC), Ok(true));
+    }
+    let history = |i| s.authority.writer_history(DOC, i).unwrap();
+    assert_eq!(history(old).predecessor, None);
+    assert_eq!(history(old).closed, Some(Boundary::Unbounded));
+    assert_eq!(history(next).predecessor, Some((old, Boundary::Unbounded)));
+    assert_eq!(history(next).closed, Some(Boundary::Closed(None)));
+    assert_eq!(
+        history(third).predecessor,
+        Some((next, Boundary::Closed(None)))
+    );
+    assert_eq!(history(third).closed, None);
+    assert!(!history(third).frozen);
+    assert_eq!(
+        s.authority.writer_history(DOC, [9; 32]),
+        Err(Error::MissingWriter)
+    );
+}
+
+#[test]
+fn review_resigned_identical_writer_claim_is_idempotent_and_freezes_nothing() {
+    let mut s = setup();
+    let message = writer(&s.authority, &s.a, [21; 32], 71, None);
+    let first = sign(&message, &s.a).unwrap();
+    let again = sign(&message, &s.a).unwrap();
+    assert_ne!(first, again, "ML-DSA signing is randomized");
+    assert_eq!(s.authority.admit_writer(&first, DOC), Ok(true));
+    assert_eq!(s.authority.admit_writer(&again, DOC), Ok(false));
+    assert!(s.authority.writer_fork(DOC, s.a.id().unwrap()).is_none());
+    // A changed claim for the same incarnation is still a contradiction.
+    let changed = sign(&writer(&s.authority, &s.a, [21; 32], 72, None), &s.a).unwrap();
+    assert_eq!(s.authority.admit_writer(&changed, DOC), Err(Error::Fork));
+    let (kept, competing) = s.authority.writer_fork(DOC, s.a.id().unwrap()).unwrap();
+    assert_eq!((kept, competing), (first.as_slice(), changed.as_slice()));
+}
+
+#[test]
 fn first_record_gate_rejects_chained_records_before_signature_and_context_checks() {
     let mut s = setup();
     let cek = epoch_key(s.authority.epoch().unwrap());

@@ -7,7 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FORMAT: &str = "matters-encrypted-outbox/1";
+const FORMAT: &str = "matters-encrypted-outbox/2";
 // Small retained-history experiment: at most 16 MiB each of intent plaintext and
 // ciphertext payload. Writer and reservation history is retained without a
 // lifetime cap: transient contention/restarts must not exhaust recovery access.
@@ -180,7 +180,7 @@ impl Delivery {
     /// Exact signed roots/handoffs, retained in creation order for replay.
     pub fn announcements(&self) -> Result<Vec<Vec<u8>>> {
         let mut stmt = self.conn.prepare(
-            "SELECT announcement FROM writers WHERE announcement IS NOT NULL ORDER BY rowid",
+            "SELECT announcement FROM writers WHERE announcement IS NOT NULL ORDER BY seq",
         )?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -282,7 +282,7 @@ impl Outbox {
         };
         let incarnation = random()?;
         let actor = u64::from_le_bytes(random()?[..8].try_into()?);
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS writers(incarnation BLOB PRIMARY KEY CHECK(length(incarnation)=32),actor BLOB NOT NULL UNIQUE CHECK(length(actor)=8),head BLOB CHECK(head IS NULL OR length(head)=48),announcement BLOB);
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS writers(seq INTEGER NOT NULL UNIQUE CHECK(seq>0),incarnation BLOB PRIMARY KEY CHECK(length(incarnation)=32),actor BLOB NOT NULL UNIQUE CHECK(length(actor)=8),head BLOB CHECK(head IS NULL OR length(head)=48),announcement BLOB);
             CREATE TABLE IF NOT EXISTS outbox_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,binding BLOB NOT NULL,owner BLOB NOT NULL REFERENCES writers(incarnation),announced INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS intents(seq INTEGER PRIMARY KEY,batch BLOB NOT NULL UNIQUE CHECK(length(batch)=32),writer BLOB NOT NULL REFERENCES writers(incarnation),plaintext BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(seq INTEGER PRIMARY KEY,id BLOB NOT NULL UNIQUE CHECK(length(id)=32),intent INTEGER NOT NULL REFERENCES intents(seq),header BLOB NOT NULL,status TEXT NOT NULL CHECK(status IN ('reserved','abandoned','sealed')));
@@ -327,7 +327,10 @@ impl Outbox {
             None
         };
         tx.execute(
-            "INSERT INTO writers(incarnation,actor,announcement) VALUES (?1,?2,?3)",
+            // Explicit creation order: rowids of a BLOB-keyed table are not
+            // stable across VACUUM or rewrite.
+            "INSERT INTO writers(seq,incarnation,actor,announcement)
+             VALUES ((SELECT coalesce(max(seq),0)+1 FROM writers),?1,?2,?3)",
             params![
                 incarnation.as_slice(),
                 actor.to_le_bytes().as_slice(),
