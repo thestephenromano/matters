@@ -20,7 +20,7 @@ signature context = ASCII("matters-sync/v0/writer_handoff")
 
 The current member signs as itself. Its predecessor must already be admitted for that device/document, and the incarnation/actor must be unused. `closing_head` is SHA-384 of the complete last retained signed content record; null asserts an empty old chain. It is not a timestamp, server acknowledgement or claim of global freshness. Unsupported clients reject the new kind; there is no reinterpretation of legacy replacement starts. The existing six-field `writer_start` remains usable for roots; the durable receiver rejects its predecessor-bearing form because it lacks a closing boundary.
 
-Two valid successors of one incarnation are competing writer histories. Preserve the signed records and freeze that device/document lineage. Signature randomness means retry must deliver existing bytes, not sign again. Root and handoff authority rules share the existing admission implementation. Membership authority, epoch commitment and author-key verification are unchanged.
+Two authenticated successor claims for one incarnation, or incompatible same-device definitions of one incarnation, are competing writer histories. Reusing an actor or incarnation does not hide the signed contradiction. Actor-conflicting controls are re-evaluated when further controls arrive; identity collisions from another device cannot freeze the identity owner. Preserve the signed records and freeze that device/document lineage. Signature randomness means retry must deliver existing bytes, not sign again. Root and handoff authority rules share the existing admission implementation. Membership authority, epoch commitment and author-key verification are unchanged.
 
 ## Sender transaction
 

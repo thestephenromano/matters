@@ -760,7 +760,10 @@ fn admit_receipts(
     loop {
         let mut progress = false;
         for r in &mut receipts {
-            if r.admitted.is_some() || r.status == "quarantined" {
+            // A uniqueness conflict can later become same-device equivocation
+            // evidence when another signed definition is admitted. Retry it;
+            // permanent format/context/signature failures remain terminal.
+            if r.admitted.is_some() || (r.status == "quarantined" && r.reason != "writer:Actor") {
                 continue;
             }
             let result = match parse(&r.bytes) {

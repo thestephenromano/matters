@@ -850,13 +850,10 @@ impl Authority {
             if old.signed_bytes == bytes {
                 return Ok(false);
             }
-            return Err(Error::Actor);
-        }
-        if self
-            .writers
-            .iter()
-            .any(|((doc, _), w)| doc == document && w.actor == *actor)
-        {
+            if old.device == *device {
+                return self.freeze_writer(lineage, old.signed_bytes.clone(), bytes);
+            }
+            // A different device cannot freeze the owner by claiming its ID.
             return Err(Error::Actor);
         }
         if let Some(prev) = previous {
@@ -868,19 +865,22 @@ impl Authority {
                 return Err(Error::Actor);
             }
         }
-        // Null is also a predecessor: there is one root per device/document.
-        // Historical bindings are retained to detect competing successors even
-        // after later replacements. A valid fork freezes only this lineage.
+        // Same-device conflicting successor claims are evidence even when
+        // they reuse an actor. Never let an arrival-dependent uniqueness check
+        // hide two authenticated definitions of the same lineage step.
         if let Some((_, first)) = self
             .writers
             .iter()
             .find(|((doc, _), w)| doc == document && w.device == *device && w.previous == previous)
         {
-            self.lineages
-                .get_mut(&lineage)
-                .ok_or(Error::Actor)?
-                .fork_evidence = Some((first.signed_bytes.clone(), bytes.to_vec()));
-            return Err(Error::Fork);
+            return self.freeze_writer(lineage, first.signed_bytes.clone(), bytes);
+        }
+        if self
+            .writers
+            .iter()
+            .any(|((doc, _), w)| doc == document && w.actor == *actor)
+        {
+            return Err(Error::Actor);
         }
         if self.writers.len() >= MAX_WRITERS {
             return Err(Error::Limit);
@@ -903,6 +903,18 @@ impl Authority {
             },
         );
         Ok(true)
+    }
+    fn freeze_writer(
+        &mut self,
+        lineage: ([u8; 16], Hash),
+        first: Vec<u8>,
+        second: &[u8],
+    ) -> Result<bool> {
+        self.lineages
+            .get_mut(&lineage)
+            .ok_or(Error::Actor)?
+            .fork_evidence = Some((first, second.to_vec()));
+        Err(Error::Fork)
     }
     pub fn writer_history(&self, document: [u8; 16], incarnation: Id) -> Result<WriterHistory> {
         let writer = self

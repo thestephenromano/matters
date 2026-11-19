@@ -614,3 +614,73 @@ fn both_present_and_absent_closing_heads_are_signature_bound() -> TestResult<()>
     }
     Ok(())
 }
+
+#[test]
+fn incompatible_announcements_freeze_in_both_orders_even_with_reused_identity() -> TestResult<()> {
+    let h = Harness::new();
+    let first = handoff(&h, 73, 71, None);
+    for same_incarnation in [true, false] {
+        let mut message = parse(&first)?.message;
+        if let Body::Handoff {
+            incarnation,
+            closing,
+            ..
+        } = &mut message.body
+        {
+            if !same_incarnation {
+                *incarnation = [74; 32];
+            }
+            *closing = Some([5; 48]);
+        }
+        let second = sign(&message, &h.s.a)?;
+        for order in [[&first, &second], [&second, &first]] {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("in.db");
+            let mut inbox = h.inbox(&path);
+            for bytes in order {
+                inbox.receive_writer(bytes, okay)?;
+            }
+            inbox.process(&h.key, okay)?;
+            assert_eq!(
+                inbox.writer_entries()?[1].status,
+                "fork",
+                "same incarnation: {same_incarnation}"
+            );
+            drop(inbox);
+            let mut inbox = h.inbox(&path);
+            inbox.process(&h.key, okay)?;
+            assert_eq!(inbox.writer_entries()?[1].status, "fork");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn actor_rejection_is_revisited_when_a_competing_signed_claim_arrives() -> TestResult<()> {
+    let h = Harness::new();
+    let good = handoff(&h, 73, 71, None);
+    let mut message = parse(&good)?.message;
+    if let Body::Handoff {
+        incarnation, actor, ..
+    } = &mut message.body
+    {
+        *incarnation = [74; 32];
+        *actor = 71;
+    }
+    let bad = sign(&message, &h.s.a)?;
+    for order in [[&good, &bad], [&bad, &good]] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("in.db");
+        let mut inbox = h.inbox(&path);
+        inbox.receive_writer(order[0], okay)?;
+        inbox.process(&h.key, okay)?;
+        inbox.receive_writer(order[1], okay)?;
+        inbox.process(&h.key, okay)?;
+        assert!(inbox.writer_entries()?.iter().any(|r| r.status == "fork"));
+        drop(inbox);
+        let mut inbox = h.inbox(&path);
+        inbox.process(&h.key, okay)?;
+        assert!(inbox.writer_entries()?.iter().any(|r| r.status == "fork"));
+    }
+    Ok(())
+}
