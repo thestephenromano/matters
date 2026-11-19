@@ -28,3 +28,11 @@ impl Heading {
         }
     }
 }
+
+/// A deleted heading and the tasks that were under it, so the deletion can
+/// be undone ([`crate::Database::restore_heading`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeletedHeading {
+    pub heading: Heading,
+    pub task_ids: Vec<String>,
+}

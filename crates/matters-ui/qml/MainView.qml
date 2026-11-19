@@ -490,7 +490,7 @@ Item {
         const colon = key.indexOf(":");
         const kind = key.slice(0, colon);
         const rest = key.slice(colon + 1);
-        if (kind === "project" || kind === "area") {
+        if (kind === "project" || kind === "area" || kind === "heading") {
             // <id>:<title>; the title may itself contain colons.
             const title = rest.slice(rest.indexOf(":") + 1);
             return title;
