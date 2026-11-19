@@ -45,7 +45,7 @@ fn edit(text: &str) -> Request {
 fn seal(sender: &mut Sender, request: &Request, h: &Harness) -> TestResult<Vec<u8>> {
     Ok(sender
         .seal(
-            batch(request)?,
+            batch(&request.id)?,
             random,
             |header, plain| Ok(seal_fixture(header, &h.cek, plain, &h.s.a)?),
             |_| Ok(()),
@@ -76,11 +76,11 @@ fn atomic_edits_deliver_once_across_restart_and_reverse_delivery() -> TestResult
         edit("before restart").commands[0].clone(),
     ]);
     let record = sender.execute(&first, Fault::None)?;
-    assert_eq!(sender.next_batch()?, Some(batch(&first)?));
+    assert_eq!(sender.next_batch()?, Some(batch(&first.id)?));
     assert_eq!(counts(&path)?, (1, 1, 0));
     let first_bytes = seal(&mut sender, &first, &h)?;
     let retry = sender.seal(
-        batch(&first)?,
+        batch(&first.id)?,
         || panic!("retry entropy"),
         |_, _| panic!("retry sealing"),
         |_| Ok(()),
@@ -113,7 +113,10 @@ fn atomic_edits_deliver_once_across_restart_and_reverse_delivery() -> TestResult
         delivery.acknowledge(r.id, |_| Ok(()))?;
     }
     assert!(delivery.pending()?.is_empty());
-    assert_eq!(delivery.record(batch(&first)?)?.unwrap().bytes, first_bytes);
+    assert_eq!(
+        delivery.record(batch(&first.id)?)?.unwrap().bytes,
+        first_bytes
+    );
     assert_eq!(counts(&path)?, (2, 2, 2));
     Ok(())
 }
@@ -165,22 +168,19 @@ fn uncertain_ack_and_request_conflict_never_duplicate_local_edits() -> TestResul
     let mut conflict = edit("different");
     conflict.id = request.id.clone();
     assert!(sender.execute(&conflict, Fault::None).is_err());
-    drop(sender);
-    let mut sender = open(&path, &h)?;
     assert_eq!(sender.execute(&request, Fault::None)?, saved);
+    drop(sender);
+    // Reopening re-issues both never-sealed requests as the new writer. A
+    // retry then returns the re-issued receipt: the original operations were
+    // never sent and never can be.
+    let mut sender = open(&path, &h)?;
+    let reissued = sender.execute(&request, Fault::None)?;
+    assert_eq!(reissued.id, saved.id);
+    assert_ne!(reissued.bytes, saved.bytes);
+    assert_eq!(sender.execute(&request, Fault::None)?, reissued);
     assert_eq!(sender.projection()?.entities[TASK].notes, "once");
     assert_eq!(counts(&path)?, (2, 2, 0));
-    assert_eq!(sender.recovery_required()?.len(), 2);
-    assert!(sender.execute(&edit("blocked"), Fault::None).is_err());
-    assert!(sender
-        .seal(
-            batch(&request)?,
-            || panic!("retired entropy"),
-            |_, _| panic!("retired seal"),
-            |_| Ok(())
-        )
-        .is_err());
-    assert_eq!(counts(&path)?, (2, 2, 0));
+    assert!(sender.recovery_required()?.is_empty());
     Ok(())
 }
 
@@ -338,7 +338,7 @@ fn uncertain_seal_retries_fresh_reservation_without_repeating_domain_edit() -> T
     let mut uncertain = Vec::new();
     assert!(sender
         .seal(
-            batch(&request)?,
+            batch(&request.id)?,
             random,
             |header, plain| {
                 uncertain = seal_fixture(header, &h.cek, plain, &h.s.a)?;
@@ -374,7 +374,7 @@ fn uncertain_seal_retries_fresh_reservation_without_repeating_domain_edit() -> T
 }
 
 #[test]
-fn restored_backup_preserves_unsealed_work_and_blocks_dependent_new_edits() -> TestResult<()> {
+fn restored_backup_reissues_unsealed_work_and_receivers_still_detect_the_fork() -> TestResult<()> {
     let mut h = Harness::new();
     h.config.writers.clear();
     let dir = tempfile::tempdir()?;
@@ -385,23 +385,24 @@ fn restored_backup_preserves_unsealed_work_and_blocks_dependent_new_edits() -> T
     sender.execute(&first, Fault::None)?;
     Connection::open(&path)?.execute("VACUUM INTO ?1", [backup.to_str().unwrap()])?;
     let original = seal(&mut sender, &first, &h)?;
+    // The restored copy cannot know the original sealed the creation since:
+    // it re-issues it as its own new writer, and editing continues.
     let mut restored = open(&backup, &h)?;
     assert_eq!(restored.projection()?, sender.projection()?);
-    let retained = restored.recovery_required()?;
-    assert_eq!(retained.len(), 1);
-    assert_eq!(retained[0].batch, batch(&first)?);
-    assert!(restored
-        .execute(&edit("must not depend on missing history"), Fault::None)
-        .is_err());
-    assert_eq!(counts(&backup)?, (1, 1, 0));
+    assert!(restored.recovery_required()?.is_empty());
+    let reissued = seal(&mut restored, &first, &h)?;
+    restored.execute(&edit("after restore"), Fault::None)?;
+    assert_eq!(counts(&backup)?, (2, 2, 1));
+    // Its handoff closes the old writer empty, which the original's record
+    // contradicts: receivers freeze the device rather than pick a branch.
     let mut inbox = h.inbox(&dir.path().join("receiver.db"));
     for bytes in Delivery::open(&backup, &binding(&h), true)?.announcements()? {
         inbox.receive_writer(&bytes, okay)?;
     }
     inbox.receive(GENERATION, 1, &original, okay)?;
+    inbox.receive(GENERATION, 2, &reissued, okay)?;
     inbox.process(&h.key, okay)?;
-    assert_eq!(inbox.entries()?[0].status, "fork");
-    assert_eq!(restored.recovery_required()?, retained);
+    assert!(inbox.entries()?.iter().all(|e| e.status == "fork"));
     Ok(())
 }
 
@@ -449,7 +450,7 @@ fn atomic_sender_crash_worker() -> TestResult<()> {
         },
     )?;
     sender.seal(
-        batch(&request)?,
+        batch(&request.id)?,
         random,
         |header, plain| Ok(seal_fixture(header, &epoch_key(0), plain, &device)?),
         hook,
@@ -523,10 +524,18 @@ fn atomic_sender_process_exit_boundaries() -> TestResult<()> {
             assert!(sender.projection()?.entities.is_empty());
         }
         if (3..7).contains(&index) {
-            assert_eq!(sender.recovery_required()?.len(), 1);
-            assert!(sender.execute(&edit("blocked"), Fault::None).is_err());
+            // Saved but never sealed: re-issued by the new writer, then
+            // sealed and received like any other edit.
+            assert!(sender.recovery_required()?.is_empty());
+            sender.seal(
+                batch(&request.id)?,
+                random,
+                |header, plain| Ok(seal_fixture(header, &h.cek, plain, &h.s.b)?),
+                |_| Ok(()),
+            )?;
+            sender.execute(&edit("not blocked"), Fault::None)?;
         }
-        if index == 7 {
+        if index >= 3 {
             let delivery = Delivery::open(&path, &bind, true)?;
             let mut inbox = h.inbox(&dir.path().join("receiver.db"));
             for bytes in delivery.announcements()? {
@@ -534,8 +543,275 @@ fn atomic_sender_process_exit_boundaries() -> TestResult<()> {
             }
             inbox.receive(GENERATION, 1, &delivery.pending()?[0].bytes, okay)?;
             inbox.process(&h.key, okay)?;
-            assert_eq!(inbox.projection()?, sender.projection()?);
+            assert_eq!(
+                inbox.projection()?.entities[TASK].title,
+                "private task",
+                "{index}: the creation was received"
+            );
         }
     }
+    Ok(())
+}
+
+fn writers(path: &Path) -> TestResult<i64> {
+    Ok(Connection::open(path)?.query_row("SELECT count(*) FROM writers", [], |r| r.get(0))?)
+}
+
+#[test]
+fn review_delivered_intents_do_not_count_against_the_in_flight_budget() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sender.db");
+    let mut sender = open(&path, &h)?;
+    let mut delivery = Delivery::open(&path, &binding(&h), false)?;
+    // Three times the budget of edits, each sealed and acknowledged.
+    for n in 0..48 {
+        let request = if n == 0 { creation() } else { edit("x") };
+        sender.execute(&request, Fault::None)?;
+        seal(&mut sender, &request, &h)?;
+        let id = delivery.record(batch(&request.id)?)?.unwrap().id;
+        delivery.acknowledge(id, |_| Ok(()))?;
+    }
+    assert_eq!(counts(&path)?, (48, 48, 48));
+    // Sixteen undelivered edits still fill it.
+    for _ in 0..16 {
+        sender.execute(&edit("y"), Fault::None)?;
+    }
+    assert!(sender.execute(&edit("overflow"), Fault::None).is_err());
+    assert_eq!(counts(&path)?.1, 64);
+    Ok(())
+}
+
+#[test]
+fn review_a_standalone_open_cannot_take_over_an_integrated_store() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sender.db");
+    let mut sender = open(&path, &h)?;
+    let first = creation();
+    sender.execute(&first, Fault::None)?;
+    seal(&mut sender, &first, &h)?;
+    drop(sender);
+    let before = writers(&path)?;
+    // As if the standalone open checked before the Sender created the file:
+    // hide the domain marker for the duration of the open.
+    let conn = Connection::open(&path)?;
+    conn.execute_batch("ALTER TABLE prototype_meta RENAME TO hidden_meta;")?;
+    drop(conn);
+    // Announced, like the Sender's own outbox, so only the composition
+    // tells them apart.
+    assert!(Outbox::open_announced(
+        &path,
+        binding(&h),
+        random,
+        |m| Ok(sign(m, &h.s.a)?),
+        |_| Ok(())
+    )
+    .is_err());
+    let conn = Connection::open(&path)?;
+    conn.execute_batch("ALTER TABLE hidden_meta RENAME TO prototype_meta;")?;
+    drop(conn);
+    assert_eq!(
+        writers(&path)?,
+        before,
+        "no standalone writer took ownership"
+    );
+    let mut sender = open(&path, &h)?;
+    sender.execute(&edit("still integrated"), Fault::None)?;
+    let mode: String =
+        Connection::open(&path)?.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+    assert_eq!(mode, "wal");
+    Ok(())
+}
+
+#[test]
+fn review_a_short_concurrent_write_delays_an_edit_instead_of_failing_it() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sender.db");
+    let mut sender = open(&path, &h)?;
+    sender.execute(&creation(), Fault::None)?;
+    let (locked, wait) = std::sync::mpsc::channel();
+    let other = path.clone();
+    // An acknowledgement-sized write on another connection.
+    let writer = std::thread::spawn(move || -> rusqlite::Result<()> {
+        let conn = Connection::open(other)?;
+        conn.execute_batch("BEGIN IMMEDIATE;")?;
+        locked.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        conn.execute_batch("COMMIT;")
+    });
+    wait.recv()?;
+    sender.execute(&edit("after a short wait"), Fault::None)?;
+    writer.join().unwrap()?;
+    assert_eq!(counts(&path)?.0, 2);
+    Ok(())
+}
+
+#[test]
+fn review_the_writer_commit_point_precedes_the_rest_of_the_open() -> TestResult<()> {
+    let mut h = Harness::new();
+    h.config.writers.clear();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sender.db");
+    let mut sender = open(&path, &h)?;
+    let first = creation();
+    sender.execute(&first, Fault::None)?;
+    let first_bytes = seal(&mut sender, &first, &h)?;
+    drop(sender);
+    // The second phase of the open (the projection) fails after the writer
+    // and its announcement have committed.
+    Connection::open(&path)?.execute_batch(
+        "CREATE TRIGGER refuse_projection BEFORE INSERT ON projection
+         BEGIN SELECT RAISE(ABORT, 'injected projection failure'); END;",
+    )?;
+    let before = writers(&path)?;
+    let mut points = vec![];
+    let failed = Sender::open(
+        &path,
+        binding(&h),
+        random,
+        |m| Ok(sign(m, &h.s.a)?),
+        |p| {
+            points.push(p);
+            Ok(())
+        },
+    );
+    assert!(failed.is_err());
+    assert_eq!(
+        points,
+        [OutPoint::BeforeWriterCommit, OutPoint::AfterWriterCommit],
+        "the commit point is reached before the open fails"
+    );
+    assert_eq!(
+        writers(&path)?,
+        before + 1,
+        "an announced writer was committed"
+    );
+    Connection::open(&path)?.execute_batch("DROP TRIGGER refuse_projection;")?;
+    // The orphaned announced writer is an empty link in the signed chain:
+    // the next open hands off past it and its edits are received.
+    let mut sender = open(&path, &h)?;
+    let request = edit("after the failed open");
+    sender.execute(&request, Fault::None)?;
+    let next = seal(&mut sender, &request, &h)?;
+    let mut inbox = h.inbox(&dir.path().join("receiver.db"));
+    for bytes in Delivery::open(&path, &binding(&h), true)?.announcements()? {
+        inbox.receive_writer(&bytes, okay)?;
+    }
+    inbox.receive(GENERATION, 1, &first_bytes, okay)?;
+    inbox.receive(GENERATION, 2, &next, okay)?;
+    inbox.process(&h.key, okay)?;
+    assert!(inbox
+        .writer_entries()?
+        .iter()
+        .all(|r| r.status == "admitted"));
+    assert_eq!(inbox.projection()?, sender.projection()?);
+    Ok(())
+}
+
+#[test]
+fn review_an_integrated_store_never_replays_an_inbox() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sender.db");
+    let mut sender = open(&path, &h)?;
+    sender.execute(&creation(), Fault::None)?;
+    drop(sender);
+    // A row no integrated API can write (receive is disabled).
+    Connection::open(&path)?.execute(
+        "INSERT INTO inbox(id,bytes,status,reason) VALUES ('stray',x'00','received','')",
+        [],
+    )?;
+    let sender = open(&path, &h)?;
+    assert_eq!(sender.projection()?.entities[TASK].title, "private task");
+    Ok(())
+}
+
+#[test]
+fn review_a_restart_before_sealing_reissues_the_edit_and_editing_continues() -> TestResult<()> {
+    for checkpointed in [false, true] {
+        let mut h = Harness::new();
+        h.config.writers.clear();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("sender.db");
+        let mut sender = open(&path, &h)?;
+        let first = creation();
+        sender.execute(&first, Fault::None)?;
+        let sealed = seal(&mut sender, &first, &h)?;
+        // Saved, never sealed; with a checkpoint that already holds it.
+        let stranded = edit("saved before the crash");
+        sender.execute(&stranded, Fault::None)?;
+        if checkpointed {
+            sender.checkpoint()?;
+        }
+        drop(sender);
+
+        let mut sender = open(&path, &h)?;
+        assert!(sender.recovery_required()?.is_empty());
+        assert_eq!(
+            sender.projection()?.entities[TASK].notes,
+            "saved before the crash"
+        );
+        let reissued = seal(&mut sender, &stranded, &h)?;
+        let later = edit("after the restart ");
+        sender.execute(&later, Fault::None)?;
+        let later_bytes = seal(&mut sender, &later, &h)?;
+        assert_eq!(counts(&path)?, (3, 3, 3));
+
+        let mut inbox = h.inbox(&dir.path().join("receiver.db"));
+        for bytes in Delivery::open(&path, &binding(&h), true)?.announcements()? {
+            inbox.receive_writer(&bytes, okay)?;
+        }
+        for (n, bytes) in [sealed, reissued, later_bytes].iter().enumerate() {
+            inbox.receive(GENERATION, n as i64 + 1, bytes, okay)?;
+        }
+        inbox.process(&h.key, okay)?;
+        assert!(
+            inbox.entries()?.iter().all(|e| e.status == "applied"),
+            "checkpointed {checkpointed}: {:?}",
+            inbox
+                .entries()?
+                .iter()
+                .map(|e| &e.reason)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(inbox.projection()?, sender.projection()?);
+        // A second restart has nothing left to re-issue.
+        drop(sender);
+        let sender = open(&path, &h)?;
+        assert_eq!(inbox.projection()?, sender.projection()?);
+    }
+    Ok(())
+}
+
+#[test]
+fn review_a_failed_reissue_leaves_the_stranded_edit_for_the_next_open() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sender.db");
+    let mut sender = open(&path, &h)?;
+    let first = creation();
+    sender.execute(&first, Fault::None)?;
+    drop(sender);
+    let journal = || -> TestResult<Vec<u8>> {
+        Ok(Connection::open(&path)?.query_row(
+            "SELECT bytes FROM journal WHERE id=?1",
+            [&first.id],
+            |r| r.get(0),
+        )?)
+    };
+    let before = journal()?;
+    Connection::open(&path)?.execute_batch(
+        "CREATE TRIGGER refuse_reissue BEFORE UPDATE OF writer ON intents
+         BEGIN SELECT RAISE(ABORT, 'injected reissue failure'); END;",
+    )?;
+    assert!(open(&path, &h).is_err());
+    assert_eq!(journal()?, before, "the journal row is unchanged");
+    Connection::open(&path)?.execute_batch("DROP TRIGGER refuse_reissue;")?;
+    let mut sender = open(&path, &h)?;
+    assert_ne!(journal()?, before, "re-issued on the next open");
+    assert!(sender.recovery_required()?.is_empty());
+    seal(&mut sender, &first, &h)?;
     Ok(())
 }

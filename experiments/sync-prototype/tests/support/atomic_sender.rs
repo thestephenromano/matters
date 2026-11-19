@@ -1,5 +1,7 @@
 //! Single-file domain + outbox experiment. Keys stay with trusted callbacks.
-use crate::encrypted_outbox::{Binding, Outbox, Point, RecoveryIntent, Stored, Writer};
+use crate::encrypted_outbox::{
+    Binding, Composition, Outbox, Point, RecoveryIntent, Stored, Writer,
+};
 use crate::record_chain::Id;
 use crate::support::Message;
 use matters_sync_prototype::{
@@ -8,15 +10,24 @@ use matters_sync_prototype::{
 use rusqlite::Transaction;
 use std::path::Path;
 
-/// Injective encoding of a canonical local UUID into the 32-byte batch slot.
-/// The zero suffix is padding, not entropy; this is not a record/key/nonce ID.
-pub fn batch(request: &Request) -> Result<Id> {
+/// Injective encoding of a canonical local request UUID into the 32-byte
+/// batch slot. The zero suffix is padding, not entropy; this is not a
+/// record/key/nonce ID.
+pub fn batch(request_id: &str) -> Result<Id> {
     let mut id = [0; 32];
-    id[..16].copy_from_slice(uuid::Uuid::parse_str(&request.id)?.as_bytes());
+    id[..16].copy_from_slice(uuid::Uuid::parse_str(request_id)?.as_bytes());
     Ok(id)
 }
+/// The request a batch encodes ([`batch`] reversed).
+fn request_id(batch: &Id) -> Result<String> {
+    if batch[16..].iter().any(|b| *b != 0) {
+        return Err(matters_sync_prototype::invalid(
+            "batch does not encode a request",
+        ));
+    }
+    Ok(uuid::Uuid::from_slice(&batch[..16])?.to_string())
+}
 struct Participant {
-    binding: Binding,
     writer: Writer,
 }
 impl LocalOutbox for Participant {
@@ -24,16 +35,23 @@ impl LocalOutbox for Participant {
         self.writer.actor
     }
     fn check_owner(&self, tx: &Transaction<'_>) -> Result<()> {
-        Outbox::check_owner(tx, &self.binding, self.writer)
+        Outbox::check_owner(tx, self.writer)
     }
     fn enqueue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()> {
+        // Opening re-issues stranded work first, so this holds unless that
+        // failed; new operations must not depend on unsendable ones.
         Outbox::require_reconciled(tx, self.writer)?;
-        let request = Request {
-            id: record.id.clone(),
-            commands: vec![],
-        };
-        Outbox::enqueue_on(tx, self.writer, batch(&request)?, &record.bytes)?;
+        Outbox::enqueue_on(tx, self.writer, batch(&record.id)?, &record.bytes)?;
         Ok(())
+    }
+    fn stranded(&self, tx: &Transaction<'_>) -> Result<Vec<String>> {
+        Outbox::stranded_on(tx, self.writer)?
+            .iter()
+            .map(request_id)
+            .collect()
+    }
+    fn reissue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()> {
+        Outbox::reissue_on(tx, self.writer, batch(&record.id)?, &record.bytes)
     }
 }
 pub struct Sender {
@@ -46,19 +64,29 @@ impl Sender {
         binding: Binding,
         random: impl FnMut() -> Result<Id>,
         sign: impl FnOnce(&Message) -> Result<Vec<u8>>,
-        mut hook: impl FnMut(Point) -> Result<()>,
+        hook: impl FnMut(Point) -> Result<()>,
     ) -> Result<Self> {
         let mut writer = None;
-        let replica = Replica::open_with_outbox(path, |tx, exists| {
-            let next = Outbox::start_writer(tx, &binding, random, Some(sign), exists)?;
-            hook(Point::BeforeWriterCommit)?;
-            writer = Some(next);
-            Ok(Box::new(Participant {
-                binding: binding.clone(),
-                writer: next,
-            }))
-        })?;
-        hook(Point::AfterWriterCommit)?;
+        let hook = std::cell::RefCell::new(hook);
+        let replica = Replica::open_with_outbox(
+            path,
+            |tx, exists| {
+                let next = Outbox::start_writer(
+                    tx,
+                    &binding,
+                    Composition::Atomic,
+                    random,
+                    Some(sign),
+                    exists,
+                )?;
+                hook.borrow_mut()(Point::BeforeWriterCommit)?;
+                writer = Some(next);
+                Ok(Box::new(Participant { writer: next }))
+            },
+            // Right after the writer and its announcement commit, before the
+            // rest of the open (projection, restore) can fail.
+            || hook.borrow_mut()(Point::AfterWriterCommit),
+        )?;
         let outbox = Outbox::attach(path, binding, writer.expect("setup committed"))?;
         Ok(Self { replica, outbox })
     }

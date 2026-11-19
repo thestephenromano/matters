@@ -71,18 +71,32 @@ pub struct InboxEntry {
 pub struct RestoreStats {
     pub snapshot_loaded: bool,
     pub replayed_records: usize,
+    /// Saved requests a retired writer never sealed, re-run as the new writer.
+    pub reissued_requests: usize,
 }
 
 /// Trusted test-only participant in the local SQLite write boundary. It must
 /// write its intent through this transaction and must not commit or publish it.
 /// The integrated store marker prevents reopening through the standalone API.
+/// Reachable only with the `local-outbox` feature (see `lib.rs`).
 pub trait LocalOutbox {
     fn actor(&self) -> u64;
     fn check_owner(&self, tx: &Transaction<'_>) -> Result<()>;
     fn enqueue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()>;
+    /// Request IDs whose intents a retired writer left unsealed, oldest
+    /// first. Their operations carry that writer's actor, which no receiver
+    /// accepts from any other writer, so they can never be sent as they are.
+    fn stranded(&self, tx: &Transaction<'_>) -> Result<Vec<String>>;
+    /// Point a stranded request's intent at this writer, with the operations
+    /// its request produced when re-run as this writer.
+    fn reissue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()>;
 }
-pub const ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/0";
+pub const ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/1";
+/// How long an integrated store's connections wait for another short write
+/// on the same file (a seal or an acknowledgement) before failing.
+pub const INTEGRATED_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 type OutboxSetup = fn(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>;
+type Committed = fn() -> Result<()>;
 
 pub struct Replica {
     conn: Connection,
@@ -105,49 +119,94 @@ fn configure(doc: &LoroDoc, jitter: u8) {
 }
 impl Replica {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::from_connection(Connection::open(path)?, true, None::<OutboxSetup>)
+        Self::from_connection(
+            Connection::open(path)?,
+            true,
+            None::<(OutboxSetup, Committed)>,
+        )
     }
     /// Explicit volatile replica for semantic fixtures; never a persistent WAL fallback.
     pub fn open_in_memory() -> Result<Self> {
-        Self::from_connection(Connection::open_in_memory()?, false, None::<OutboxSetup>)
+        Self::from_connection(
+            Connection::open_in_memory()?,
+            false,
+            None::<(OutboxSetup, Committed)>,
+        )
     }
     /// Open a dedicated integrated experiment. Schema and writer admission
-    /// commit together. Existing standalone databases are never converted.
+    /// commit together; `committed` runs right after that commit, before the
+    /// rest of the open. Existing standalone databases are never converted.
+    #[cfg(feature = "local-outbox")]
     pub fn open_with_outbox(
         path: impl AsRef<Path>,
         setup: impl FnOnce(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>,
+        committed: impl FnOnce() -> Result<()>,
     ) -> Result<Self> {
-        Self::from_connection(Connection::open(path)?, true, Some(setup))
+        Self::from_connection(Connection::open(path)?, true, Some((setup, committed)))
     }
     fn from_connection(
         mut conn: Connection,
         persistent: bool,
-        setup: Option<impl FnOnce(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>>,
+        setup: Option<(
+            impl FnOnce(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>,
+            impl FnOnce() -> Result<()>,
+        )>,
     ) -> Result<Self> {
+        let (setup, committed) = setup.unzip();
         let local_outbox = initialize(&mut conn, persistent, setup)?;
+        if let Some(committed) = committed {
+            committed()?;
+        }
+        let integrated = local_outbox.is_some();
         let doc = LoroDoc::new();
         let mut restore = RestoreStats::default();
-        let checkpoint: Option<(Vec<u8>, i64, Option<Vec<u8>>)> = conn
+        // Restore, re-run stranded requests and publish the projection in one
+        // write transaction: a failure leaves the store as it was, and the
+        // next open tries again.
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(outbox) = &local_outbox {
+            outbox.check_owner(&tx)?;
+        }
+        let stranded = match &local_outbox {
+            Some(outbox) => stranded_requests(&tx, &outbox.stranded(&tx)?)?,
+            None => vec![],
+        };
+        let first_stranded = stranded.first().map(|s| s.seq);
+        let checkpoint: Option<(Vec<u8>, i64, Option<Vec<u8>>)> = tx
             .query_row(
                 "SELECT bytes,through_seq,pending FROM checkpoint WHERE singleton=1",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let through_seq = if let Some((bytes, seq, pending)) = checkpoint {
-            doc.import(&bytes)?;
-            if let Some(pending) = pending {
-                doc.import(&pending)?;
+        let through_seq = match checkpoint {
+            // A checkpoint holding stranded operations cannot be used.
+            Some((_, seq, _)) if first_stranded.is_some_and(|first| seq >= first) => {
+                tx.execute("DELETE FROM checkpoint", [])?;
+                0
             }
-            restore.snapshot_loaded = true;
-            seq
-        } else {
-            0
+            Some((bytes, seq, pending)) => {
+                doc.import(&bytes)?;
+                if let Some(pending) = pending {
+                    doc.import(&pending)?;
+                }
+                restore.snapshot_loaded = true;
+                seq
+            }
+            None => 0,
         };
         {
-            let mut query = conn.prepare("SELECT bytes FROM journal WHERE seq>?1 ORDER BY seq")?;
-            for bytes in query.query_map([through_seq], |r| r.get::<_, Vec<u8>>(0))? {
-                doc.import(&bytes?)?;
+            let mut query =
+                tx.prepare("SELECT seq,bytes FROM journal WHERE seq>?1 ORDER BY seq")?;
+            let rows = query.query_map([through_seq], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (seq, bytes) = row?;
+                if stranded.iter().any(|s| s.seq == seq) {
+                    continue;
+                }
+                doc.import(&bytes)?;
                 restore.replayed_records += 1;
             }
         }
@@ -158,14 +217,38 @@ impl Replica {
             doc.set_peer_id(outbox.actor())?;
         }
         configure(&doc, CONCURRENT_JITTER_BYTES);
-        let identities = model::Index::build(&doc)?;
-        let state = model::project(&doc)?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut identities = model::Index::build(&doc)?;
         if let Some(outbox) = &local_outbox {
-            outbox.check_owner(&tx)?;
+            // Only the stranded requests' own no-op neighbours can follow them
+            // (sealing is in order, and new edits waited for this), so each
+            // re-runs on the state it first ran on.
+            for request in stranded {
+                let before = doc.oplog_vv();
+                for command in serde_json::from_str::<Vec<Command>>(&request.body)? {
+                    model::apply(&doc, &mut identities, command)?;
+                }
+                if doc.oplog_vv() == before {
+                    return Err(invalid("a stranded request no longer changes the document"));
+                }
+                let record = Record {
+                    id: request.id,
+                    bytes: doc.export(ExportMode::updates(&before))?,
+                };
+                tx.execute(
+                    "UPDATE journal SET bytes=?1 WHERE seq=?2",
+                    params![record.bytes, request.seq],
+                )?;
+                outbox.reissue(&tx, &record)?;
+                restore.reissued_requests += 1;
+            }
         }
+        let state = model::project(&doc)?;
         write_projection(&tx, &state)?;
-        refresh_inbox(&tx, &doc)?;
+        // An integrated store never receives (`receive` is disabled), so it
+        // has no inbox to refresh or replay.
+        if !integrated {
+            refresh_inbox(&tx, &doc)?;
+        }
         tx.commit()?;
         let mut replica = Self {
             conn,
@@ -176,6 +259,9 @@ impl Replica {
             restore,
             local_outbox,
         };
+        if integrated {
+            return Ok(replica);
+        }
         let received: Vec<_> = replica
             .inbox()?
             .into_iter()
@@ -221,15 +307,6 @@ impl Replica {
         configure(&stage, self.jitter);
         Ok(stage)
     }
-    fn stage(&self) -> Result<LoroDoc> {
-        let stage = self.doc.fork();
-        stage.set_peer_id(self.doc.peer_id())?;
-        if let Some(pending) = self.doc.export_pending_updates()? {
-            stage.import(&pending)?;
-        }
-        configure(&stage, self.jitter);
-        Ok(stage)
-    }
     pub fn execute(&mut self, request: &Request) -> Result<Record> {
         self.execute_with_fault(request, Fault::None)
     }
@@ -238,8 +315,13 @@ impl Replica {
             return Err(invalid("noncanonical request UUID"));
         }
         let body = serde_json::to_string(&request.commands)?;
-        let previous: Option<(Vec<u8>, Option<String>)> = self
+        // The retry lookup and the insert share one write transaction, so two
+        // handles can never both save one request. A retained receipt is a
+        // local read and needs no ownership; a new save does.
+        let tx = self
             .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous: Option<(Vec<u8>, Option<String>)> = tx
             .query_row(
                 "SELECT bytes,request_body FROM journal WHERE id=?1 AND outgoing=1",
                 [&request.id],
@@ -255,7 +337,7 @@ impl Replica {
                 bytes,
             });
         }
-        let stage = self.stage()?;
+        let stage = stage_of(&self.doc, self.jitter)?;
         let before = stage.oplog_vv();
         let mut identities = self.identities.clone();
         for command in &request.commands {
@@ -266,9 +348,6 @@ impl Replica {
             id: request.id.clone(),
             bytes: stage.export(ExportMode::updates(&before))?,
         };
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(outbox) = &self.local_outbox {
             outbox.check_owner(&tx)?;
             // A no-op still retains the request receipt, but has no engine
@@ -282,7 +361,9 @@ impl Replica {
             params![record.id, record.bytes, body],
         )?;
         write_projection(&tx, &state)?;
-        refresh_inbox(&tx, &stage)?;
+        if self.local_outbox.is_none() {
+            refresh_inbox(&tx, &stage)?;
+        }
         if fault == Fault::BeforeCommit {
             return Err(invalid("injected failure before commit"));
         }
@@ -574,6 +655,43 @@ fn write_projection(tx: &Transaction<'_>, projection: &Projection) -> Result<()>
     )?;
     Ok(())
 }
+struct Stranded {
+    seq: i64,
+    id: String,
+    body: String,
+}
+/// The journal rows of stranded requests, in journal order.
+fn stranded_requests(tx: &Transaction<'_>, ids: &[String]) -> Result<Vec<Stranded>> {
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let (seq, body): (i64, Option<String>) = tx
+            .query_row(
+                "SELECT seq,request_body FROM journal WHERE id=?1 AND outgoing=1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| invalid("stranded intent has no saved request"))?;
+        let body = body.ok_or_else(|| invalid("stranded request has no saved body"))?;
+        out.push(Stranded {
+            seq,
+            id: id.clone(),
+            body,
+        });
+    }
+    out.sort_by_key(|s| s.seq);
+    Ok(out)
+}
+/// A fork of `doc` to stage a request in, configured like the replica.
+fn stage_of(doc: &LoroDoc, jitter: u8) -> Result<LoroDoc> {
+    let stage = doc.fork();
+    stage.set_peer_id(doc.peer_id())?;
+    if let Some(pending) = doc.export_pending_updates()? {
+        stage.import(&pending)?;
+    }
+    configure(&stage, jitter);
+    Ok(stage)
+}
 fn initialize(
     conn: &mut Connection,
     persistent: bool,
@@ -582,7 +700,8 @@ fn initialize(
     let integrated = setup.is_some();
     validate_format(conn, integrated)?;
     if integrated {
-        conn.busy_timeout(std::time::Duration::ZERO)?;
+        // Seals and acknowledgements share the file and are short.
+        conn.busy_timeout(INTEGRATED_BUSY_TIMEOUT)?;
     }
     let (pragma, expected_mode) = if persistent {
         ("PRAGMA journal_mode=WAL", "wal")

@@ -7,11 +7,28 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FORMAT: &str = "matters-encrypted-outbox/2";
-// Small retained-history experiment: at most 16 MiB each of intent plaintext and
-// ciphertext payload. Writer and reservation history is retained without a
-// lifetime cap: transient contention/restarts must not exhaust recovery access.
+const FORMAT: &str = "matters-encrypted-outbox/3";
+// Small in-flight experiment: at most 16 intents not yet acknowledged, so at
+// most 16 MiB each of undelivered plaintext and ciphertext payload. Delivered
+// history is retained without a lifetime cap, as are writer and reservation
+// history: neither use nor transient contention/restarts may exhaust editing.
 const MAX_INTENTS: i64 = 16;
+
+/// Which store an outbox lives in, recorded with its binding. A store's
+/// composition never changes, so no open path can take over the other kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Composition {
+    Standalone,
+    Atomic,
+}
+impl Composition {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Standalone => "standalone",
+            Self::Atomic => "atomic",
+        }
+    }
+}
 
 use matters_sync_prototype::invalid as error;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +109,17 @@ fn active(conn: &Connection, writer: Writer) -> Result<()> {
         })?;
     if owner != writer.incarnation {
         return Err(error("writer fenced by a newer open"));
+    }
+    Ok(())
+}
+fn refuse_integrated(conn: &Connection) -> Result<()> {
+    let integrated: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='prototype_meta')",
+        [],
+        |r| r.get(0),
+    )?;
+    if integrated {
+        return Err(error("integrated store requires atomic sender open"));
     }
     Ok(())
 }
@@ -249,14 +277,7 @@ impl Outbox {
         binding.validate()?;
         let mut conn = Connection::open(path)?;
         validate_database(&conn)?;
-        let integrated: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='prototype_meta')",
-            [],
-            |r| r.get(0),
-        )?;
-        if integrated {
-            return Err(error("integrated store requires atomic sender open"));
-        }
+        refuse_integrated(&conn)?;
         // Keep this bounded experiment on rollback journaling: its contention
         // fixtures and durability contract are defined for DELETE/FULL.
         let mode: String = conn.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))?;
@@ -266,8 +287,18 @@ impl Outbox {
         conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
         conn.busy_timeout(std::time::Duration::ZERO)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Again under the write lock: a Sender may have created the store
+        // since the check above. Its recorded composition is checked below.
+        refuse_integrated(&tx)?;
         let exists = validate_database(&tx)?;
-        let writer = Self::start_writer(&tx, &binding, &mut random, sign, exists)?;
+        let writer = Self::start_writer(
+            &tx,
+            &binding,
+            Composition::Standalone,
+            &mut random,
+            sign,
+            exists,
+        )?;
         hook(Point::BeforeWriterCommit)?;
         tx.commit()?;
         hook(Point::AfterWriterCommit)?;
@@ -282,6 +313,7 @@ impl Outbox {
     pub(super) fn start_writer(
         tx: &Transaction<'_>,
         binding: &Binding,
+        composition: Composition,
         mut random: impl FnMut() -> Result<Id>,
         sign: Option<impl FnOnce(&Message) -> Result<Vec<u8>>>,
         exists: bool,
@@ -293,6 +325,14 @@ impl Outbox {
         }
         let announced = sign.is_some();
         let previous = if exists {
+            let old_composition: String = tx.query_row(
+                "SELECT composition FROM outbox_meta WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?;
+            if old_composition != composition.name() {
+                return Err(error("outbox belongs to another store composition"));
+            }
             let old_mode: bool = tx.query_row(
                 "SELECT announced FROM outbox_meta WHERE singleton=1",
                 [],
@@ -311,7 +351,7 @@ impl Outbox {
         let incarnation = random()?;
         let actor = u64::from_le_bytes(random()?[..8].try_into()?);
         tx.execute_batch("CREATE TABLE IF NOT EXISTS writers(seq INTEGER NOT NULL UNIQUE CHECK(seq>0),incarnation BLOB PRIMARY KEY CHECK(length(incarnation)=32),actor BLOB NOT NULL UNIQUE CHECK(length(actor)=8),head BLOB CHECK(head IS NULL OR length(head)=48),announcement BLOB);
-            CREATE TABLE IF NOT EXISTS outbox_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,binding BLOB NOT NULL,owner BLOB NOT NULL REFERENCES writers(incarnation),announced INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS outbox_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,binding BLOB NOT NULL,owner BLOB NOT NULL REFERENCES writers(incarnation),announced INTEGER NOT NULL,composition TEXT NOT NULL CHECK(composition IN ('standalone','atomic')));
             CREATE TABLE IF NOT EXISTS intents(seq INTEGER PRIMARY KEY,batch BLOB NOT NULL UNIQUE CHECK(length(batch)=32),writer BLOB NOT NULL REFERENCES writers(incarnation),plaintext BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(seq INTEGER PRIMARY KEY,id BLOB NOT NULL UNIQUE CHECK(length(id)=32),intent INTEGER NOT NULL REFERENCES intents(seq),header BLOB NOT NULL,status TEXT NOT NULL CHECK(status IN ('reserved','abandoned','sealed')));
             CREATE TABLE IF NOT EXISTS sealed(intent INTEGER PRIMARY KEY REFERENCES intents(seq),record_id BLOB NOT NULL UNIQUE REFERENCES attempts(id),bytes BLOB NOT NULL,acked INTEGER NOT NULL DEFAULT 0 CHECK(acked IN (0,1)));")?;
@@ -365,7 +405,7 @@ impl Outbox {
                 announcement
             ],
         )?;
-        tx.execute("INSERT INTO outbox_meta VALUES (1,?1,?2,?3,?4) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner", params![FORMAT, encoded, incarnation.as_slice(), announced])?;
+        tx.execute("INSERT INTO outbox_meta VALUES (1,?1,?2,?3,?4,?5) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner", params![FORMAT, encoded, incarnation.as_slice(), announced, composition.name()])?;
         // Reservations are never resumed, even when the process may have died
         // before entering the crypto provider. Retain every consumed ID.
         tx.execute(
@@ -384,13 +424,23 @@ impl Outbox {
             [],
             |r| r.get(0),
         )?;
+        let composition: String = conn.query_row(
+            "SELECT composition FROM outbox_meta WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
         let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
-        if format != matters_sync_prototype::ATOMIC_FORMAT || mode != "wal" {
+        if format != matters_sync_prototype::ATOMIC_FORMAT
+            || composition != Composition::Atomic.name()
+            || mode != "wal"
+        {
             return Err(error("integrated WAL store required"));
         }
         conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
         active(&conn, writer)?;
-        conn.busy_timeout(std::time::Duration::ZERO)?;
+        // Seals share the file with local edits and acknowledgements; their
+        // transactions are short, so wait briefly rather than fail at once.
+        conn.busy_timeout(matters_sync_prototype::INTEGRATED_BUSY_TIMEOUT)?;
         Ok(Self {
             conn,
             binding,
@@ -443,20 +493,56 @@ impl Outbox {
                 Err(error("batch identity conflicts with retained intent"))
             };
         }
-        count_limit(tx, "SELECT count(*) FROM intents", MAX_INTENTS)?;
+        // Only undelivered work counts: acknowledged intents are history.
+        count_limit(
+            tx,
+            "SELECT count(*) FROM intents WHERE NOT EXISTS
+             (SELECT 1 FROM sealed WHERE intent=intents.seq AND acked=1)",
+            MAX_INTENTS,
+        )?;
         tx.execute(
             "INSERT INTO intents(batch,writer,plaintext) VALUES (?1,?2,?3)",
             params![batch.as_slice(), writer.incarnation.as_slice(), plaintext],
         )?;
         Ok(true)
     }
-    pub(super) fn check_owner(
-        tx: &Transaction<'_>,
-        binding: &Binding,
-        writer: Writer,
-    ) -> Result<()> {
-        check_binding(tx, binding)?;
+    /// The binding is checked once when the writer starts and never changes;
+    /// ownership is what a newer open takes away.
+    pub(super) fn check_owner(tx: &Transaction<'_>, writer: Writer) -> Result<()> {
         active(tx, writer)
+    }
+    /// Batches a retired writer left unsealed, oldest first.
+    pub(super) fn stranded_on(tx: &Transaction<'_>, writer: Writer) -> Result<Vec<Id>> {
+        active(tx, writer)?;
+        let mut query = tx.prepare(
+            "SELECT batch FROM intents WHERE writer!=?1
+             AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq) ORDER BY seq",
+        )?;
+        let rows = query.query_map([writer.incarnation.as_slice()], |r| blob(r, 0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+    /// Re-point a retired writer's unsealed intent at `writer`, with the
+    /// operations its request produced when re-run by `writer`'s actor. Its
+    /// place in the queue is kept; abandoned reservations stay as history.
+    pub(super) fn reissue_on(
+        tx: &Transaction<'_>,
+        writer: Writer,
+        batch: Id,
+        plaintext: &[u8],
+    ) -> Result<()> {
+        if plaintext.len() > wire::MAX_PLAINTEXT_BYTES {
+            return Err(error("intent payload exceeds bound"));
+        }
+        active(tx, writer)?;
+        let changed = tx.execute(
+            "UPDATE intents SET writer=?1,plaintext=?2 WHERE batch=?3 AND writer!=?1
+             AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq)",
+            params![writer.incarnation.as_slice(), plaintext, batch.as_slice()],
+        )?;
+        if changed != 1 {
+            return Err(error("no stranded intent for this batch"));
+        }
+        Ok(())
     }
     pub(super) fn require_reconciled(tx: &Transaction<'_>, writer: Writer) -> Result<()> {
         let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM intents WHERE writer!=?1 AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq))", [writer.incarnation.as_slice()], |r| r.get(0))?;

@@ -839,3 +839,44 @@ fn format_one_journal_migrates_to_id_and_bytes_uniqueness() -> Result<()> {
     assert_eq!(format, "matters-sync-prototype/2");
     Ok(())
 }
+
+/// Two handles saving one request must agree: the retry lookup and the insert
+/// share one write transaction.
+#[test]
+fn review_a_request_saved_concurrently_by_another_handle_is_seen_under_the_write_lock() -> Result<()>
+{
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("r.db");
+    let mut replica = Replica::open(&path)?;
+    let request = Request::new(create(1));
+    let other = path.clone();
+    let request_id = request.id.clone();
+    let (locked, wait) = std::sync::mpsc::channel();
+    // Another handle saves the same request ID, with another body, and is
+    // still committing when this handle starts.
+    let saver = std::thread::spawn(move || -> rusqlite::Result<()> {
+        let conn = rusqlite::Connection::open(other)?;
+        conn.execute_batch("BEGIN IMMEDIATE;")?;
+        conn.execute(
+            "INSERT INTO journal(id,bytes,outgoing,request_body) VALUES (?1,x'00',1,'[]')",
+            [&request_id],
+        )?;
+        locked.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        conn.execute_batch("COMMIT;")
+    });
+    wait.recv()?;
+    let result = replica.execute(&request);
+    saver.join().unwrap()?;
+    assert!(
+        result.is_err(),
+        "the other handle's save is seen: the ID was reused with another body"
+    );
+    let rows: i64 = rusqlite::Connection::open(&path)?.query_row(
+        "SELECT count(*) FROM journal WHERE id=?1",
+        [&request.id],
+        |r| r.get(0),
+    )?;
+    assert_eq!(rows, 1, "one journal row per request");
+    Ok(())
+}
