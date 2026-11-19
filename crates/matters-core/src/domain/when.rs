@@ -46,7 +46,10 @@ impl Schedule {
     /// Anything that isn't clearly a day is refused (`None`), never guessed:
     /// unknown words, dates before `today`, and phrases with a time of day
     /// (times belong to reminders, #60). A date phrase meaning `today` is
-    /// Today. Case and extra spaces don't matter.
+    /// Today, but only if it names the day itself (`wed` on a Wednesday,
+    /// `nov 18`, `0 days`): `interim` also reads phrases that name no day,
+    /// such as `week`, `this month` or `midnight`, as the day it was given,
+    /// and those are refused (#134). Case and extra spaces don't matter.
     ///
     /// On top of `interim`: `in 3 days` is read as `3 days`, and a month and
     /// day without a year (`jan 5`, `1/5`) that has passed this year means
@@ -77,8 +80,10 @@ impl Schedule {
             DateOrder::DayFirst => Dialect::Uk,
         };
         let parsed = interim::parse_date_string(&text, midnight, dialect).ok()?;
-        if parsed.time() != Time::midnight() {
-            return None; // a time of day
+        // A time of day. `interim` gives a date with no time as midnight,
+        // so a time typed as midnight (`12am`, `0:00`) is found in the text.
+        if parsed.time() != Time::midnight() || names_a_time(&text) {
+            return None;
         }
         let mut date = parsed.date();
         if date < today && names_a_day_of_the_year(&text) {
@@ -88,7 +93,11 @@ impl Schedule {
         }
         match date.cmp(&today) {
             std::cmp::Ordering::Less => None,
-            std::cmp::Ordering::Equal => Some(Schedule::Today { evening: false }),
+            std::cmp::Ordering::Equal if names_a_day(&text) => {
+                Some(Schedule::Today { evening: false })
+            }
+            // `interim`'s answer for a phrase that names no day.
+            std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(Schedule::Date(date)),
         }
     }
@@ -119,30 +128,74 @@ impl Schedule {
     }
 }
 
+const MONTHS: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+const WEEKDAYS: [&str; 7] = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+];
+
+/// Whether a word of `text` is one of `names` or its abbreviation (three
+/// letters or more: `dec`, `wed`, `sept`).
+fn has_name(text: &str, names: &[&str]) -> bool {
+    text.split_whitespace().any(|t| {
+        let word = t.trim_matches(|c: char| !c.is_alphabetic());
+        word.len() >= 3 && names.iter().any(|n| n.starts_with(word))
+    })
+}
+
+/// Whether `text` gives a clock time: `h:mm` (`0:00`, `9:30`, `9:30pm`), or
+/// an hour with am or pm (`12am`, `9 pm`).
+fn names_a_time(text: &str) -> bool {
+    let hour = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    tokens.iter().enumerate().any(|(i, t)| {
+        let hours_minutes = t.split_once(':').is_some_and(|(h, m)| {
+            !h.is_empty()
+                && h.chars().all(|c| c.is_ascii_digit())
+                && m.starts_with(|c: char| c.is_ascii_digit())
+        });
+        let meridiem = t
+            .strip_suffix("am")
+            .or_else(|| t.strip_suffix("pm"))
+            .is_some_and(hour)
+            || (matches!(*t, "am" | "pm") && i > 0 && hour(tokens[i - 1]));
+        hours_minutes || meridiem
+    })
+}
+
+/// Whether `text` names a day: it has a number (`nov 18`, `11/18`,
+/// `0 days`), a weekday or a month. A bare unit (`week`), a span
+/// (`this month`) or a time (`midnight`) doesn't.
+fn names_a_day(text: &str) -> bool {
+    text.chars().any(|c| c.is_ascii_digit()) || has_name(text, &WEEKDAYS) || has_name(text, &MONTHS)
+}
+
 /// Whether `text` names a day of the year without a year: it contains a
 /// month name (`jan 5`, `5 january`) or is a numeric `month/day` pair. Such a
 /// day is the next one to come, unlike relative phrases (`yesterday`,
 /// `last friday`), which keep their meaning.
 fn names_a_day_of_the_year(text: &str) -> bool {
-    const MONTHS: [&str; 12] = [
-        "january",
-        "february",
-        "march",
-        "april",
-        "may",
-        "june",
-        "july",
-        "august",
-        "september",
-        "october",
-        "november",
-        "december",
-    ];
     let tokens: Vec<&str> = text.split_whitespace().collect();
-    let month_name = tokens.iter().any(|t| {
-        let word = t.trim_matches(|c: char| !c.is_alphabetic());
-        word.len() >= 3 && MONTHS.iter().any(|m| m.starts_with(word))
-    });
+    let month_name = has_name(text, &MONTHS);
     let numeric_pair = tokens.len() == 1 && {
         let parts: Vec<&str> = tokens[0].split(['/', '.', '-']).collect();
         parts.len() == 2
@@ -155,7 +208,58 @@ fn names_a_day_of_the_year(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::names_a_day_of_the_year;
+    use super::{names_a_day, names_a_day_of_the_year, names_a_time};
+
+    #[test]
+    fn a_clock_time_is_h_mm_or_a_number_with_am_or_pm() {
+        for text in ["12am", "0:00", "9:30", "fri 9 pm", "9:30pm", "tomorrow 5pm"] {
+            assert!(names_a_time(text), "{text:?}");
+        }
+        for text in [
+            "dec 24",
+            "12/24",
+            "2026-12-24",
+            "in 3 days",
+            "am",
+            "pm",
+            "spam",
+            "ham 5",
+            ":30",
+            "a:30",
+        ] {
+            assert!(!names_a_time(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_day_is_named_by_a_number_a_weekday_or_a_month() {
+        for text in [
+            "nov 18",
+            "11/18",
+            "0 days",
+            "wed",
+            "wednesday",
+            "dec",
+            "sept",
+        ] {
+            assert!(names_a_day(text), "{text:?}");
+        }
+        for text in [
+            "week",
+            "months",
+            "this year",
+            "weekend",
+            "now",
+            "midnight",
+            "morning",
+            "mo",
+            "w",
+            "this",
+            "sec",
+        ] {
+            assert!(!names_a_day(text), "{text:?}");
+        }
+    }
 
     #[test]
     fn a_day_of_the_year_is_a_month_name_or_a_month_and_day() {

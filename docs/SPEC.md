@@ -140,7 +140,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Enter` | Selected task | Opens a field for a new task directly below the selected item (in the Inbox, Today and projects; elsewhere it focuses the quick-add field). `Enter` again saves it and opens the next; `Escape` or an empty `Enter` closes the field. In Today the new task joins the selected task's section |
 | `Space` | Selected task | Toggles inline expansion (notes + checklist) |
 | `F2` | Selected task | Opens the task with its title selected for editing; `Enter` saves and moves to the notes, `Escape` abandons the edit |
-| `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, and a calendar operable by keyboard). Past days and times of day are refused (`Schedule::parse_typed`) |
+| `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, and a calendar operable by keyboard). Past days, times of day and phrases that name no day (`week`, `this month`) are refused (`Schedule::parse_typed`) |
 | `Ctrl + D` | Selected task(s) | Opens the **Deadline** popover: a typed day (`fri`, `in 3 days`, `dec 24`), a calendar, *Today* or *Clear*. Rows show the deadline, in red when due today or overdue |
 | `Ctrl + Shift + M` | Selected task(s) | Opens **Move** popover (select destination Area / Project / Heading) |
 | `Enter` | Checklist item | Opens a field for a new item directly below; `Enter` again saves it and opens the next. `Escape` leaves the checklist, with the task still open |
