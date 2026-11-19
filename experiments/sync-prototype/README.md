@@ -93,3 +93,7 @@ The app, this standalone prototype and the optional measurement baseline each ru
 ### Durable authenticated receive
 
 The [fixed-epoch inbox experiment](../../docs/SYNC_DURABLE_RECEIVE.md) adds persistent encrypted receipt, authenticated chains, retained rejection/fork evidence and atomic task projection application. It uses the existing feature gates and test suite; it does not connect the application or implement a relay.
+
+## Atomic local edits and encrypted outbox
+
+The [atomic sender contract](../../docs/SYNC_ATOMIC_SENDER.md) connects the existing command boundary and outbox in one WAL database. Journal, projection and outgoing intent commit together; sealing follows the commit. The harness tests end-to-end encrypted delivery, request retry, SQL rollback, WAL contention, restored unsent work and eight additional process exits. A retired unsealed intent blocks new state-changing commands until explicit recovery; production migration, bidirectional receive integration and recovery UI remain open.

@@ -3,7 +3,7 @@
 use crate::record_chain::{hash, Hash, Id};
 use crate::support::{parse, Body, Message, Route};
 use matters_sync_prototype::{wire, Result};
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -249,6 +249,14 @@ impl Outbox {
         binding.validate()?;
         let mut conn = Connection::open(path)?;
         validate_database(&conn)?;
+        let integrated: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='prototype_meta')",
+            [],
+            |r| r.get(0),
+        )?;
+        if integrated {
+            return Err(error("integrated store requires atomic sender open"));
+        }
         // Keep this bounded experiment on rollback journaling: its contention
         // fixtures and durability contract are defined for DELETE/FULL.
         let mode: String = conn.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))?;
@@ -259,9 +267,29 @@ impl Outbox {
         conn.busy_timeout(std::time::Duration::ZERO)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists = validate_database(&tx)?;
+        let writer = Self::start_writer(&tx, &binding, &mut random, sign, exists)?;
+        hook(Point::BeforeWriterCommit)?;
+        tx.commit()?;
+        hook(Point::AfterWriterCommit)?;
+        Ok(Self {
+            conn,
+            binding,
+            writer,
+        })
+    }
+    /// Reuse the exact standalone writer initialization inside the domain
+    /// schema transaction. The caller owns the single commit.
+    pub(super) fn start_writer(
+        tx: &Transaction<'_>,
+        binding: &Binding,
+        mut random: impl FnMut() -> Result<Id>,
+        sign: Option<impl FnOnce(&Message) -> Result<Vec<u8>>>,
+        exists: bool,
+    ) -> Result<Writer> {
+        binding.validate()?;
         let encoded = serde_json::to_vec(&binding)?;
         if exists {
-            check_binding(&tx, &binding)?;
+            check_binding(tx, binding)?;
         }
         let announced = sign.is_some();
         let previous = if exists {
@@ -344,13 +372,29 @@ impl Outbox {
             "UPDATE attempts SET status='abandoned' WHERE status='reserved'",
             [],
         )?;
-        hook(Point::BeforeWriterCommit)?;
-        tx.commit()?;
-        hook(Point::AfterWriterCommit)?;
+        Ok(Writer { incarnation, actor })
+    }
+    /// Attach sealing/delivery to an already committed integrated writer.
+    /// This does not create a writer, switch journal mode or replay a request.
+    pub(super) fn attach(path: &Path, binding: Binding, writer: Writer) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        check_binding(&conn, &binding)?;
+        let format: String = conn.query_row(
+            "SELECT value FROM prototype_meta WHERE key='format'",
+            [],
+            |r| r.get(0),
+        )?;
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+        if format != matters_sync_prototype::ATOMIC_FORMAT || mode != "wal" {
+            return Err(error("integrated WAL store required"));
+        }
+        conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+        active(&conn, writer)?;
+        conn.busy_timeout(std::time::Duration::ZERO)?;
         Ok(Self {
             conn,
             binding,
-            writer: Writer { incarnation, actor },
+            writer,
         })
     }
     pub fn writer(&self) -> Writer {
@@ -368,7 +412,23 @@ impl Outbox {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        active(&tx, self.writer)?;
+        if !Self::enqueue_on(&tx, self.writer, batch, plaintext)? {
+            return Ok(());
+        }
+        hook(Point::BeforeIntentCommit)?;
+        tx.commit()?;
+        hook(Point::AfterIntentCommit)
+    }
+    pub(super) fn enqueue_on(
+        tx: &Transaction<'_>,
+        writer: Writer,
+        batch: Id,
+        plaintext: &[u8],
+    ) -> Result<bool> {
+        if plaintext.len() > wire::MAX_PLAINTEXT_BYTES {
+            return Err(error("intent payload exceeds bound"));
+        }
+        active(tx, writer)?;
         let old: Option<Vec<u8>> = tx
             .query_row(
                 "SELECT plaintext FROM intents WHERE batch=?1",
@@ -378,23 +438,32 @@ impl Outbox {
             .optional()?;
         if let Some(old) = old {
             return if old == plaintext {
-                Ok(())
+                Ok(false)
             } else {
                 Err(error("batch identity conflicts with retained intent"))
             };
         }
-        count_limit(&tx, "SELECT count(*) FROM intents", MAX_INTENTS)?;
+        count_limit(tx, "SELECT count(*) FROM intents", MAX_INTENTS)?;
         tx.execute(
             "INSERT INTO intents(batch,writer,plaintext) VALUES (?1,?2,?3)",
-            params![
-                batch.as_slice(),
-                self.writer.incarnation.as_slice(),
-                plaintext
-            ],
+            params![batch.as_slice(), writer.incarnation.as_slice(), plaintext],
         )?;
-        hook(Point::BeforeIntentCommit)?;
-        tx.commit()?;
-        hook(Point::AfterIntentCommit)
+        Ok(true)
+    }
+    pub(super) fn check_owner(
+        tx: &Transaction<'_>,
+        binding: &Binding,
+        writer: Writer,
+    ) -> Result<()> {
+        check_binding(tx, binding)?;
+        active(tx, writer)
+    }
+    pub(super) fn require_reconciled(tx: &Transaction<'_>, writer: Writer) -> Result<()> {
+        let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM intents WHERE writer!=?1 AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq))", [writer.incarnation.as_slice()], |r| r.get(0))?;
+        if blocked {
+            return Err(RecoveryRequired.into());
+        }
+        Ok(())
     }
     /// Existing sealed bytes return before RNG or crypto. A fresh reservation is
     /// committed before the FnOnce sealer is called. Never expose a resume API.

@@ -1186,3 +1186,6 @@ mod record_chain;
 mod encrypted_inbox;
 #[path = "cases/encrypted_inbox.rs"]
 mod inbox_cases;
+
+#[path = "support/atomic_sender.rs"]
+mod atomic_sender;

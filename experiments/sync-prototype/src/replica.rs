@@ -1,6 +1,6 @@
 use crate::{invalid, model, Command, Projection, Result};
 use loro::{ExportMode, LoroDoc};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -73,6 +73,17 @@ pub struct RestoreStats {
     pub replayed_records: usize,
 }
 
+/// Trusted test-only participant in the local SQLite write boundary. It must
+/// write its intent through this transaction and must not commit or publish it.
+/// The integrated store marker prevents reopening through the standalone API.
+pub trait LocalOutbox {
+    fn actor(&self) -> u64;
+    fn check_owner(&self, tx: &Transaction<'_>) -> Result<()>;
+    fn enqueue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()>;
+}
+pub const ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/0";
+type OutboxSetup = fn(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>;
+
 pub struct Replica {
     conn: Connection,
     doc: LoroDoc,
@@ -80,6 +91,7 @@ pub struct Replica {
     identities: model::Index,
     jitter: u8,
     restore: RestoreStats,
+    local_outbox: Option<Box<dyn LocalOutbox>>,
 }
 // Eight random bytes allocate the width of Loro's 64-bit peer namespace to
 // same-gap tie avoidance. This is a position-size budget, not a security claim.
@@ -93,14 +105,26 @@ fn configure(doc: &LoroDoc, jitter: u8) {
 }
 impl Replica {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::from_connection(Connection::open(path)?, true)
+        Self::from_connection(Connection::open(path)?, true, None::<OutboxSetup>)
     }
     /// Explicit volatile replica for semantic fixtures; never a persistent WAL fallback.
     pub fn open_in_memory() -> Result<Self> {
-        Self::from_connection(Connection::open_in_memory()?, false)
+        Self::from_connection(Connection::open_in_memory()?, false, None::<OutboxSetup>)
     }
-    fn from_connection(mut conn: Connection, persistent: bool) -> Result<Self> {
-        initialize(&mut conn, persistent)?;
+    /// Open a dedicated integrated experiment. Schema and writer admission
+    /// commit together. Existing standalone databases are never converted.
+    pub fn open_with_outbox(
+        path: impl AsRef<Path>,
+        setup: impl FnOnce(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>,
+    ) -> Result<Self> {
+        Self::from_connection(Connection::open(path)?, true, Some(setup))
+    }
+    fn from_connection(
+        mut conn: Connection,
+        persistent: bool,
+        setup: Option<impl FnOnce(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>>,
+    ) -> Result<Self> {
+        let local_outbox = initialize(&mut conn, persistent, setup)?;
         let doc = LoroDoc::new();
         let mut restore = RestoreStats::default();
         let checkpoint: Option<(Vec<u8>, i64, Option<Vec<u8>>)> = conn
@@ -127,10 +151,19 @@ impl Replica {
                 restore.replayed_records += 1;
             }
         }
+        if let Some(outbox) = &local_outbox {
+            if doc.oplog_vv().get(&outbox.actor()).copied().unwrap_or(0) != 0 {
+                return Err(invalid("new outbox actor already has domain history"));
+            }
+            doc.set_peer_id(outbox.actor())?;
+        }
         configure(&doc, CONCURRENT_JITTER_BYTES);
         let identities = model::Index::build(&doc)?;
         let state = model::project(&doc)?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(outbox) = &local_outbox {
+            outbox.check_owner(&tx)?;
+        }
         write_projection(&tx, &state)?;
         refresh_inbox(&tx, &doc)?;
         tx.commit()?;
@@ -141,6 +174,7 @@ impl Replica {
             identities,
             jitter: CONCURRENT_JITTER_BYTES,
             restore,
+            local_outbox,
         };
         let received: Vec<_> = replica
             .inbox()?
@@ -160,6 +194,9 @@ impl Replica {
     }
     /// Explicit fixture policy, separate from normal document initialization.
     pub fn set_test_peer(&mut self, peer: u64) -> Result<()> {
+        if self.local_outbox.is_some() {
+            return Err(invalid("integrated actor is owned by the outbox"));
+        }
         if self.doc.oplog_vv().get(&peer).copied().unwrap_or(0) != 0 {
             return Err(invalid("test peer already used"));
         }
@@ -229,7 +266,17 @@ impl Replica {
             id: request.id.clone(),
             bytes: stage.export(ExportMode::updates(&before))?,
         };
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(outbox) = &self.local_outbox {
+            outbox.check_owner(&tx)?;
+            // A no-op still retains the request receipt, but has no engine
+            // operations to authenticate or deliver.
+            if stage.oplog_vv() != before {
+                outbox.enqueue(&tx, &record)?;
+            }
+        }
         tx.execute(
             "INSERT INTO journal(id,bytes,outgoing,request_body) VALUES (?1,?2,1,?3)",
             params![record.id, record.bytes, body],
@@ -262,6 +309,11 @@ impl Replica {
     /// not depend on delivery order. A record waiting on dependencies cannot
     /// cause the dependency that releases it to be blamed for its content.
     pub fn receive(&mut self, record: &Record) -> Result<Admission> {
+        if self.local_outbox.is_some() {
+            return Err(invalid(
+                "integrated sender requires authenticated receive integration",
+            ));
+        }
         let journaled: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM journal WHERE id=?1 AND bytes=?2)",
             params![record.id, record.bytes],
@@ -429,7 +481,12 @@ impl Replica {
     }
     pub fn rebuild(&mut self) -> Result<()> {
         let state = model::project(&self.doc)?;
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(outbox) = &self.local_outbox {
+            outbox.check_owner(&tx)?;
+        }
         write_projection(&tx, &state)?;
         tx.commit()?;
         self.state = state;
@@ -438,7 +495,12 @@ impl Replica {
     pub fn checkpoint(&mut self) -> Result<()> {
         let snapshot = self.doc.export(ExportMode::Snapshot)?;
         let pending = self.doc.export_pending_updates()?;
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(outbox) = &self.local_outbox {
+            outbox.check_owner(&tx)?;
+        }
         let seq: i64 =
             tx.query_row("SELECT coalesce(max(seq),0) FROM journal", [], |r| r.get(0))?;
         tx.execute("INSERT INTO checkpoint(singleton,bytes,through_seq,pending) VALUES (1,?1,?2,?3) ON CONFLICT(singleton) DO UPDATE SET bytes=excluded.bytes,through_seq=excluded.through_seq,pending=excluded.pending",params![snapshot,seq,pending])?;
@@ -512,21 +574,15 @@ fn write_projection(tx: &Transaction<'_>, projection: &Projection) -> Result<()>
     )?;
     Ok(())
 }
-fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
-    if crate::has_user_schema(conn)? {
-        let marker = conn.query_row(
-            "SELECT value FROM prototype_meta WHERE key='format'",
-            [],
-            |r| r.get::<_, String>(0),
-        );
-        if !matches!(
-            marker.as_deref(),
-            Ok("matters-sync-prototype/0"
-                | "matters-sync-prototype/1"
-                | "matters-sync-prototype/2")
-        ) {
-            return Err(invalid("refusing to open a non-prototype database"));
-        }
+fn initialize(
+    conn: &mut Connection,
+    persistent: bool,
+    setup: Option<impl FnOnce(&Transaction<'_>, bool) -> Result<Box<dyn LocalOutbox>>>,
+) -> Result<Option<Box<dyn LocalOutbox>>> {
+    let integrated = setup.is_some();
+    validate_format(conn, integrated)?;
+    if integrated {
+        conn.busy_timeout(std::time::Duration::ZERO)?;
     }
     let (pragma, expected_mode) = if persistent {
         ("PRAGMA journal_mode=WAL", "wal")
@@ -540,7 +596,9 @@ fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
         )));
     }
     conn.execute_batch("PRAGMA synchronous=FULL;")?;
-    let tx = conn.transaction()?;
+    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let exists = validate_format(&tx, integrated)?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS prototype_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,id TEXT NOT NULL,bytes BLOB NOT NULL,outgoing INTEGER NOT NULL CHECK(outgoing IN (0,1)),UNIQUE(id,bytes));
         CREATE TABLE IF NOT EXISTS projection(id TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -588,10 +646,36 @@ fn initialize(conn: &mut Connection, persistent: bool) -> Result<()> {
             DROP TABLE journal;
             ALTER TABLE journal_v2 RENAME TO journal;")?;
     }
-    tx.execute_batch("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) SELECT id,bytes,'received','restoring admission status' FROM journal WHERE outgoing=0;
-        INSERT INTO prototype_meta VALUES ('format','matters-sync-prototype/2') ON CONFLICT(key) DO UPDATE SET value=excluded.value;")?;
+    tx.execute_batch("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) SELECT id,bytes,'received','restoring admission status' FROM journal WHERE outgoing=0;")?;
+    let outbox = setup.map(|setup| setup(&tx, exists)).transpose()?;
+    tx.execute("INSERT INTO prototype_meta VALUES ('format',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [if integrated { ATOMIC_FORMAT } else { "matters-sync-prototype/2" }])?;
     tx.commit()?;
-    Ok(())
+    Ok(outbox)
+}
+fn validate_format(conn: &Connection, integrated: bool) -> Result<bool> {
+    if !crate::has_user_schema(conn)? {
+        return Ok(false);
+    }
+    let marker = conn.query_row(
+        "SELECT value FROM prototype_meta WHERE key='format'",
+        [],
+        |r| r.get::<_, String>(0),
+    );
+    let valid = if integrated {
+        matches!(marker.as_deref(), Ok(ATOMIC_FORMAT))
+    } else {
+        matches!(
+            marker.as_deref(),
+            Ok("matters-sync-prototype/0"
+                | "matters-sync-prototype/1"
+                | "matters-sync-prototype/2")
+        )
+    };
+    if !valid {
+        return Err(invalid("refusing incompatible prototype database"));
+    }
+    Ok(true)
 }
 
 #[cfg(test)]
