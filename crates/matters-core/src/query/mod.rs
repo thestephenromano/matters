@@ -384,15 +384,17 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// QUICK FIND:
-    /// Instant fuzzy search matching titles or notes across open tasks, projects, and areas.
+    /// Instant search matching titles or notes across open tasks, projects,
+    /// and areas. The query is matched as typed, anywhere in the text, with
+    /// ASCII letters matched in either case; `%` and `_` are plain characters.
     pub fn quick_find(&self, query: &str) -> Result<QuickFindResult> {
-        let pattern = format!("%{}%", query);
+        let pattern = contains_pattern(query);
 
         self.db.with_conn(|conn| {
             // 1. Search Tasks
             let mut task_stmt = conn.prepare(&format!(
                 "SELECT {TASK_COLUMNS} FROM tasks
-                 WHERE {LIVE} AND status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
+                 WHERE {LIVE} AND status = 'open' AND (title LIKE ?1 ESCAPE '\\' OR notes LIKE ?1 ESCAPE '\\')
                  ORDER BY sort_order ASC LIMIT 20"
             ))?;
             let task_rows = task_stmt.query_map(params![pattern], Database::map_task_row)?;
@@ -404,7 +406,7 @@ impl<'a> QueryEngine<'a> {
             // 2. Search Projects
             let mut proj_stmt = conn.prepare(&format!(
                 "SELECT {PROJECT_COLUMNS} FROM projects
-                 WHERE {} AND status = 'open' AND (title LIKE ?1 OR notes LIKE ?1)
+                 WHERE {} AND status = 'open' AND (title LIKE ?1 ESCAPE '\\' OR notes LIKE ?1 ESCAPE '\\')
                  ORDER BY sort_order ASC LIMIT 10",
                 trash::LIVE_PROJECT
             ))?;
@@ -415,7 +417,7 @@ impl<'a> QueryEngine<'a> {
             // 3. Search Areas
             let mut area_stmt = conn.prepare(&format!(
                 "SELECT {AREA_COLUMNS} FROM areas
-                 WHERE {} AND title LIKE ?1
+                 WHERE {} AND title LIKE ?1 ESCAPE '\\'
                  ORDER BY sort_order ASC LIMIT 10",
                 trash::LIVE_AREA
             ))?;
@@ -430,4 +432,19 @@ impl<'a> QueryEngine<'a> {
             })
         })
     }
+}
+
+/// A `LIKE` pattern matching `query` literally anywhere in the text: `%`,
+/// `_` and the escape character `\` are escaped, for `ESCAPE '\'`.
+fn contains_pattern(query: &str) -> String {
+    let mut pattern = String::with_capacity(query.len() + 2);
+    pattern.push('%');
+    for c in query.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
 }
