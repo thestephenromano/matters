@@ -166,3 +166,84 @@ fn an_item_added_below_another_lands_right_under_it() {
         "nothing is added when below is in another checklist"
     );
 }
+
+/// Make every key update fail, as a busy or failing database would.
+fn refuse_key_updates(db: &Database) {
+    db.with_conn(|conn| {
+        conn.execute_batch(
+            "CREATE TRIGGER refuse_keys BEFORE UPDATE OF sort_order ON checklist_items
+             BEGIN SELECT RAISE(ABORT, 'injected key failure'); END;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn review_adding_below_stores_the_item_with_its_final_key_in_one_step() {
+    let db = db_with_tasks(&["t"]);
+    for id in ["a", "b"] {
+        add(&db, "t", id);
+    }
+    refuse_key_updates(&db);
+    // A midpoint needs no other key to change, so nothing is updated after
+    // the item is stored: it is added in place or not at all.
+    let mut new = ChecklistItem::new("n", "t", "new", 0.0);
+    add_checklist_item_below(&db, &mut new, "a").unwrap();
+    assert_eq!(titles(&db, "t"), ["a", "new", "b"]);
+}
+
+#[test]
+fn review_a_failed_add_below_leaves_the_checklist_unchanged() {
+    let db = db_with_tasks(&["t"]);
+    // Keys too close for a midpoint: placing renumbers the checklist.
+    for (id, key) in [("a", 1.0), ("b", 1.0 + 1e-9)] {
+        db.create_checklist_item(&ChecklistItem::new(id, "t", id, key))
+            .unwrap();
+    }
+    refuse_key_updates(&db);
+    let mut new = ChecklistItem::new("n", "t", "new", 0.0);
+    assert!(add_checklist_item_below(&db, &mut new, "a").is_err());
+    assert_eq!(titles(&db, "t"), ["a", "b"]);
+    assert!(db.get_checklist_item("n").unwrap().is_none());
+}
+
+#[test]
+fn review_progress_is_counted_across_query_chunks_by_an_index() {
+    let ids: Vec<String> = (0..1201).map(|i| format!("t{i:04}")).collect();
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let db = db_with_tasks(&refs);
+    for (n, task) in ["t0000", "t0499", "t0500", "t1200"].iter().enumerate() {
+        for i in 0..=n {
+            add(&db, task, &format!("{task}-{i}"));
+        }
+        db.set_checklist_item_done(&format!("{task}-0"), true)
+            .unwrap();
+    }
+    let progress = db.checklist_progress(&refs).unwrap();
+    assert_eq!(progress.len(), 4);
+    for (n, task) in ["t0000", "t0499", "t0500", "t1200"].iter().enumerate() {
+        assert_eq!(
+            progress[*task],
+            ChecklistProgress {
+                done: 1,
+                total: n + 1
+            }
+        );
+    }
+    let plan: Vec<String> = db
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "EXPLAIN QUERY PLAN SELECT task_id, SUM(is_completed), COUNT(*)
+                 FROM checklist_items WHERE task_id IN (?1, ?2) GROUP BY task_id",
+            )?;
+            let rows = stmt.query_map(["t0000", "t0001"], |r| r.get::<_, String>(3))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("idx_checklist_items_task")),
+        "{plan:?}"
+    );
+}

@@ -2,7 +2,9 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use super::schema::{MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, SCHEMA_V1};
+use super::schema::{
+    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, SCHEMA_V1,
+};
 use super::trash;
 use crate::domain::{Area, ChecklistItem, ChecklistProgress, Heading, Project, Status, Task};
 use crate::error::{MattersError, Result};
@@ -91,6 +93,7 @@ impl Database {
             (3, MIGRATION_V3),
             (4, MIGRATION_V4),
             (5, MIGRATION_V5),
+            (6, MIGRATION_V6),
         ] {
             if version < target {
                 let tx = conn.transaction()?;
@@ -670,41 +673,20 @@ impl Database {
     // =========================================================================
 
     pub fn create_checklist_item(&self, item: &ChecklistItem) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let is_completed = if item.is_completed { 1 } else { 0 };
-        conn.execute(
-            "INSERT INTO checklist_items (id, task_id, title, is_completed, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                item.id,
-                item.task_id,
-                item.title,
-                is_completed,
-                item.sort_order,
-                item.created_at,
-                item.updated_at,
-            ],
-        )?;
-        Ok(())
+        self.with_conn(|conn| insert_checklist_item(conn, item))
     }
 
     /// Add `item` at the end of its task's checklist. Its title is cleaned
     /// like a task's ([`Task::clean_title`]); a blank one is refused.
     pub fn add_checklist_item(&self, item: &mut ChecklistItem) -> Result<()> {
-        let Some(title) = Task::clean_title(&item.title) else {
-            return Err(MattersError::Validation(
-                "a checklist item needs a title".into(),
-            ));
-        };
-        item.title = title;
-        item.sort_order = self.with_conn(|conn| {
-            Ok(conn.query_row(
-                "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM checklist_items WHERE task_id = ?1",
-                params![item.task_id],
-                |r| r.get(0),
-            )?)
-        })?;
-        self.create_checklist_item(item)
+        item.title = checklist_title(&item.title)?;
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            item.sort_order = checklist_end_key(&tx, &item.task_id)?;
+            insert_checklist_item(&tx, item)?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     pub fn get_checklist_item(&self, id: &str) -> Result<Option<ChecklistItem>> {
@@ -739,11 +721,7 @@ impl Database {
     /// Rename a checklist item; the title is cleaned and a blank one refused,
     /// as for [`Self::add_checklist_item`].
     pub fn rename_checklist_item(&self, id: &str, title: &str) -> Result<()> {
-        let Some(title) = Task::clean_title(title) else {
-            return Err(MattersError::Validation(
-                "a checklist item needs a title".into(),
-            ));
-        };
+        let title = checklist_title(title)?;
         let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
         let changed = conn.execute(
@@ -766,22 +744,31 @@ impl Database {
     }
 
     /// How many of each task's checklist items are done, for the tasks in
-    /// `task_ids` that have a checklist.
+    /// `task_ids` that have a checklist. One indexed, grouped query per
+    /// 500 tasks, not one per task.
     pub fn checklist_progress(
         &self,
         task_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, ChecklistProgress>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT COALESCE(SUM(is_completed), 0), COUNT(*) FROM checklist_items WHERE task_id = ?1",
-        )?;
         let mut progress = std::collections::HashMap::new();
-        for id in task_ids {
-            let (done, total): (i64, i64) =
-                stmt.query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            if total > 0 {
+        for chunk in task_ids.chunks(PROGRESS_CHUNK) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT task_id, COALESCE(SUM(is_completed), 0), COUNT(*) FROM checklist_items
+                 WHERE task_id IN ({marks}) GROUP BY task_id"
+            ))?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, done, total) = row?;
                 progress.insert(
-                    id.to_string(),
+                    id,
                     ChecklistProgress {
                         done: done as usize,
                         total: total as usize,
@@ -911,5 +898,52 @@ fn checklist_item_found(changed: usize, id: &str) -> Result<()> {
             id: id.to_string(),
         });
     }
+    Ok(())
+}
+
+/// Tasks per [`Database::checklist_progress`] query: well inside SQLite's
+/// bound-parameter limit.
+const PROGRESS_CHUNK: usize = 500;
+
+/// A checklist item's title, cleaned like a task's; a blank one is refused.
+pub(crate) fn checklist_title(title: &str) -> Result<String> {
+    Task::clean_title(title)
+        .ok_or_else(|| MattersError::Validation("a checklist item needs a title".into()))
+}
+
+/// The key that puts a new item at the end of `task_id`'s checklist.
+pub(crate) fn checklist_end_key(conn: &Connection, task_id: &str) -> Result<f64> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM checklist_items WHERE task_id = ?1",
+        params![task_id],
+        |r| r.get(0),
+    )?)
+}
+
+/// Each item of `task_id`'s checklist with its key, in displayed order (as
+/// [`Database::list_checklist_items`]).
+pub(crate) fn checklist_keys(conn: &Connection, task_id: &str) -> Result<Vec<(String, f64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, sort_order FROM checklist_items WHERE task_id = ?1
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+    let rows = stmt.query_map(params![task_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+pub(crate) fn insert_checklist_item(conn: &Connection, item: &ChecklistItem) -> Result<()> {
+    conn.execute(
+        "INSERT INTO checklist_items (id, task_id, title, is_completed, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            item.id,
+            item.task_id,
+            item.title,
+            item.is_completed,
+            item.sort_order,
+            item.created_at,
+            item.updated_at,
+        ],
+    )?;
     Ok(())
 }

@@ -24,6 +24,9 @@ use rusqlite::params;
 use crate::domain::{ChecklistItem, Task, View};
 use crate::error::{MattersError, Result};
 use crate::query::QueryEngine;
+use crate::storage::db::{
+    checklist_end_key, checklist_keys, checklist_title, insert_checklist_item,
+};
 use crate::storage::Database;
 
 /// Smallest gap between neighbouring keys that still takes a midpoint.
@@ -248,24 +251,39 @@ pub fn move_checklist_item(db: &Database, id: &str, step: isize) -> Result<()> {
 }
 
 /// Add `item` to its task's checklist right below `below`, which must be in
-/// that checklist; nothing is added otherwise.
+/// that checklist; nothing is added otherwise. The item is stored with its
+/// final key in one transaction, so a failure leaves the checklist unchanged.
 pub fn add_checklist_item_below(
     db: &Database,
     item: &mut ChecklistItem,
     below: &str,
 ) -> Result<()> {
-    if !db
-        .list_checklist_items(&item.task_id)?
-        .iter()
-        .any(|i| i.id == below)
-    {
-        return Err(invalid(format!(
-            "'{below}' is not in the checklist of task '{}'",
-            item.task_id
-        )));
-    }
-    db.add_checklist_item(item)?;
-    place_checklist_item(db, &item.id, Some(below))
+    item.title = checklist_title(&item.title)?;
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        let mut list = checklist_keys(&tx, &item.task_id)?;
+        if !list.iter().any(|(i, _)| i == below) {
+            return Err(invalid(format!(
+                "'{below}' is not in the checklist of task '{}'",
+                item.task_id
+            )));
+        }
+        let end = checklist_end_key(&tx, &item.task_id)?;
+        list.push((item.id.clone(), end));
+        let mut changes = place(&list, &item.id, Some(below));
+        item.sort_order = end;
+        changes.retain(|(id, key)| {
+            let own = *id == item.id;
+            if own {
+                item.sort_order = *key;
+            }
+            !own
+        });
+        insert_checklist_item(&tx, item)?;
+        update_keys(&tx, "checklist_items", "sort_order", &changes)?;
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 /// The checklist holding item `id`, in order, with each item's key.
@@ -372,16 +390,23 @@ fn write(db: &Database, table: &str, column: &str, changes: &[(String, f64)]) ->
     }
     db.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
-        {
-            let mut stmt =
-                tx.prepare(&format!("UPDATE {table} SET {column} = ?1 WHERE id = ?2"))?;
-            for (id, key) in changes {
-                stmt.execute(params![key, id])?;
-            }
-        }
+        update_keys(&tx, table, column, changes)?;
         tx.commit()?;
         Ok(())
     })
+}
+
+fn update_keys(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    changes: &[(String, f64)],
+) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("UPDATE {table} SET {column} = ?1 WHERE id = ?2"))?;
+    for (id, key) in changes {
+        stmt.execute(params![key, id])?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

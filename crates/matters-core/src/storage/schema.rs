@@ -121,3 +121,9 @@ CREATE INDEX IF NOT EXISTS idx_areas_trashed ON areas(trashed_at);
 pub const MIGRATION_V5: &str = r#"
 ALTER TABLE tasks ADD COLUMN today_order REAL NOT NULL DEFAULT 0;
 "#;
+
+/// v6: a task's checklist is read by task, in order, on every list reload
+/// (progress) and when a task opens.
+pub const MIGRATION_V6: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_checklist_items_task ON checklist_items(task_id, sort_order);
+"#;
