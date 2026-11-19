@@ -212,6 +212,71 @@ impl Body {
             Self::Envelope { .. } => "key_envelope",
         }
     }
+    /// The lineage step a writer control claims, independent of its
+    /// randomized signature. `None` for non-writer bodies.
+    pub fn writer_claim(&self) -> Option<WriterClaim> {
+        let (manifest, document, device, incarnation, actor, previous) = match self {
+            Self::Writer {
+                manifest,
+                document,
+                device,
+                incarnation,
+                actor,
+                previous,
+            } => (
+                manifest,
+                document,
+                device,
+                incarnation,
+                actor,
+                previous.map(|p| (p, Boundary::Unbounded)),
+            ),
+            Self::Handoff {
+                manifest,
+                document,
+                device,
+                incarnation,
+                actor,
+                previous,
+                closing,
+            } => (
+                manifest,
+                document,
+                device,
+                incarnation,
+                actor,
+                Some((*previous, Boundary::Closed(*closing))),
+            ),
+            _ => return None,
+        };
+        Some(WriterClaim {
+            manifest: *manifest,
+            document: *document,
+            device: *device,
+            incarnation: *incarnation,
+            actor: *actor,
+            previous,
+        })
+    }
+}
+/// How a writer's predecessor was retired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Boundary {
+    /// Legacy `writer_start` replacement: the predecessor is retired for the
+    /// first-record helper but no retained content prefix was signed.
+    Unbounded,
+    /// `writer_handoff`: the exact signed closing head; null is empty.
+    Closed(Option<Hash>),
+}
+/// One signed writer lineage step, as distinct from the bytes signing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriterClaim {
+    pub manifest: Hash,
+    pub document: [u8; 16],
+    pub device: Hash,
+    pub incarnation: Id,
+    pub actor: u64,
+    pub previous: Option<(Id, Boundary)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
@@ -592,10 +657,7 @@ struct State {
 }
 #[derive(Clone)]
 struct Writer {
-    device: Hash,
-    actor: u64,
-    previous: Option<Id>,
-    closing: Option<Option<Hash>>,
+    claim: WriterClaim,
     signed_bytes: Vec<u8>,
 }
 #[derive(Clone)]
@@ -603,12 +665,13 @@ struct WriterLineage {
     head: Id,
     fork_evidence: Option<(Vec<u8>, Vec<u8>)>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WriterHistory {
     pub device: Hash,
-    /// Previous writer and its signed closing head; null head means empty.
-    pub predecessor: Option<(Id, Option<Hash>)>,
-    /// None: active. Some(None): closed empty. Some(Some(hash)): closed prefix.
-    pub closed: Option<Option<Hash>>,
+    /// Previous writer and how it was retired.
+    pub predecessor: Option<(Id, Boundary)>,
+    /// None: active. Otherwise how its admitted successor retired it.
+    pub closed: Option<Boundary>,
     pub frozen: bool,
 }
 #[derive(Clone)]
@@ -790,54 +853,19 @@ impl Authority {
         if p.message.route != self.route {
             return Err(Error::Context);
         }
-        let (manifest, document, device, incarnation, actor, previous, closing) =
-            match &p.message.body {
-                Body::Writer {
-                    manifest,
-                    document,
-                    device,
-                    incarnation,
-                    actor,
-                    previous,
-                } => (
-                    manifest,
-                    document,
-                    device,
-                    incarnation,
-                    actor,
-                    *previous,
-                    None,
-                ),
-                Body::Handoff {
-                    manifest,
-                    document,
-                    device,
-                    incarnation,
-                    actor,
-                    previous,
-                    closing,
-                } => (
-                    manifest,
-                    document,
-                    device,
-                    incarnation,
-                    actor,
-                    Some(*previous),
-                    Some(*closing),
-                ),
-                _ => return Err(Error::Unsupported),
-            };
-        if *document != expected_document {
+        let claim = p.message.body.writer_claim().ok_or(Error::Unsupported)?;
+        let document = claim.document;
+        if document != expected_document {
             return Err(Error::Context);
         }
-        if manifest != &self.current {
+        if claim.manifest != self.current {
             return Err(Error::Stale);
         }
-        if *device != p.message.signer {
+        if claim.device != p.message.signer {
             return Err(Error::Identity);
         }
-        verify(&p, &self.member(device)?.sig)?;
-        let lineage = (*document, *device);
+        verify(&p, &self.member(&claim.device)?.sig)?;
+        let lineage = (document, claim.device);
         if self
             .lineages
             .get(&lineage)
@@ -845,40 +873,45 @@ impl Authority {
         {
             return Err(Error::Fork);
         }
-        let index = (*document, *incarnation);
+        let index = (document, claim.incarnation);
         if let Some(old) = self.writers.get(&index) {
-            if old.signed_bytes == bytes {
+            // ML-DSA signing is randomized: a re-signed identical claim is the
+            // same lineage step, not a contradiction. The first bytes stay.
+            if old.claim == claim {
                 return Ok(false);
             }
-            if old.device == *device {
-                return self.freeze_writer(lineage, old.signed_bytes.clone(), bytes);
+            if old.claim.device == claim.device {
+                let first = old.signed_bytes.clone();
+                return Err(self.freeze_writer(lineage, first, bytes));
             }
             // A different device cannot freeze the owner by claiming its ID.
             return Err(Error::Actor);
         }
-        if let Some(prev) = previous {
+        let predecessor = claim.previous.map(|(prev, _)| prev);
+        if let Some(prev) = predecessor {
             let old = self
                 .writers
-                .get(&(*document, prev))
+                .get(&(document, prev))
                 .ok_or(Error::MissingPrevious)?;
-            if old.device != *device {
+            if old.claim.device != claim.device {
                 return Err(Error::Actor);
             }
         }
         // Same-device conflicting successor claims are evidence even when
         // they reuse an actor. Never let an arrival-dependent uniqueness check
         // hide two authenticated definitions of the same lineage step.
-        if let Some((_, first)) = self
-            .writers
-            .iter()
-            .find(|((doc, _), w)| doc == document && w.device == *device && w.previous == previous)
-        {
-            return self.freeze_writer(lineage, first.signed_bytes.clone(), bytes);
+        if let Some(first) = self.writers.iter().find_map(|((doc, _), w)| {
+            (*doc == document
+                && w.claim.device == claim.device
+                && w.claim.previous.map(|(prev, _)| prev) == predecessor)
+                .then(|| w.signed_bytes.clone())
+        }) {
+            return Err(self.freeze_writer(lineage, first, bytes));
         }
         if self
             .writers
             .iter()
-            .any(|((doc, _), w)| doc == document && w.actor == *actor)
+            .any(|((doc, _), w)| *doc == document && w.claim.actor == claim.actor)
         {
             return Err(Error::Actor);
         }
@@ -888,55 +921,71 @@ impl Authority {
         self.writers.insert(
             index,
             Writer {
-                device: *device,
-                actor: *actor,
-                previous,
-                closing,
+                claim,
                 signed_bytes: bytes.to_vec(),
             },
         );
         self.lineages.insert(
             lineage,
             WriterLineage {
-                head: *incarnation,
+                head: claim.incarnation,
                 fork_evidence: None,
             },
         );
         Ok(true)
     }
-    fn freeze_writer(
-        &mut self,
-        lineage: ([u8; 16], Hash),
-        first: Vec<u8>,
-        second: &[u8],
-    ) -> Result<bool> {
+    /// Record competing signed definitions; the result is always `Fork`.
+    fn freeze_writer(&mut self, lineage: ([u8; 16], Hash), first: Vec<u8>, second: &[u8]) -> Error {
+        match self.lineages.get_mut(&lineage) {
+            Some(l) => {
+                l.fork_evidence = Some((first, second.to_vec()));
+                Error::Fork
+            }
+            // Unreachable: both callers found an admitted writer of this lineage.
+            None => Error::Actor,
+        }
+    }
+    /// Whether a device's writer lineage for this document holds fork evidence.
+    pub fn lineage_frozen(&self, document: [u8; 16], device: &Hash) -> bool {
         self.lineages
-            .get_mut(&lineage)
-            .ok_or(Error::Actor)?
-            .fork_evidence = Some((first, second.to_vec()));
-        Err(Error::Fork)
+            .get(&(document, *device))
+            .is_some_and(|l| l.fork_evidence.is_some())
     }
     pub fn writer_history(&self, document: [u8; 16], incarnation: Id) -> Result<WriterHistory> {
-        let writer = self
-            .writers
-            .get(&(document, incarnation))
-            .ok_or(Error::MissingWriter)?;
-        let lineage = self
-            .lineages
-            .get(&(document, writer.device))
-            .ok_or(Error::Actor)?;
-        let closed = self
+        self.writer_histories(document)
+            .remove(&incarnation)
+            .ok_or(Error::MissingWriter)
+    }
+    /// Every admitted writer's lineage facts for one document, in one pass.
+    pub fn writer_histories(&self, document: [u8; 16]) -> BTreeMap<Id, WriterHistory> {
+        let mut out: BTreeMap<Id, WriterHistory> = self
             .writers
             .iter()
-            .find(|((doc, _), w)| *doc == document && w.previous == Some(incarnation))
-            .map(|(_, successor)| successor.closing.ok_or(Error::Unsupported))
-            .transpose()?;
-        Ok(WriterHistory {
-            device: writer.device,
-            predecessor: writer.previous.zip(writer.closing),
-            closed,
-            frozen: lineage.fork_evidence.is_some(),
-        })
+            .filter(|((doc, _), _)| *doc == document)
+            .map(|((_, incarnation), w)| {
+                (
+                    *incarnation,
+                    WriterHistory {
+                        device: w.claim.device,
+                        predecessor: w.claim.previous,
+                        closed: None,
+                        frozen: self.lineage_frozen(document, &w.claim.device),
+                    },
+                )
+            })
+            .collect();
+        for w in self
+            .writers
+            .values()
+            .filter(|w| w.claim.document == document)
+        {
+            if let Some((prev, boundary)) = w.claim.previous {
+                if let Some(h) = out.get_mut(&prev) {
+                    h.closed = Some(boundary);
+                }
+            }
+        }
+        out
     }
     pub fn wrap_key(&self, admin: &Device, recipient: Hash, key: &Id) -> Result<Vec<u8>> {
         if admin.id()? != self.admin()? {
@@ -1102,15 +1151,21 @@ impl Authority {
             return Err(Error::Stale);
         }
         let author = self.member(h.author)?;
-        let writer = self
-            .writers
-            .get(&(*document, *h.incarnation))
-            .ok_or(if active_only {
-                Error::Actor
-            } else {
-                Error::MissingWriter
-            })?;
-        if writer.device != *h.author {
+        let Some(writer) = self.writers.get(&(*document, *h.incarnation)) else {
+            if active_only {
+                return Err(Error::Actor);
+            }
+            // Only a current member's authenticated record may wait for its
+            // writer admission; forged or unsigned bytes are rejected now.
+            verify_signature(
+                &author.sig,
+                p.signed_bytes,
+                h.kind.signature_context(),
+                p.signature,
+            )?;
+            return Err(Error::MissingWriter);
+        };
+        if writer.claim.device != *h.author {
             return Err(Error::Actor);
         }
         let lineage = self
@@ -1132,7 +1187,7 @@ impl Authority {
         Ok(AuthenticatedData {
             parsed: p,
             key,
-            actor: writer.actor,
+            actor: writer.claim.actor,
         })
     }
     /// First-record regression helper; durable receive uses authenticate_data.

@@ -10,10 +10,10 @@
     "docs/SQLITE_UPGRADE.md": "27ef2d121635390b369111155a274451dfcea73beacfe0131fd0647fef7eb3fd",
     "docs/SYNC_DESIGN.md": "e2ac4048c8b27a43d782ad43b9ed6833586f84ac12be952295688565a907c341",
     "docs/SYNC_DURABLE_RECEIVE.md": "ab6c64d84736a2bd9bdcf9b980964ef468cf6eb72f349cf241f85af5da16ae89",
-    "docs/SYNC_ENCRYPTED_OUTBOX.md": "5df117ff213e8785b8794f5cfdaa927e3645bbda3d109916d3caa78f4ea8e7b3",
-    "docs/SYNC_KEY_DISTRIBUTION.md": "198006fdc55c385087a7eaca8e5f2c11ed1b381c80eaf873cf03ad5cd83f3bd8",
+    "docs/SYNC_ENCRYPTED_OUTBOX.md": "58fed42d4f382fea25438ea52db12632efbf1bb82af233f07d9525e48975efa3",
+    "docs/SYNC_KEY_DISTRIBUTION.md": "1f188f361e898fc8c290f8f290f2210eb342ff417b5344d45b90ddb39fe18e4f",
     "docs/SYNC_RECORD_CONTRACT.md": "c1e87734a2a1d817aeab0f8176fc0569fe2a597a19a841af89fa0cceace46eea",
-    "docs/SYNC_WRITER_LIFECYCLE.md": "5711f173ef0a65bf4e99c0fb34a7d7f06d27ddf24398d703b9377689f208d60a",
+    "docs/SYNC_WRITER_LIFECYCLE.md": "141225be73dbd1e2b9fb887d98350ec85b7036fe16ca9a299fe128a895a37ca5",
     "docs/decisions/0002-post-quantum-sync.md": "ec465816e0e514e4b15f7258929ae615a3a1d4a6b4822b1ccb5db47feab24fea",
     "docs/protocol/sync-key-distribution-v0.cddl": "fb1c1ad2f755b8c3a5dc381567dfbcc8b265473c6b9eb485900739562a1576bf",
     "docs/protocol/sync-record-v0.cddl": "fe3c16e53791efa6b7a25ae48f3be862cb61253b9b8df9c47617aadd7d1dfd18",
@@ -31,18 +31,18 @@
     "experiments/sync-prototype/src/model.rs": "21ea2823fb40428eb65be105a099dcca2d1c174b939ac3458380e0dc4ec7ee98",
     "experiments/sync-prototype/src/replica.rs": "6c091c1366b49c267463365f2b528298d78f659070c62239ed35714cdcd38bce",
     "experiments/sync-prototype/src/wire.rs": "0291319a3e0563d0d91a50043537df5160e407abdf9bd793a37b93f45aabb549",
-    "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "25d490553a96747885294e9482e949c35b19a7403ecc607a9ffcbc082543562c",
+    "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "ce85497df500d8f27fa13deb4d3ec7798037c0c342d06dea94836961ab4cb30f",
     "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "ca76b41fd4cbd3834e4496a2d9aceed698a99f4eb39bf578bf781ac7fff963ec",
-    "experiments/sync-prototype/tests/cases/writer_lifecycle.rs": "5a2923560956e85af9f729a062fd3bce9334d07d3348de0f7166a90b617970af",
+    "experiments/sync-prototype/tests/cases/writer_lifecycle.rs": "c452834e99b0dd2189c84ef9bfd5da22eedb01bb32b31d59afe532159b71737e",
     "experiments/sync-prototype/tests/convergence.rs": "c212f227c16d8647929b5e9c8f754ba7274c410a0f95a4b6e954547185101d39",
     "experiments/sync-prototype/tests/crash.rs": "1dbe0d376a7411f88a843ec2dce1a645584d34aff21f48483f1fed13efae64f3",
-    "experiments/sync-prototype/tests/key_distribution.rs": "cc9e9f457eb6456a78c4de25d6bd0ed79aaa0b79356aee90162db44e3543c6b6",
+    "experiments/sync-prototype/tests/key_distribution.rs": "16da9e08dc649798ac5d5b0dbdb72e74fafeb9f57b256da375082e7708c802a2",
     "experiments/sync-prototype/tests/record_contract.rs": "2ff9e6e1fb0bb1d4b5a2b788058750fa7bd94656497ab2a7141dc23fa246e4f7",
     "experiments/sync-prototype/tests/review_regressions.rs": "b0986babe1bc3af415d5fd91b0b4433948e966040745691100125384795324d9",
     "experiments/sync-prototype/tests/sqlite.rs": "7fa0bf70f839356c2326a81dd2ea18992aabbf32d0bb8099a6825fd7d33382b9",
-    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "99006c5264035c1937e18e8c29127a3ee8ff0e9a1786d008afd50a568d537ebf",
-    "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "40f48684a0c53f8fce1356f41c64fa457f72fe17f939ca8d2e681c2eca5bf142",
-    "experiments/sync-prototype/tests/support/key_distribution.rs": "4c296802576bfdb202b71c6ff8df9389b0c5dd9e5e3899d4d1c3a9a0ae04d95d",
+    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "04243c0ab103c623ba7f2a9bb827e38fa5e2c1a36647618c8fc25c49398343b1",
+    "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "9c269f446143b3c34b6479fe84cd76bdcd7cec9d9289b67080eff428fb842d92",
+    "experiments/sync-prototype/tests/support/key_distribution.rs": "a4758f303361bb8c73459f0568a8dbe4f29b3817a1596153b42b766ea2baa175",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
     "experiments/sync-prototype/tests/support/record_crypto.rs": "85f652231a86fb6cc3367a7677d88f6ed61c61ffacc56ca6ff7d0009b41ab8f2",
     "experiments/sync-prototype/tests/vectors/check_evidence_guards.py": "448f37f3653b5dc1d85fde4ec9046a070b314e44bfff1fc152603d2395170b53",
@@ -51,10 +51,11 @@
     "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "5fc38f1cf960b620314069007df97ff6f14b570a4440874ba754eb70d896f6de",
     "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "9104d08ac2fe7e81f2c46622be09b4400c6f7d1ace2f1836014f491d7d73764a",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
-    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "381ea59a6d3c6b93d3b5792d9f5e8875c08f5dca0a8c37f357e89b527c24f0d0",
+    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "6bcf8fb09432d63bd663d1868a01c9fba51daa7190a7b2b469d1bf14a678ca98",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
-    "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6"
+    "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6",
+    "experiments/sync-prototype/REVIEW_WRITER_LIFECYCLE.md": "db070ece7687ec68f8bf119e96dd47ed38f3386b7b88d8d08960dbb699dead98"
   },
   "host": {
     "hostname": "betelgeuse",
@@ -3294,6 +3295,135 @@
         }
       },
       "evidence_scope": "Prototype and locked app-resolved measurement baseline execution for source_commit. Prior broad application checks remain historical. Following commit changes only this evidence JSON."
+    }
+  },
+  "writer_lifecycle_review": {
+    "reviewed_pull_request": 132,
+    "reviewed_base": "2d51ce4e46dc9bb0e2b3eddc715dc1548a3aa8ad",
+    "reviewed_merge": "3274e93248016611414d6255d010ab1cbfa08a77",
+    "implementation_commit": "19a174639d463b7ef588c5b9bb85f2b42812f0d6",
+    "review_record": "experiments/sync-prototype/REVIEW_WRITER_LIFECYCLE.md",
+    "contract": "docs/SYNC_WRITER_LIFECYCLE.md",
+    "findings_addressed": 10,
+    "decisions": {
+      "resigned_claim": "Claim identity is the parsed WriterClaim; ML-DSA signatures are randomized. Membership keeps full-record identity because the manifest hash is that identity.",
+      "rejected_prefix": "A handoff chains through its closing prefix like a same-writer successor: blocked-by-rejected-predecessor, not released.",
+      "retired_prefix": "The retired writer applies in chain order while its prefix is incomplete; a record outside a complete prefix still freezes the device.",
+      "legacy_replacement": "Kept in Authority for the earlier first-record contract (SYNC_KEY_DISTRIBUTION.md); reported as Boundary::Unbounded. The durable inbox still refuses it at admission.",
+      "outbox_format": "matters-encrypted-outbox/2 (explicit writers.seq); older markers are refused as before"
+    },
+    "regression_before": {
+      "scope": "New inbox/outbox tests run against the #132 support code (origin/main 04eacf5 copies of tests/support/{encrypted_inbox,encrypted_outbox,key_distribution}.rs, tests/key_distribution.rs and tests/cases/encrypted_inbox.rs); the admission-cache test needs the new Work counter and the Authority-level tests need the new Boundary type, so they have no before-run.",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--features",
+        "crypto-probe,record-contract",
+        "--test",
+        "key_distribution",
+        "lifecycle::"
+      ],
+      "exit_code": 101,
+      "failed": [
+        "test inbox_cases::lifecycle::closing_prefix_accepts_delayed_ancestors_but_no_signed_extension ... FAILED",
+        "test inbox_cases::lifecycle::review_announcements_keep_creation_order_when_rowids_are_rewritten ... FAILED",
+        "test inbox_cases::lifecycle::review_forged_content_for_an_unknown_writer_is_rejected_not_retained_as_waiting ... FAILED",
+        "test inbox_cases::lifecycle::review_resigned_identical_handoff_is_the_same_claim_not_a_fork ... FAILED",
+        "test inbox_cases::lifecycle::review_rejected_record_in_closing_prefix_blocks_successor_with_accurate_reason ... FAILED",
+        "test inbox_cases::lifecycle::review_content_of_a_refused_competing_handoff_is_classified_as_fork ... FAILED",
+        "test inbox_cases::lifecycle::review_retired_writer_prefix_keeps_applying_while_its_closing_head_is_delayed ... FAILED"
+      ],
+      "note": "closing_prefix_accepts_delayed_ancestors_but_no_signed_extension fails on the intentionally changed reason (predecessor-not-applied instead of writer-closing-history).",
+      "summary": "test result: FAILED. 16 passed; 7 failed; 1 ignored; 0 measured; 61 filtered out"
+    },
+    "manual_mutations": {
+      "base": "19a174639d463b7ef588c5b9bb85f2b42812f0d6",
+      "scope": "Three named substitutions in tests/support/encrypted_inbox.rs on the admission cache and retry precheck, each compiled and caught; source restored after each. Not exhaustive.",
+      "results": [
+        {
+          "mutation": "waiting writer-admission rows are re-authenticated on every pass",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "forged_content_for_an_unknown"
+          ],
+          "outcome": "caught"
+        },
+        {
+          "mutation": "committed admissions are not cached",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "replays_only_newly"
+          ],
+          "outcome": "caught"
+        },
+        {
+          "mutation": "admission cache advances before commit",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--features",
+            "crypto-probe,record-contract",
+            "--test",
+            "key_distribution",
+            "replays_only_newly"
+          ],
+          "outcome": "caught"
+        }
+      ]
+    },
+    "new_normal_tests": 9,
+    "final_gates": {
+      "commands": [
+        "cargo fmt --check",
+        "cargo clippy --locked --all-targets --features crypto-probe,record-contract -- -D warnings",
+        "cargo test --locked --features crypto-probe,record-contract",
+        "cargo test --locked --features crypto-probe,record-contract -- --include-ignored",
+        "python tests/vectors/record-contract/generate.py --check",
+        "python tests/vectors/key-distribution/generate.py --check",
+        "python -O tests/vectors/check_oracles.py",
+        "python tests/vectors/record-contract/check_evidence.py",
+        "python tests/vectors/check_evidence_guards.py"
+      ],
+      "normal_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.24s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s",
+        "test result: ok. 85 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 10.89s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 77.05s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "include_ignored_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.88s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s",
+        "test result: ok. 88 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.52s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 49.45s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "fixture_checks": [
+        "2 golden records; 58 rejection splices; max wire 1052451; overhead 3859",
+        "6 structural vectors; 10 rejection cases; 16-member genesis 58899 bytes"
+      ]
     }
   }
 }

@@ -152,7 +152,8 @@ fn closing_prefix_accepts_delayed_ancestors_but_no_signed_extension() -> TestRes
     inbox.receive_writer(&handoff(&h, 73, 71, Some(hash(&second))), okay)?;
     inbox.receive(GENERATION, 1, &second, okay)?;
     inbox.process(&h.key, okay)?;
-    assert_eq!(inbox.entries()?[0].reason, "writer-closing-history");
+    // The retired writer's own record waits only for its chain predecessor.
+    assert_eq!(inbox.entries()?[0].reason, "predecessor-not-applied");
     inbox.receive(GENERATION, 2, &first, okay)?;
     inbox.process(&h.key, okay)?;
     assert_eq!(inbox.projection()?.entities[TASK].notes, "last old");
@@ -682,5 +683,216 @@ fn actor_rejection_is_revisited_when_a_competing_signed_claim_arrives() -> TestR
         inbox.process(&h.key, okay)?;
         assert!(inbox.writer_entries()?.iter().any(|r| r.status == "fork"));
     }
+    Ok(())
+}
+
+#[test]
+fn review_resigned_identical_handoff_is_the_same_claim_not_a_fork() -> TestResult<()> {
+    let h = Harness::new();
+    // ML-DSA signing is randomized: the same claim signed twice differs.
+    let first = handoff(&h, 73, 71, None);
+    let again = handoff(&h, 73, 71, None);
+    assert_ne!(first, again);
+    let content = sealed(&h, 73, &create(&mut source(73)));
+    for order in [[&first, &again], [&again, &first]] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("in.db");
+        let mut inbox = h.inbox(&path);
+        for bytes in order {
+            inbox.receive_writer(bytes, okay)?;
+        }
+        inbox.receive(GENERATION, 1, &content, okay)?;
+        inbox.process(&h.key, okay)?;
+        let controls = inbox.writer_entries()?;
+        assert!(controls.iter().all(|r| r.status == "admitted"));
+        assert_eq!(controls[1].reason, "same-writer-claim");
+        assert_eq!(inbox.entries()?[0].status, "applied");
+        drop(inbox);
+        let mut inbox = h.inbox(&path);
+        inbox.process(&h.key, okay)?;
+        assert_eq!(inbox.entries()?[0].status, "applied");
+    }
+    Ok(())
+}
+
+#[test]
+fn review_rejected_record_in_closing_prefix_blocks_successor_with_accurate_reason() -> TestResult<()>
+{
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let plain = create(&mut source(71));
+    let first = h.seal(71, None, &plain);
+    let bad = h.seal(71, Some(hash(&first)), b"not a Loro update");
+    let mut b = imported(73, &plain);
+    let next = sealed(&h, 73, &notes(&mut b, "new writer"));
+    let mut inbox = h.inbox(&dir.path().join("in.db"));
+    inbox.receive_writer(&handoff(&h, 73, 71, Some(hash(&bad))), okay)?;
+    inbox.receive(GENERATION, 1, &next, okay)?;
+    inbox.process(&h.key, okay)?;
+    // The prefix is incomplete, so the successor may still become eligible.
+    assert_eq!(inbox.entries()?[0].reason, "writer-closing-history");
+    inbox.receive(GENERATION, 2, &first, okay)?;
+    inbox.receive(GENERATION, 3, &bad, okay)?;
+    inbox.process(&h.key, okay)?;
+    let rows = inbox.entries()?;
+    assert_eq!(rows[1].status, "applied");
+    assert_eq!(rows[2].status, "quarantined");
+    // The handoff chains through the rejected record, as a same-writer
+    // successor would: permanently blocked, and labelled as such.
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].reason.as_str()),
+        ("waiting", "blocked-by-rejected-predecessor")
+    );
+    Ok(())
+}
+
+#[test]
+fn review_retired_writer_prefix_keeps_applying_while_its_closing_head_is_delayed() -> TestResult<()>
+{
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let mut a = source(71);
+    let plain = create(&mut a);
+    let first = h.seal(71, None, &plain);
+    let second = h.seal(71, Some(hash(&first)), &notes(&mut a, "last old"));
+    let mut b = imported(73, &plain);
+    let next = sealed(&h, 73, &notes(&mut b, "new writer"));
+    let mut inbox = h.inbox(&dir.path().join("in.db"));
+    inbox.receive(GENERATION, 1, &first, okay)?;
+    inbox.receive_writer(&handoff(&h, 73, 71, Some(hash(&second))), okay)?;
+    inbox.receive(GENERATION, 2, &next, okay)?;
+    inbox.process(&h.key, okay)?;
+    let rows = inbox.entries()?;
+    // The handoff does not stop records inside any prefix ending at `second`.
+    assert_eq!(rows[0].status, "applied");
+    assert_eq!(rows[1].reason, "writer-closing-history");
+    inbox.receive(GENERATION, 3, &second, okay)?;
+    inbox.process(&h.key, okay)?;
+    assert!(inbox.entries()?.iter().all(|r| r.status == "applied"));
+    Ok(())
+}
+
+#[test]
+fn review_forged_content_for_an_unknown_writer_is_rejected_not_retained_as_waiting(
+) -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let author = h.s.a.id()?;
+    let manifest = h.s.authority.manifest();
+    let id = random32()?;
+    // Claims device A and an unadmitted incarnation, but B signed it.
+    let forged = seal_fixture(
+        header(&h.s.authority, &author, &[73; 32], &id, &manifest),
+        &h.cek,
+        &create(&mut source(73)),
+        &h.s.b,
+    )?;
+    let valid = sealed(&h, 73, &create(&mut source(73)));
+    let mut inbox = h.inbox(&dir.path().join("in.db"));
+    inbox.receive(GENERATION, 1, &forged, okay)?;
+    inbox.receive(GENERATION, 2, &valid, okay)?;
+    take_work();
+    inbox.process(&h.key, okay)?;
+    let rows = inbox.entries()?;
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].reason.as_str()),
+        ("quarantined", "authentication:Signature")
+    );
+    assert_eq!(rows[1].reason, "writer-admission");
+    assert_eq!(take_work().authentications, 2);
+    // No control changed: the waiting member-signed record is not re-verified.
+    inbox.process(&h.key, okay)?;
+    assert_eq!(take_work(), Work::default());
+    inbox.receive_writer(&handoff(&h, 73, 71, None), okay)?;
+    inbox.process(&h.key, okay)?;
+    assert_eq!(inbox.entries()?[1].status, "applied");
+    assert_eq!(inbox.entries()?[0].status, "quarantined");
+    Ok(())
+}
+
+#[test]
+fn review_content_of_a_refused_competing_handoff_is_classified_as_fork() -> TestResult<()> {
+    let h = Harness::new();
+    let one = handoff(&h, 73, 71, None);
+    let two = handoff(&h, 74, 71, None);
+    let content = sealed(&h, 74, &create(&mut source(74)));
+    for order in [[&one, &two], [&two, &one]] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("in.db");
+        let mut inbox = h.inbox(&path);
+        inbox.receive(GENERATION, 1, &content, okay)?;
+        for bytes in order {
+            inbox.receive_writer(bytes, okay)?;
+        }
+        inbox.process(&h.key, okay)?;
+        // Whichever handoff was refused, its content is in the frozen lineage.
+        assert_eq!(inbox.entries()?[0].status, "fork");
+        drop(inbox);
+        let mut inbox = h.inbox(&path);
+        inbox.process(&h.key, okay)?;
+        assert_eq!(inbox.entries()?[0].status, "fork");
+    }
+    Ok(())
+}
+
+#[test]
+fn review_announcements_keep_creation_order_when_rowids_are_rewritten() -> TestResult<()> {
+    let mut h = Harness::new();
+    h.config.writers.clear();
+    let dir = tempfile::tempdir()?;
+    let outgoing = dir.path().join("out.db");
+    for _ in 0..3 {
+        drop(announced(&outgoing, &h)?);
+    }
+    let delivery = Delivery::open(&outgoing, &binding(&h), true)?;
+    let before = delivery.announcements()?;
+    assert_eq!(before.len(), 3);
+    drop(delivery);
+    // VACUUM may renumber rowids of a table without an INTEGER PRIMARY KEY.
+    // Simulate that rewrite by moving the root's rowid past the others.
+    let conn = rusqlite::Connection::open(&outgoing)?;
+    conn.execute(
+        "UPDATE writers SET rowid=(SELECT max(rowid)+1 FROM writers) WHERE announcement=?1",
+        [&before[0]],
+    )?;
+    drop(conn);
+    let delivery = Delivery::open(&outgoing, &binding(&h), true)?;
+    assert_eq!(delivery.announcements()?, before);
+    assert!(matches!(
+        parse(&before[0])?.message.body,
+        Body::Writer { previous: None, .. }
+    ));
+    Ok(())
+}
+
+#[test]
+fn review_processing_replays_only_newly_committed_writer_admissions() -> TestResult<()> {
+    let h = Harness::new();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("in.db");
+    let mut inbox = h.inbox(&path);
+    inbox.receive_writer(&handoff(&h, 73, 71, None), okay)?;
+    inbox.receive_writer(&handoff(&h, 74, 73, None), okay)?;
+    take_work();
+    inbox.process(&h.key, okay)?;
+    assert_eq!(take_work().writer_checks, 2);
+    inbox.process(&h.key, okay)?;
+    assert_eq!(take_work(), Work::default());
+    // A rolled-back pass must not advance the cached admissions.
+    inbox.receive_writer(&handoff(&h, 75, 74, None), okay)?;
+    assert!(inbox.process(&h.key, fail(Point::BeforeApply)).is_err());
+    take_work();
+    inbox.process(&h.key, okay)?;
+    assert_eq!(take_work().writer_checks, 1);
+    assert!(inbox
+        .writer_entries()?
+        .iter()
+        .all(|r| r.status == "admitted"));
+    // A reopened inbox replays the committed admissions once.
+    drop(inbox);
+    let mut inbox = h.inbox(&path);
+    take_work();
+    inbox.process(&h.key, okay)?;
+    assert_eq!(take_work().writer_checks, 3);
     Ok(())
 }

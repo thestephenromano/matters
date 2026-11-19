@@ -750,7 +750,8 @@ fn review_processing_does_not_repeat_authentication_or_staging_for_settled_histo
         take_work(),
         Work {
             authentications: 10,
-            stagings: 4
+            stagings: 4,
+            writer_checks: 0
         }
     );
     inbox.process(&h.key, okay)?;
@@ -767,7 +768,8 @@ fn review_processing_does_not_repeat_authentication_or_staging_for_settled_histo
         take_work(),
         Work {
             authentications: 2,
-            stagings: 1
+            stagings: 1,
+            writer_checks: 0
         }
     );
     assert_eq!(inbox.projection()?, a.projection()?);
