@@ -106,20 +106,23 @@ fn move_in_today(db: &Database, today: Date, id: &str, step: isize) -> Result<()
         let after = (target as usize).checked_sub(1).map(|i| rest[i]);
         return place_task(db, &View::Today, today, id, after);
     }
-    if target >= len && !evening {
+    if target >= len {
+        if evening {
+            return Ok(()); // already at the bottom of This Evening
+        }
         // Down past the last daytime task: into This Evening, `k` places
         // below its top.
         let k = ((target - len) as usize).min(other.len());
         return place_in_today(db, today, id, true, k.checked_sub(1).map(|i| other[i]));
     }
-    if target < 0 && evening {
-        // Up past the first evening task: into the daytime tasks, `k` places
-        // above their end.
-        let k = (-target - 1) as usize;
-        let at = other.len().saturating_sub(k);
-        return place_in_today(db, today, id, false, at.checked_sub(1).map(|i| other[i]));
+    // Up past the top of the section (`target` is negative).
+    if !evening {
+        return Ok(()); // already at the top of Today
     }
-    Ok(()) // already at the top of Today or the bottom of This Evening
+    // Into the daytime tasks, `k` places above their end.
+    let k = (-target - 1) as usize;
+    let at = other.len().saturating_sub(k);
+    place_in_today(db, today, id, false, at.checked_sub(1).map(|i| other[i]))
 }
 
 /// Add a captured task (from `View::new_task`) right below `below` in
@@ -270,29 +273,28 @@ fn place(list: &[(String, f64)], id: &str, after: Option<&str>) -> Vec<(String, 
     };
     let prev = at.checked_sub(1).map(|i| rest[i].1);
     let next = rest.get(at).map(|(_, k)| *k);
+    // `prev` and `next` are neighbours in `rest`, so when no two keys there
+    // are tied, they are more than `MIN_GAP` apart and have room between.
     let tied = rest.windows(2).any(|w| w[1].1 - w[0].1 <= MIN_GAP);
-    let key = match (prev, next) {
-        _ if tied => None,
-        (None, None) => Some(1.0),
-        (Some(p), None) => Some(p + 1.0),
-        (None, Some(n)) => Some(n - 1.0),
-        (Some(p), Some(n)) if n - p > MIN_GAP => Some(p + (n - p) / 2.0),
-        _ => None,
-    };
-    match key {
-        Some(key) => vec![(id.to_string(), key)],
-        None => {
-            // Renumber in the new displayed order.
-            rest.insert(at, (id.to_string(), 0.0));
-            rest.iter()
-                .enumerate()
-                .map(|(i, (item, _))| (item.clone(), (i + 1) as f64))
-                .filter(|(item, new)| {
-                    list.iter().find(|(i, _)| i == item).map(|(_, old)| old) != Some(new)
-                })
-                .collect()
-        }
+    if tied {
+        // Renumber in the new displayed order.
+        rest.insert(at, (id.to_string(), 0.0));
+        return rest
+            .iter()
+            .enumerate()
+            .map(|(i, (item, _))| (item.clone(), (i + 1) as f64))
+            .filter(|(item, new)| {
+                list.iter().find(|(i, _)| i == item).map(|(_, old)| old) != Some(new)
+            })
+            .collect();
     }
+    let key = match (prev, next) {
+        (None, None) => 1.0,
+        (Some(p), None) => p + 1.0,
+        (None, Some(n)) => n - 1.0,
+        (Some(p), Some(n)) => p + (n - p) / 2.0,
+    };
+    vec![(id.to_string(), key)]
 }
 
 /// Apply key changes in one transaction. `table` and `column` are fixed names.
@@ -333,6 +335,36 @@ mod tests {
         );
         assert_eq!(place(&l, "b", None), list(&[("b", 0.0)]));
         assert_eq!(place(&l, "a", Some("c")), list(&[("a", 4.0)]));
+        assert_eq!(place(&list(&[("a", 5.0)]), "a", None), list(&[("a", 1.0)]));
+        let negative = list(&[("a", -5.0), ("b", -3.0), ("c", 0.0)]);
+        assert_eq!(place(&negative, "c", Some("a")), list(&[("c", -4.0)]));
+        let around_zero = list(&[("a", -1.0), ("b", 1.0), ("c", 2.0)]);
+        assert_eq!(place(&around_zero, "c", Some("a")), list(&[("c", 0.0)]));
+    }
+
+    #[test]
+    fn placing_an_item_after_itself_changes_nothing() {
+        let l = list(&[("a", 1.0), ("b", 2.0), ("c", 3.0)]);
+        assert_eq!(place(&l, "a", Some("a")), list(&[]));
+        assert_eq!(place(&l, "c", Some("c")), list(&[]));
+    }
+
+    #[test]
+    fn a_tie_anywhere_in_the_list_renumbers_it() {
+        // Room at the end, but `a` and `b` are tied: renumber, so the order
+        // stops depending on whatever broke the tie.
+        let l = list(&[("a", 1.0), ("b", 1.0), ("c", 2.0), ("d", 5.0)]);
+        assert_eq!(
+            place(&l, "d", Some("c")),
+            list(&[("b", 2.0), ("c", 3.0), ("d", 4.0)])
+        );
+    }
+
+    #[test]
+    fn renumbering_writes_only_keys_that_change() {
+        // New order b, a, c, d: b keeps 1 and c keeps 3.
+        let l = list(&[("a", 1.0), ("b", 1.0), ("c", 3.0), ("d", 3.0)]);
+        assert_eq!(place(&l, "a", Some("b")), list(&[("a", 2.0), ("d", 4.0)]));
     }
 
     #[test]

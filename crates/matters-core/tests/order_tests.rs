@@ -238,6 +238,99 @@ fn placing_in_the_other_section_keeps_the_date() {
         place_in_today(&db, today(), "due", false, Some("e1")).is_err(),
         "after must be in the target section"
     );
+    assert!(evening_of(&db, "due"), "and a refused move changes nothing");
+    assert!(
+        place_in_today(&db, today(), "due", true, Some("due")).is_err(),
+        "a task can't follow itself"
+    );
+    assert_eq!(ids(&db, &View::Today), ["due", "e1", "late"]);
+}
+
+#[test]
+fn moving_up_out_of_this_evening_lands_step_by_step() {
+    for (step, expected) in [
+        (-1, ["d1", "d2", "d3", "e1", "e2"]),
+        (-2, ["d1", "d2", "e1", "d3", "e2"]),
+        (-3, ["d1", "e1", "d2", "d3", "e2"]),
+        (-9, ["e1", "d1", "d2", "d3", "e2"]),
+    ] {
+        let db = Database::open_in_memory().unwrap();
+        today_with(
+            &db,
+            &[
+                ("d1", false),
+                ("d2", false),
+                ("d3", false),
+                ("e1", true),
+                ("e2", true),
+            ],
+        );
+        move_task(&db, &View::Today, today(), "e1", step).unwrap();
+        assert_eq!(ids(&db, &View::Today), expected, "step {step}");
+        assert!(!evening_of(&db, "e1"), "step {step}");
+    }
+}
+
+/// Every task's (sort_order, today_order).
+fn keys(db: &Database) -> Vec<(String, f64, f64)> {
+    let mut keys: Vec<_> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|id| {
+            let t = db.get_task(id).unwrap().unwrap();
+            (t.id, t.sort_order, t.today_order)
+        })
+        .collect();
+    keys.sort_by(|x, y| x.0.cmp(&y.0));
+    keys
+}
+
+#[test]
+fn once_arranged_a_move_changes_only_the_moved_tasks_key() {
+    let db = Database::open_in_memory().unwrap();
+    project_fixture(&db, &["a", "b", "c", "d"]);
+    for id in ["a", "b", "c", "d"] {
+        let mut t = db.get_task(id).unwrap().unwrap();
+        t.apply_schedule(&Schedule::Today { evening: false }, today());
+        db.update_task(&t).unwrap();
+    }
+    // The first move in each list renumbers it; Today in a different order
+    // from the project.
+    place_task(&db, &project("p1"), today(), "a", Some("b")).unwrap();
+    place_task(&db, &View::Today, today(), "d", None).unwrap();
+    assert_eq!(ids(&db, &project("p1")), ["b", "a", "c", "d"]);
+    assert_eq!(ids(&db, &View::Today), ["d", "b", "a", "c"]);
+
+    let before = keys(&db);
+    place_task(&db, &View::Today, today(), "c", Some("d")).unwrap();
+    assert_eq!(ids(&db, &View::Today), ["d", "c", "b", "a"]);
+    let after = keys(&db);
+    let changed: Vec<_> = before
+        .iter()
+        .zip(&after)
+        .filter(|(x, y)| x != y)
+        .map(|(_, y)| y.0.as_str())
+        .collect();
+    assert_eq!(changed, ["c"]);
+    assert_eq!(
+        after[2].1, before[2].1,
+        "Today leaves the project key alone"
+    );
+
+    let before = after;
+    place_task(&db, &project("p1"), today(), "d", Some("b")).unwrap();
+    assert_eq!(ids(&db, &project("p1")), ["b", "d", "a", "c"]);
+    let after = keys(&db);
+    let changed: Vec<_> = before
+        .iter()
+        .zip(&after)
+        .filter(|(x, y)| x != y)
+        .map(|(_, y)| y.0.as_str())
+        .collect();
+    assert_eq!(changed, ["d"]);
+    assert_eq!(
+        after[3].2, before[3].2,
+        "the project leaves Today's key alone"
+    );
 }
 
 #[test]
@@ -279,6 +372,18 @@ fn new_tasks_and_projects_are_added_at_the_end() {
         .map(|p| p.id)
         .collect();
     assert_eq!(order, ["p2", "p1", "p3"]);
+}
+
+#[test]
+fn a_new_area_goes_below_one_moved_to_the_end() {
+    let db = Database::open_in_memory().unwrap();
+    for id in ["a1", "a2", "a3"] {
+        db.add_area(&mut Area::new(id, id, 0.0)).unwrap();
+    }
+    place_area(&db, "a1", Some("a3")).unwrap();
+    db.add_area(&mut Area::new("a4", "a4", 0.0)).unwrap();
+    let order: Vec<_> = db.list_areas().unwrap().into_iter().map(|a| a.id).collect();
+    assert_eq!(order, ["a2", "a3", "a1", "a4"]);
 }
 
 #[test]

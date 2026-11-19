@@ -33,3 +33,19 @@ impl fmt::Display for Status {
         write!(f, "{}", self.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Status;
+
+    #[test]
+    fn statuses_read_back_as_written_in_either_spelling() {
+        for status in [Status::Open, Status::Completed, Status::Canceled] {
+            assert_eq!(Status::from_str_loose(&status.to_string()), status);
+        }
+        assert_eq!(Status::Canceled.to_string(), "canceled");
+        assert_eq!(Status::from_str_loose("Cancelled"), Status::Canceled);
+        assert_eq!(Status::from_str_loose("COMPLETED"), Status::Completed);
+        assert_eq!(Status::from_str_loose("someday"), Status::Open);
+    }
+}

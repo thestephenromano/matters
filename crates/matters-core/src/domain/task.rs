@@ -94,10 +94,6 @@ impl Task {
         self.trashed_at.is_some()
     }
 
-    pub fn is_open(&self) -> bool {
-        self.status == Status::Open
-    }
-
     /// Set the task's "When". All three stored fields (start date, time of day,
     /// someday flag) are written together so a task can never be, for example,
     /// both Someday and scheduled for Today.

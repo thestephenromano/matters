@@ -62,6 +62,14 @@ fn calendar_dates() {
     for input in ["jan 5", "January 5", "5 jan", "1/5"] {
         assert_eq!(parse(input), jan5, "{input:?}");
     }
+    // Today's own month and day is today, not next year.
+    for input in ["nov 18", "18 november", "11/18"] {
+        assert_eq!(
+            parse(input),
+            Some(Schedule::Today { evening: false }),
+            "{input:?}"
+        );
+    }
 }
 
 #[test]
@@ -94,6 +102,7 @@ fn anything_unclear_is_refused() {
         "tomorrow 5pm",
         "noon",
         "in banana",
+        "in week", // `in` only before a number
     ] {
         assert_eq!(parse(input), None, "{input:?} should be refused");
     }

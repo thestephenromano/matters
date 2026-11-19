@@ -14,4 +14,4 @@ pub use project::{Project, ProjectProgress};
 pub use status::Status;
 pub use task::{DeadlineStatus, Task};
 pub use view::View;
-pub use when::{DateOrder, Schedule, TimeOfDay};
+pub use when::{DateOrder, Schedule};

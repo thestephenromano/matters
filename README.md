@@ -54,7 +54,7 @@ Each gate is a script in `ci/` that runs the same locally and in CI. A gate that
 - `ci/ui-lane.sh reduced|animations`: the Qt Quick interaction tests, offscreen, with animations off or on. The lane checks that every test in `tests/qml` ran, keeps to a time budget, and writes a JUnit report. Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch the tests run.
 - `ci/style-check.sh`: Matters' control style holds under the desktop's Qt platform theme, COSMIC's included.
 - `ci/coverage.sh`: matters-core's line coverage, held to a floor set just under the measured figure. It writes an lcov report.
-- `ci/mutants.sh`: mutation testing of the matters-core code a branch changes, relative to `origin/main`. Every mutant must be caught. `ci/mutants.sh --all` mutates the whole crate.
+- `ci/mutants.sh`: mutation testing of the matters-core code a branch changes, relative to `origin/main`. Every mutant must be caught; one that cannot change behaviour is excluded in `.cargo/mutants.toml`, with the reason. `ci/mutants.sh --all` mutates the whole crate.
 
 Matters skips its animations when the desktop asks for reduced motion (KDE's instant animation speed, or GNOME's animations turned off). `MATTERS_REDUCE_MOTION=1` or `=0` overrides that.
 

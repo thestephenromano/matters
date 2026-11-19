@@ -66,6 +66,15 @@ mod tests {
     }
 
     #[test]
+    fn today_is_the_local_day_of_now() {
+        // Read the day on both sides of `now`, in case midnight falls between.
+        let before = local_today();
+        let now = local_day_of_millis(now_millis()).unwrap();
+        let after = local_today();
+        assert!(now == before || now == after, "{before} {now} {after}");
+    }
+
+    #[test]
     fn reports_only_actual_date_changes() {
         let mut tracker = DayTracker::new(d(17));
         assert!(!tracker.advance(d(17)), "same day: no refresh");

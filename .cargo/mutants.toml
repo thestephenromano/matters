@@ -1,0 +1,12 @@
+# cargo-mutants configuration (ci/mutants.sh).
+#
+# Each exclusion is a mutant that cannot change behaviour, with the reason.
+# Names are matched without line numbers, so they survive edits elsewhere.
+exclude_re = [
+    # Schedule::parse_typed answers "" and "today" itself, as Matters' own
+    # words, rather than leaving them to `interim`. Without these arms
+    # `interim` gives the same answers (no date for "", today for "today"),
+    # which tests/typed_when_tests.rs pins.
+    'delete match arm "" in Schedule::parse_typed$',
+    'delete match arm "today" in Schedule::parse_typed$',
+]
