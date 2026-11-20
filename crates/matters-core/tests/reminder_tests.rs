@@ -391,6 +391,46 @@ fn reminders_sync_but_what_each_device_showed_does_not() {
 }
 
 #[test]
+fn receiving_an_update_keeps_what_this_device_showed() {
+    let a = Database::open_in_memory().unwrap();
+    a.enable_sync().unwrap();
+    let b = Database::open_in_memory().unwrap();
+    b.enable_sync().unwrap();
+    let call = reminded(&a, 1, day(), time(9, 0, 0, 0));
+    let gone = reminded(&a, 2, day(), time(9, 0, 0, 0));
+    let mut sent = 0;
+    for (seq, bytes) in a.outgoing_updates(0).unwrap() {
+        b.receive_update(&bytes).unwrap();
+        sent = seq;
+    }
+    assert_eq!(show(&b, at(day(), 9, 0)).len(), 2);
+
+    // Any update from a rebuilds b's rows from the engine: b's record of
+    // what it showed survives it, for the tasks that still exist.
+    a.rename_task(&call, "renamed").unwrap();
+    a.trash_task(&gone).unwrap();
+    a.empty_trash().unwrap();
+    for (_, bytes) in a.outgoing_updates(sent).unwrap() {
+        b.receive_update(&bytes).unwrap();
+    }
+    assert_eq!(b.get_task(&call).unwrap().unwrap().title, "renamed");
+    assert!(b.get_task(&gone).unwrap().is_none());
+    assert!(due_ids(&b, at(day(), 9, 30)).is_empty(), "not shown again");
+    let kept: Vec<String> = b
+        .with_raw_conn(|c| {
+            let mut stmt = c.prepare("SELECT task_id FROM reminder_deliveries")?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
+        })
+        .unwrap();
+    assert_eq!(
+        kept,
+        [call.clone()],
+        "the deleted task's record went with it"
+    );
+}
+
+#[test]
 fn typed_times_are_understood_or_refused() {
     use matters_core::reminders::parse_typed_time;
     let t = |h, m| Some(time(h, m, 0, 0));

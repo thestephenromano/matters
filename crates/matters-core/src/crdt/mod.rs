@@ -419,9 +419,6 @@ impl Document {
                     put(&meta, "deadline", &None::<Date>)?;
                     put(&meta, "status", &(Status::Open, None::<i64>, false))?;
                 }
-                if *kind == Kind::Task {
-                    put(&meta, "reminder", &None::<jiff::civil::Time>)?;
-                }
                 put(&meta, "trashed_at", &None::<i64>)?;
                 meta.insert("removed", false).map_err(engine)?;
                 meta.insert("done", false).map_err(engine)?;

@@ -722,9 +722,16 @@ impl Database {
 }
 
 /// Replace every domain row with the engine's. Order keys become ranks.
+///
+/// Rows that are this device's own and never synced, but reference the
+/// domain rows (`reminder_deliveries`, #60), would be deleted with them by
+/// their cascades. They are kept aside and put back for the rows that still
+/// exist; any later local-only table that references a domain table needs
+/// the same.
 fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
     tx.execute_batch(
-        "DELETE FROM task_tags; DELETE FROM project_tags; DELETE FROM area_tags;
+        "CREATE TEMP TABLE kept_reminder_deliveries AS SELECT * FROM reminder_deliveries;
+         DELETE FROM task_tags; DELETE FROM project_tags; DELETE FROM area_tags;
          DELETE FROM checklist_items; DELETE FROM tasks; DELETE FROM headings;
          DELETE FROM projects; DELETE FROM areas; DELETE FROM tags;",
     )?;
@@ -842,5 +849,10 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
             params![item, tag],
         )?;
     }
+    tx.execute_batch(
+        "INSERT INTO reminder_deliveries
+             SELECT * FROM kept_reminder_deliveries WHERE task_id IN (SELECT id FROM tasks);
+         DROP TABLE kept_reminder_deliveries;",
+    )?;
     Ok(())
 }

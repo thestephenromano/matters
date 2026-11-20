@@ -109,8 +109,8 @@ fn text(value: &Value, key: &str) -> Result<String> {
         .ok_or_else(|| invalid(format!("missing {key}")))
 }
 
-/// A register added after the first documents were written: missing means
-/// unset.
+/// A register that is written only once set (the reminder, #60), and is
+/// missing from documents written before it existed: missing means unset.
 fn optional_json<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Result<Option<T>> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
