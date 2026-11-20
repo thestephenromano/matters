@@ -27,18 +27,31 @@ pub struct ProjectView {
     pub unsectioned_tasks: Vec<Task>,
 }
 
-/// A row of a task list as frontends show it: a task, or a project's heading
-/// with no tasks listed under it (#22). A heading with tasks needs no row of
-/// its own: it is their section ([`QueryEngine::section_keys`]).
+/// A row of a task list as frontends show it ([`QueryEngine::list_rows`]):
+/// a task; a project's heading with no tasks listed under it (#22), as a
+/// heading with tasks needs no row of its own, being their section
+/// ([`QueryEngine::section_keys`]); or a finished project in the Logbook,
+/// which stands for its tasks (#55).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListRow {
     Task(Task),
     EmptyHeading(Heading),
+    Project(Project),
 }
 
 /// The section key of tasks under heading `id` titled `title`.
 pub fn heading_section_key(id: &str, title: &str) -> String {
     format!("heading:{id}:{title}")
+}
+
+/// The Logbook's section key for something finished at `completed_at`
+/// (milliseconds): `done:YYYY-MM-DD`, its local day, or `done:` when that
+/// is unknown.
+pub fn logbook_section_key(completed_at: Option<i64>) -> String {
+    let day = completed_at
+        .and_then(crate::clock::local_day_of_millis)
+        .map(|day| day.to_string());
+    format!("done:{}", day.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -72,24 +85,49 @@ const INBOX_WHERE: &str = "status = 'open'
     AND project_id IS NULL AND area_id IS NULL
     AND start_date IS NULL AND is_someday = 0";
 
+/// The task is in no project, or in an open one. A finished project's tasks
+/// are listed only in the project itself; the Logbook lists the project as
+/// one row (#55).
+macro_rules! outside_finished_projects {
+    () => {
+        "(project_id IS NULL OR project_id IN (SELECT id FROM projects WHERE status = 'open'))"
+    };
+}
+
 /// TODAY: scheduled for today or earlier (overdue), or undated with a deadline
 /// today or earlier.
-const TODAY_WHERE: &str = "status = 'open' AND is_someday = 0
-    AND (start_date <= ?1 OR (start_date IS NULL AND deadline <= ?1))";
+const TODAY_WHERE: &str = concat!(
+    "status = 'open' AND is_someday = 0
+    AND (start_date <= ?1 OR (start_date IS NULL AND deadline <= ?1)) AND ",
+    outside_finished_projects!()
+);
 
 /// UPCOMING: start date strictly after the reference date.
-const UPCOMING_WHERE: &str = "status = 'open' AND is_someday = 0 AND start_date > ?1";
+const UPCOMING_WHERE: &str = concat!(
+    "status = 'open' AND is_someday = 0 AND start_date > ?1 AND ",
+    outside_finished_projects!()
+);
 
 /// ANYTIME: actionable now and organised under an area or project.
-const ANYTIME_WHERE: &str = "status = 'open' AND is_someday = 0
+const ANYTIME_WHERE: &str = concat!(
+    "status = 'open' AND is_someday = 0
     AND (start_date IS NULL OR start_date <= ?1)
-    AND (project_id IS NOT NULL OR area_id IS NOT NULL)";
+    AND (project_id IS NOT NULL OR area_id IS NOT NULL) AND ",
+    outside_finished_projects!()
+);
 
 /// SOMEDAY: explicitly deferred.
-const SOMEDAY_WHERE: &str = "status = 'open' AND is_someday = 1";
+const SOMEDAY_WHERE: &str = concat!(
+    "status = 'open' AND is_someday = 1 AND ",
+    outside_finished_projects!()
+);
 
-/// LOGBOOK: finished tasks.
-const LOGBOOK_WHERE: &str = "status IN ('completed', 'canceled')";
+/// LOGBOOK: finished tasks, apart from those of finished projects, which
+/// the Logbook lists as the project ([`QueryEngine::list_rows`]).
+const LOGBOOK_WHERE: &str = concat!(
+    "status IN ('completed', 'canceled') AND ",
+    outside_finished_projects!()
+);
 
 /// PROJECT: a project's live tasks, done or not (the same set its progress
 /// ring counts). `?1` is the project id.
@@ -188,8 +226,11 @@ impl<'a> QueryEngine<'a> {
                 COUNT(CASE WHEN {UPCOMING_WHERE} THEN 1 END),
                 COUNT(CASE WHEN {ANYTIME_WHERE} THEN 1 END),
                 COUNT(CASE WHEN {SOMEDAY_WHERE} THEN 1 END),
-                COUNT(CASE WHEN {LOGBOOK_WHERE} THEN 1 END)
-             FROM tasks WHERE {LIVE}"
+                COUNT(CASE WHEN {LOGBOOK_WHERE} THEN 1 END),
+                (SELECT COUNT(*) FROM projects
+                  WHERE {} AND status IN ('completed', 'canceled'))
+             FROM tasks WHERE {LIVE}",
+            trash::LIVE_PROJECT
         );
         self.db.with_conn(|conn| {
             Ok(conn.query_row(&sql, params![ref_str], |r| {
@@ -200,7 +241,7 @@ impl<'a> QueryEngine<'a> {
                     upcoming: n(2)?,
                     anytime: n(3)?,
                     someday: n(4)?,
-                    logbook: n(5)?,
+                    logbook: n(5)? + n(6)?,
                 })
             })?)
         })
@@ -344,13 +385,7 @@ impl<'a> QueryEngine<'a> {
             }
             View::Logbook => tasks
                 .iter()
-                .map(|t| {
-                    let day = t
-                        .completed_at
-                        .and_then(crate::clock::local_day_of_millis)
-                        .map(|day| day.to_string());
-                    format!("done:{}", day.unwrap_or_default())
-                })
+                .map(|t| logbook_section_key(t.completed_at))
                 .collect(),
             View::Project(id) => {
                 let headings: HashMap<String, String> = self
@@ -400,10 +435,18 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// The rows of `view` showing `tasks` (as [`Self::tasks_in`] lists
-    /// them): in a project, each heading with no task among `tasks` gets a
-    /// row of its own where its tasks would be, so it can be seen and moved
-    /// into. Other views list only their tasks.
+    /// them):
+    ///
+    /// * In a project, each heading with no task among `tasks` gets a row of
+    ///   its own where its tasks would be, so it can be seen and moved into.
+    /// * In the Logbook, each finished project is a row, placed among the
+    ///   tasks by when it was finished (#55).
+    ///
+    /// Other views list only their tasks.
     pub fn list_rows(&self, view: &View, tasks: Vec<Task>) -> Result<Vec<ListRow>> {
+        if *view == View::Logbook {
+            return self.logbook_rows(tasks);
+        }
         let View::Project(project_id) = view else {
             return Ok(tasks.into_iter().map(ListRow::Task).collect());
         };
@@ -433,6 +476,24 @@ impl<'a> QueryEngine<'a> {
                 rows.extend(group.into_iter().map(ListRow::Task));
             }
         }
+        Ok(rows)
+    }
+
+    /// The Logbook's tasks with the finished projects merged in, most
+    /// recently finished first; a task finished at the same moment as a
+    /// project comes first. A task without a finish time (reopened during
+    /// this visit, `crate::Visit`) keeps its place after the projects
+    /// finished before the task above it.
+    fn logbook_rows(&self, tasks: Vec<Task>) -> Result<Vec<ListRow>> {
+        let mut projects = self.db.list_finished_projects()?.into_iter().peekable();
+        let mut rows = Vec::new();
+        for task in tasks {
+            while let Some(project) = projects.next_if(|p| p.completed_at > task.completed_at) {
+                rows.push(ListRow::Project(project));
+            }
+            rows.push(ListRow::Task(task));
+        }
+        rows.extend(projects.map(ListRow::Project));
         Ok(rows)
     }
 

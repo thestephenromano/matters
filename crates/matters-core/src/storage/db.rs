@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::schema::{
-    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, SCHEMA_V1,
+    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
-    Area, ChecklistItem, ChecklistProgress, DeletedHeading, Heading, Home, Project, Status, Task,
+    Area, ChecklistItem, ChecklistProgress, DeletedHeading, Heading, Home, Outcome, Project,
+    Status, Task,
 };
 use crate::error::{MattersError, Result};
 
@@ -96,6 +97,7 @@ impl Database {
             (4, MIGRATION_V4),
             (5, MIGRATION_V5),
             (6, MIGRATION_V6),
+            (7, MIGRATION_V7),
         ] {
             if version < target {
                 let tx = conn.transaction()?;
@@ -369,13 +371,102 @@ impl Database {
         Ok(project)
     }
 
-    /// Projects not in the Trash (themselves or through their area), in
-    /// sidebar order.
+    /// The open projects not in the Trash (themselves or through their
+    /// area), in sidebar order. Finished projects are listed by
+    /// [`Self::list_finished_projects`].
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         self.select_projects(&format!(
-            "{} ORDER BY sort_order ASC, created_at ASC, id ASC",
+            "{} AND status = 'open' ORDER BY sort_order ASC, created_at ASC, id ASC",
             trash::LIVE_PROJECT
         ))
+    }
+
+    /// Completed and canceled projects not in the Trash, most recently
+    /// finished first, as the Logbook lists them.
+    pub fn list_finished_projects(&self) -> Result<Vec<Project>> {
+        self.select_projects(&format!(
+            "{} AND status IN ('completed', 'canceled')
+             ORDER BY completed_at DESC, updated_at DESC, id ASC",
+            trash::LIVE_PROJECT
+        ))
+    }
+
+    /// Complete or cancel a project (`outcome`), closing its open tasks as
+    /// `open_tasks` says: the caller must choose, so no task is closed
+    /// without being asked about (#55). The tasks this closes are marked,
+    /// and [`Self::reopen_project`] reopens exactly those; tasks finished
+    /// before keep their state. Tasks in the Trash are left as they are.
+    ///
+    /// The project must be open and not in the Trash, itself or through its
+    /// area.
+    pub fn finish_project(&self, id: &str, outcome: Outcome, open_tasks: Outcome) -> Result<()> {
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            if Self::live_project_status(&tx, id)? != Status::Open {
+                return Err(MattersError::Validation(format!(
+                    "project '{id}' is already finished"
+                )));
+            }
+            let now = crate::clock::now_millis();
+            tx.execute(
+                "UPDATE projects SET status = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                params![Status::from(outcome).as_str(), now, id],
+            )?;
+            tx.execute(
+                "UPDATE tasks SET status = ?1, completed_at = ?2, updated_at = ?2, closed_by_project = 1
+                 WHERE project_id = ?3 AND status = 'open' AND trashed_at IS NULL",
+                params![Status::from(open_tasks).as_str(), now, id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Undo [`Self::finish_project`]: the project is open again, and so are
+    /// the tasks finishing it closed, unless they were reopened or finished
+    /// by hand since. The project must be finished and not in the Trash.
+    pub fn reopen_project(&self, id: &str) -> Result<()> {
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            if Self::live_project_status(&tx, id)? == Status::Open {
+                return Err(MattersError::Validation(format!(
+                    "project '{id}' is not finished"
+                )));
+            }
+            let now = crate::clock::now_millis();
+            tx.execute(
+                "UPDATE projects SET status = 'open', completed_at = NULL, updated_at = ?1 WHERE id = ?2",
+                params![now, id],
+            )?;
+            tx.execute(
+                "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?1, closed_by_project = 0
+                 WHERE project_id = ?2 AND closed_by_project = 1",
+                params![now, id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// The status of project `id`; `NotFound` when it doesn't exist or is in
+    /// the Trash, itself or through its area.
+    fn live_project_status(conn: &Connection, id: &str) -> Result<Status> {
+        let status: Option<String> = conn
+            .query_row(
+                &format!(
+                    "SELECT status FROM projects WHERE id = ?1 AND {}",
+                    trash::LIVE_PROJECT
+                ),
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        status
+            .map(|s| Status::from_str_loose(&s))
+            .ok_or_else(|| MattersError::NotFound {
+                entity: "project",
+                id: id.to_string(),
+            })
     }
 
     /// Projects the Trash lists, most recently trashed first. A project in a
@@ -693,7 +784,8 @@ impl Database {
         conn.execute(
             "UPDATE tasks SET
                 title = ?1, notes = ?2, start_date = ?3, time_of_day = ?4, is_someday = ?5,
-                deadline = ?6, status = ?7, completed_at = ?8, updated_at = ?9
+                deadline = ?6, status = ?7, completed_at = ?8, updated_at = ?9,
+                closed_by_project = CASE WHEN ?7 = 'open' THEN 0 ELSE closed_by_project END
              WHERE id = ?10",
             params![
                 task.title,
@@ -854,7 +946,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
         conn.execute(
-            "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
+            "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1,
+                closed_by_project = 0 WHERE id = ?2",
             params![now, id],
         )?;
         Ok(())
@@ -864,7 +957,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
         conn.execute(
-            "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?1 WHERE id = ?2",
+            "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?1,
+                closed_by_project = 0 WHERE id = ?2",
             params![now, id],
         )?;
         Ok(())
