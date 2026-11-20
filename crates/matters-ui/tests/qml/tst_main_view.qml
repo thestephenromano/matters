@@ -2360,6 +2360,183 @@ Item {
             waitForChecklist(row, ["a", "z", "b"]);
         }
 
+        // ---- Several tasks at once (#64) -----------------------------------
+
+        // Today tasks `titles`, the first selected, the list focused.
+        function addSeveral(titles) {
+            const rows = titles.map(t => addToToday(t));
+            settle();
+            list.positionViewAtIndex(indexOf(titles[0]), ListView.Contain);
+            settle();
+            view.selectOnly(rowFor(titles[0]).taskId);
+            list.forceActiveFocus();
+            return rows;
+        }
+
+        function selectedTitles() {
+            return view.selection().map(id => list.model.titleAt(list.model.rowOf(id)));
+        }
+
+        function undoNoticeSays(text) {
+            tryCompare(findChild(view, "undoText"), "text", text);
+        }
+
+        function test_shift_and_ctrl_select_several_tasks() {
+            addSeveral(["ms-1", "ms-2", "ms-3", "ms-4"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            compare(selectedTitles(), ["ms-1", "ms-2", "ms-3"], "Shift+Down extends");
+            compare(selectedTitle(), "ms-3", "the cursor is on the last");
+            verify(rowFor("ms-2").isSelected, "shown selected");
+            keyClick(Qt.Key_Up, Qt.ShiftModifier);
+            compare(selectedTitles(), ["ms-1", "ms-2"], "Shift+Up shrinks it back");
+
+            // Ctrl+click takes one out and puts one in; Shift+click extends.
+            mouseClick(rowFor("ms-2"), rowFor("ms-2").width - 60, 16, Qt.LeftButton, Qt.ControlModifier);
+            compare(selectedTitles(), ["ms-1"]);
+            mouseClick(rowFor("ms-4"), rowFor("ms-4").width - 60, 16, Qt.LeftButton, Qt.ControlModifier);
+            compare(selectedTitles(), ["ms-1", "ms-4"]);
+            mouseClick(rowFor("ms-2"), rowFor("ms-2").width - 60, 16, Qt.LeftButton, Qt.ShiftModifier);
+            compare(selectedTitles(), ["ms-2", "ms-3", "ms-4"], "from the last Ctrl+clicked");
+            verify(!rowFor("ms-2").isExpanded, "a modified click opens nothing");
+
+            // A plain arrow, or a plain click, selects one again.
+            keyClick(Qt.Key_Down);
+            compare(selectedTitles().length, 1);
+            mouseClick(rowFor("ms-1"), rowFor("ms-1").width - 60, 16);
+            compare(selectedTitles(), ["ms-1"]);
+        }
+
+        function test_several_tasks_are_completed_together_and_undone_at_once() {
+            addSeveral(["mc-1", "mc-2", "mc-3"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            keySequence("Ctrl+.");
+            for (const t of ["mc-1", "mc-2", "mc-3"])
+                tryCompare(rowFor(t), "done", true);
+            undoNoticeSays("3 tasks completed");
+            keySequence(StandardKey.Undo);
+            for (const t of ["mc-1", "mc-2", "mc-3"])
+                tryCompare(rowFor(t), "done", false);
+        }
+
+        function test_several_tasks_are_trashed_together_and_undone_at_once() {
+            addSeveral(["mt-1", "mt-2", "mt-3", "mt-4"]);
+            const before = [];
+            for (let i = 0; i < list.count; ++i)
+                before.push(list.model.titleAt(i));
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            compare(selectedTitles(), ["mt-2", "mt-3"]);
+            keyClick(Qt.Key_Delete);
+            waitForNoRow("mt-2");
+            waitForNoRow("mt-3");
+            compare(selectedTitle(), "mt-4", "the next task left is selected");
+            undoNoticeSays("2 tasks moved to Trash");
+            keySequence(StandardKey.Undo);
+            waitForRow("mt-2");
+            waitForRow("mt-3");
+            const after = [];
+            for (let i = 0; i < list.count; ++i)
+                after.push(list.model.titleAt(i));
+            compare(after, before, "back in their places");
+        }
+
+        function test_several_tasks_are_scheduled_together() {
+            addSeveral(["mw-1", "mw-2", "mw-3"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            const popup = openWhen();
+            mouseClick(findChild(popup.contentItem, "when-someday"));
+            waitForNoRow("mw-1");
+            waitForNoRow("mw-2");
+            verify(indexOf("mw-3") >= 0, "only the selected");
+            undoNoticeSays("2 tasks scheduled");
+            keySequence(StandardKey.Undo);
+            waitForRow("mw-1");
+            waitForRow("mw-2");
+
+            // A typed date too.
+            view.selectOnly(rowFor("mw-1").taskId);
+            list.forceActiveFocus();
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            const again = openWhen();
+            typeText("tomorrow");
+            keyClick(Qt.Key_Return);
+            waitForNoRow("mw-1");
+            waitForNoRow("mw-2");
+            controller.selectView("upcoming");
+            waitForRow("mw-1");
+            waitForRow("mw-2");
+        }
+
+        function test_several_tasks_get_a_deadline_together() {
+            addSeveral(["md-1", "md-2"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            const popup = findChild(view, "whenPopup");
+            keyClick(Qt.Key_D, Qt.ControlModifier);
+            tryVerify(() => popup.opened, 1000);
+            waitForRendering(popup.contentItem);
+            mouseClick(findChild(popup.contentItem, "deadline-today"));
+            tryVerify(() => rowFor("md-1").deadline !== "" && rowFor("md-2").deadline !== "", 1000);
+            undoNoticeSays("Deadline set for 2 tasks");
+        }
+
+        function test_several_tasks_are_moved_together() {
+            controller.createArea("ms-area");
+            addSeveral(["mm-1", "mm-2", "mm-3"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            const popup = openMove();
+            typeText("ms-area");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !popup.visible, 1000);
+            undoNoticeSays("2 tasks moved");
+            controller.selectView("anytime");
+            waitForRow("mm-1");
+            waitForRow("mm-2");
+            waitForNoRow("mm-3");
+        }
+
+        function test_several_tasks_are_tagged_together_and_undone_at_once() {
+            addSeveral(["mg-1", "mg-2", "mg-3"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            keySequence("Ctrl+Shift+T");
+            const popup = findChild(view, "batchTagPopup");
+            tryVerify(() => popup.opened, 1000, "a tag popover for the selection");
+            typeText("mg-tag");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !popup.visible, 1000);
+            tryVerify(() => rowFor("mg-1").tagList.length === 1 && rowFor("mg-2").tagList.length === 1, 1000);
+            compare(rowFor("mg-3").tagList.length, 0);
+            undoNoticeSays("2 tasks tagged mg-tag");
+            keySequence(StandardKey.Undo);
+            tryVerify(() => rowFor("mg-1").tagList.length === 0 && rowFor("mg-2").tagList.length === 0, 1000);
+        }
+
+        function test_the_selection_survives_a_refresh_and_clears_on_navigation() {
+            addSeveral(["mr-1", "mr-2"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            controller.addTask("mr-new"); // the list reloads
+            settle();
+            compare(selectedTitles(), ["mr-1", "mr-2"]);
+            controller.selectView("inbox");
+            controller.selectView("today");
+            settle();
+            compare(view.selection(), []);
+        }
+
+        function test_dragging_a_selection_to_the_sidebar_moves_all_of_it() {
+            controller.createArea("ms-drag-area");
+            controller.selectView("today");
+            addSeveral(["mv-d1", "mv-d2", "mv-d3"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            const target = centre(shownArea("ms-drag-area"));
+            dragGripToPoint(findChild(rowFor("mv-d1"), "dragGrip"), target);
+            waitForNoRow("mv-d1");
+            waitForNoRow("mv-d2");
+            verify(indexOf("mv-d3") >= 0);
+            undoNoticeSays("2 tasks moved");
+        }
+
         // ---- Move (#54) -----------------------------------------------------
 
         function openMove() {
