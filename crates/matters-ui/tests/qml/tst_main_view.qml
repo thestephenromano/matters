@@ -1044,7 +1044,7 @@ Item {
                 waitForRendering(popup.contentItem);
                 const names = ["whenInput", "whenNextMonth", "whenCalendar", mode + "-today", mode + "-none"];
                 if (mode === "when")
-                    names.push("when-evening", "when-someday");
+                    names.push("when-evening", "when-someday", "reminderInput");
                 for (const name of names) {
                     const item = findChild(popup.contentItem, name);
                     verify(item !== null && item.visible, name + " shown");
@@ -3373,6 +3373,98 @@ Item {
             waitForChecklist(row, ["keep", "drop", "last"], "back in its place");
             verify(checklistItem(row, "drop").done, "still ticked");
             compare(view.undoKind, "");
+        }
+
+        // ---- Reminders (#60) -------------------------------------------------
+
+        // Open the popover from the open row's Reminder pill: the keyboard
+        // starts in the reminder field.
+        function openReminder(row) {
+            expandRow(row);
+            mouseClick(findChild(row, "schedule-reminder"));
+            const popup = findChild(view, "whenPopup");
+            tryVerify(() => popup.opened, 1000, "the Reminder pill opens the popover");
+            waitForRendering(popup.contentItem);
+            const field = findChild(popup.contentItem, "reminderInput");
+            tryVerify(() => field.activeFocus, 1000, "ready for a typed time");
+            return popup;
+        }
+
+        function test_a_reminder_is_typed_in_the_popover_and_shown_on_the_row() {
+            const row = addToToday("rem-typed");
+            const popup = openReminder(row);
+            const preview = findChild(popup.contentItem, "reminderPreview");
+            typeText("9:30pm");
+            compare(preview.text, "Remind at " + view.describeTime("21:30"));
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !popup.visible, 1000);
+            tryCompare(row, "reminder", "21:30");
+            compare(findChild(row, "schedule-reminder").label, view.describeTime("21:30"));
+
+            // Closed, the row shows a bell and the time.
+            clickRowBody(row);
+            tryVerify(() => !row.isExpanded, 1000);
+            const badge = findChild(row, "reminderBadge");
+            verify(badge.visible);
+            compare(findChild(badge, "reminderLabel").text, view.describeTime("21:30"));
+            compare(badge.Accessible.name, "Reminder at " + view.describeTime("21:30"));
+        }
+
+        function test_a_reminder_is_cleared_from_the_popover() {
+            const row = addToToday("rem-clear");
+            controller.setTaskReminderTyped(row.taskId, "8:15");
+            tryCompare(row, "reminder", "08:15");
+            const popup = openReminder(row);
+            const field = findChild(popup.contentItem, "reminderInput");
+            compare(field.placeholderText, "Reminder at " + view.describeTime("08:15"),
+                    "the field says what is set");
+            mouseClick(findChild(popup.contentItem, "clearReminder"));
+            tryVerify(() => !popup.visible, 1000);
+            tryCompare(row, "reminder", "");
+            verify(!findChild(row, "reminderBadge").visible);
+        }
+
+        function test_a_time_that_isnt_one_keeps_the_popover_open() {
+            const row = addToToday("rem-refused");
+            const popup = openReminder(row);
+            typeText("25:00");
+            compare(findChild(popup.contentItem, "reminderPreview").text, "Not a time");
+            keyClick(Qt.Key_Return);
+            wait(50);
+            verify(popup.visible, "a refused time changes nothing");
+            compare(row.reminder, "");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !popup.visible, 2000);
+        }
+
+        function test_a_reminder_on_an_inbox_task_schedules_it_for_today() {
+            controller.selectView("inbox");
+            view.captureTask("rem-inbox");
+            const row = waitForRow("rem-inbox");
+            const popup = openReminder(row);
+            typeText("8am");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !popup.visible, 1000);
+            controller.selectView("inbox");
+            waitForNoRow("rem-inbox");
+            controller.selectView("today");
+            const today = waitForRow("rem-inbox");
+            compare(today.reminder, "08:00");
+        }
+
+        function test_open_on_a_reminder_shows_its_task() {
+            const row = addToToday("rem-open");
+            const id = row.taskId;
+            controller.scheduleTask(id, isoInDays(3));
+            controller.selectView("inbox");
+            // As the notification's Open button does.
+            controller.reminderOpened(id);
+            tryCompare(controller, "currentView", "upcoming");
+            tryCompare(list, "expandedTaskId", id);
+            tryCompare(list, "selectedTaskId", id);
+            // A reminder of several opens Today.
+            controller.reminderOpened("");
+            tryCompare(controller, "currentView", "today");
         }
     }
 }

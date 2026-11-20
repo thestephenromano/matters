@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS area_tags (
 CREATE INDEX IF NOT EXISTS idx_area_tags_tag ON area_tags(tag_id);
 "#;
 
+/// v10: reminders (#60). A task's reminder is a local time of day on its
+/// start date. `reminder_deliveries` is this device's record of the
+/// reminders it has shown, by task and local date and time, so each is shown
+/// once; it is never synced.
+pub const MIGRATION_V10: &str = r#"
+ALTER TABLE tasks ADD COLUMN reminder_time TEXT;
+CREATE TABLE IF NOT EXISTS reminder_deliveries (
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    due TEXT NOT NULL,
+    delivered_at INTEGER NOT NULL,
+    PRIMARY KEY (task_id, due)
+);
+"#;
+
 /// v9: the sync engine's journal (#35). Every engine update, local or
 /// received, in commit order; `outgoing` marks local ones. `sync_state`
 /// exists once sync is enabled. Both stay empty while sync is off.

@@ -33,6 +33,8 @@ fn main() {
     // Settings live in memory only: the tests never read or write the
     // user's file.
     matters_ui::install_settings(None, None);
+    // Reminders are kept, never shown on the desktop (#60).
+    matters_ui::install_notifier(Box::new(matters_ui::notify::RecordingNotifier::default()));
     matters_ui::init_qml();
 
     let source_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/qml");

@@ -33,6 +33,7 @@ Item {
         "deadline": "M6 21V4 M6 4h11l-2.5 4 2.5 4H6",
         "plus": "M12 5v14 M5 12h14",
         "notes": "M5 6h14 M5 10h14 M5 14h14 M5 18h8",
+        "bell": "M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z M10 21a2 2 0 0 0 4 0",
         "settings": "M4 6h9 M17 6h3 M15 4v4 M4 12h3 M11 12h9 M9 10v4 M4 18h11 M19 18h1 M17 16v4",
         "sidebar": "M4 5h16v14H4z M9.5 5v14",
         "close": "M6 6l12 12 M18 6L6 18",

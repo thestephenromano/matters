@@ -314,6 +314,24 @@ Item {
         onTriggered: controller.checkDate()
     }
 
+    // Reminders (#60): checked against the wall clock every few seconds, so
+    // one comes on time, and within seconds of waking from sleep or a change
+    // of clock or time zone. At start, those missed while Matters was closed.
+    Timer {
+        interval: 5 * 1000
+        repeat: true
+        running: true
+        triggeredOnStart: true
+        onTriggered: controller.checkReminders()
+    }
+
+    Connections {
+        target: controller
+        function onReminderOpened(taskId) {
+            root.openFromReminder(taskId);
+        }
+    }
+
     // Task to scroll to once the list has loaded (set by Quick Find).
     property string pendingRevealId: ""
 
@@ -1004,6 +1022,35 @@ Item {
         return format.indexOf("M") < format.indexOf("d");
     }
 
+    // A reminder time (`HH:MM`, #60) in the locale's short format.
+    function describeTime(hhmm) {
+        if (hhmm === "")
+            return "";
+        const [h, m] = hhmm.split(":").map(Number);
+        return new Date(2000, 0, 1, h, m).toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
+    }
+
+    // Open was chosen on a reminder (#60): the task, open and in view, in
+    // the list that holds it; Today for a reminder of several.
+    function openFromReminder(id) {
+        if (id === "") {
+            controller.selectView("today");
+        } else {
+            pendingRevealId = id;
+            taskListView.expandedTaskId = id;
+            controller.revealTask(id);
+        }
+        const window = root.Window.window;
+        if (window)
+            window.requestActivate();
+    }
+
+    // The popover with the keyboard in its reminder field (#60).
+    function openReminderFor(id) {
+        whenPopup.focusReminder = true;
+        openDatePopup(id, "when");
+    }
+
     // The popover sets a task's When or, in "deadline" mode, its deadline
     // (Ctrl+D, Deadline…; #20).
     function openDatePopup(id, mode) {
@@ -1016,6 +1063,7 @@ Item {
         whenPopup.taskId = id;
         whenPopup.forProject = false;
         whenPopup.mode = mode;
+        whenPopup.reminder = taskModel.reminderAt(row);
         whenPopup.open();
     }
 
@@ -2734,6 +2782,8 @@ Item {
                                     required property bool evening
                                     required property string deadline
                                     required property string deadlineStatus
+                                    // `HH:MM` while the task has a reminder due (#60).
+                                    required property string reminder
                                     required property bool someday
                                     required property int checklistDone
                                     required property int checklistTotal
@@ -3108,6 +3158,39 @@ Item {
                                                 }
                                             }
 
+                                            // A reminder (#60): a bell and its time.
+                                            Rectangle {
+                                                objectName: "reminderBadge"
+                                                visible: taskRow.reminder !== ""
+                                                Layout.preferredHeight: 20
+                                                Layout.preferredWidth: reminderLabel.contentWidth + 28
+                                                radius: 4
+                                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                Accessible.role: Accessible.StaticText
+                                                Accessible.name: "Reminder at " + reminderLabel.text
+
+                                                Icon {
+                                                    id: reminderIcon
+                                                    name: "bell"
+                                                    size: 12
+                                                    color: root.colTextSecondary
+                                                    anchors.left: parent.left
+                                                    anchors.leftMargin: 6
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                }
+
+                                                Text {
+                                                    id: reminderLabel
+                                                    objectName: "reminderLabel"
+                                                    anchors.left: reminderIcon.right
+                                                    anchors.leftMargin: 4
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: root.describeTime(taskRow.reminder)
+                                                    font.pixelSize: 11
+                                                    color: root.colTextSecondary
+                                                }
+                                            }
+
                                             // The task has notes, while the row is closed.
                                             Icon {
                                                 objectName: "notesMarker"
@@ -3436,6 +3519,21 @@ Item {
                                                     ToolTip.visible: hovered
                                                     ToolTip.text: "Change when (Ctrl+S)"
                                                     onClicked: root.openWhenFor(taskRow.taskId)
+                                                }
+
+                                                DatePill {
+                                                    objectName: "schedule-reminder"
+                                                    label: taskRow.reminder === "" ? "Reminder" : root.describeTime(taskRow.reminder)
+                                                    hasValue: taskRow.reminder !== ""
+                                                    iconName: "bell"
+                                                    textPrimary: root.colTextPrimary
+                                                    textSecondary: root.colTextSecondary
+                                                    lineColor: root.colBorder
+                                                    hoverColor: root.colSidebarHover
+                                                    downColor: root.colSidebarActive
+                                                    ToolTip.visible: hovered
+                                                    ToolTip.text: "Remind me at a time"
+                                                    onClicked: root.openReminderFor(taskRow.taskId)
                                                 }
 
                                                 DatePill {
@@ -4419,6 +4517,29 @@ Item {
         property string mode: "when"
         // The day the calendar's keyboard cursor is on.
         property date cursor: new Date()
+        // The task's reminder time (#60), `HH:MM` or "", and whether the
+        // keyboard starts in the reminder field.
+        property string reminder: ""
+        property bool focusReminder: false
+        readonly property bool remindable: mode === "when" && !forProject
+
+        // A typed reminder time for the tasks; false when it is refused.
+        function applyReminder(text) {
+            const several = taskIds.length > 1;
+            if (controller.previewReminder(text) === "")
+                return false;
+            if (several)
+                controller.rememberTasks(JSON.stringify(taskIds));
+            for (const id of taskIds)
+                controller.setTaskReminderTyped(id, text);
+            if (several)
+                root.showUndo("batch", "", "Reminder set for %n tasks".replace("%n", taskIds.length));
+            return true;
+        }
+
+        function clearReminder() {
+            root.actOn(taskIds, id => controller.clearTaskReminder(id), "Reminder cleared for %n tasks");
+        }
 
         // Set the When (a `Schedule::parse` key or ISO date) or, in deadline
         // mode, the deadline (an ISO date, or "" to clear it).
@@ -4475,12 +4596,17 @@ Item {
 
         onOpened: {
             whenInput.text = "";
+            reminderInput.text = "";
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             cursor = today;
             calendar.month = today.getMonth();
             calendar.year = today.getFullYear();
-            whenInput.forceActiveFocus();
+            if (focusReminder && remindable)
+                reminderInput.forceActiveFocus();
+            else
+                whenInput.forceActiveFocus();
+            focusReminder = false;
         }
         onClosed: taskListView.forceActiveFocus()
 
@@ -4687,6 +4813,54 @@ Item {
                     }
                     event.accepted = true;
                 }
+            }
+
+            // A reminder (#60): a time of day on the task's date. A task
+            // with no date is scheduled for today.
+            RowLayout {
+                visible: whenPopup.remindable
+                Layout.fillWidth: true
+                spacing: 6
+
+                Icon {
+                    name: "bell"
+                    size: 16
+                    color: root.colTextSecondary
+                }
+                TextField {
+                    id: reminderInput
+                    objectName: "reminderInput"
+                    Layout.fillWidth: true
+                    placeholderText: whenPopup.reminder === ""
+                        ? "Remind me at: 9:00, 2:30pm"
+                        : "Reminder at " + root.describeTime(whenPopup.reminder)
+                    Accessible.name: "Reminder time"
+                    onAccepted: {
+                        if (whenPopup.applyReminder(text))
+                            whenPopup.close();
+                    }
+                    // Up returns to the calendar.
+                    Keys.onUpPressed: calendar.forceActiveFocus()
+                }
+                Button {
+                    objectName: "clearReminder"
+                    visible: whenPopup.reminder !== ""
+                    text: "Clear"
+                    font.pixelSize: 11
+                    onClicked: {
+                        whenPopup.clearReminder();
+                        whenPopup.close();
+                    }
+                }
+            }
+            Label {
+                objectName: "reminderPreview"
+                readonly property string meaning: controller.previewReminder(reminderInput.text)
+                Layout.fillWidth: true
+                visible: whenPopup.remindable && reminderInput.text.trim() !== ""
+                text: meaning === "" ? "Not a time" : "Remind at " + root.describeTime(meaning)
+                color: meaning === "" ? root.colTextSecondary : root.colAccent
+                font.pixelSize: 12
             }
         }
     }

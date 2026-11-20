@@ -15,7 +15,7 @@ use crate::error::{MattersError, Result};
 impl Database {
     /// Copy task `id` and return the copy's id. The copy is open and listed
     /// just below the original, in its home and in Today; it has the same
-    /// title, notes, home, When, deadline and tags, and the same checklist,
+    /// title, notes, home, When, deadline, reminder and tags, and the same checklist,
     /// with every item unticked. The task must be live (not in the Trash).
     pub fn duplicate_task(&self, id: &str) -> Result<String> {
         let copy = Uuid::new_v4().to_string();
@@ -30,11 +30,12 @@ impl Database {
                     "INSERT INTO tasks (
                     id, area_id, project_id, heading_id, title, notes, start_date,
                     time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                    created_at, updated_at, trashed_at, today_order, closed_by_project
+                    created_at, updated_at, trashed_at, today_order, closed_by_project,
+                    reminder_time
                  )
                  SELECT ?2, area_id, project_id, heading_id, title, notes, start_date,
                     time_of_day, is_someday, deadline, 'open', NULL, ?3,
-                    ?5, ?5, NULL, ?4, 0
+                    ?5, ?5, NULL, ?4, 0, reminder_time
                  FROM tasks WHERE id = ?1",
                     params![id, copy, sort_order, today_order, now],
                 )?;

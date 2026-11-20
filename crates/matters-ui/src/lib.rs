@@ -5,10 +5,13 @@
 
 pub mod bridge;
 mod motion;
+pub mod notify;
 #[cfg(test)]
 mod qml_lint;
+pub mod reminders;
 
 pub use bridge::{install_database, install_settings};
+pub use reminders::install_notifier;
 
 /// The Qt Quick Controls style Matters uses unless `QT_QUICK_CONTROLS_STYLE`
 /// names another: Fusion, a built-in style drawn entirely from the palette,

@@ -15,7 +15,7 @@ use core::pin::Pin;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{
     QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant,
 };
@@ -340,6 +340,30 @@ pub mod qobject {
         /// ISO date, or an empty string when it is refused.
         #[qinvokable]
         fn preview_deadline(self: &AppController, text: &QString, month_first: bool) -> QString;
+        /// What a typed reminder time means (#60,
+        /// `reminders::parse_typed_time`): `HH:MM`, or an empty string when
+        /// it is refused.
+        #[qinvokable]
+        fn preview_reminder(self: &AppController, text: &QString) -> QString;
+        /// Remind about a task at a typed time (#60); a task with no date is
+        /// scheduled for today. False, changing nothing, when the time is
+        /// refused.
+        #[qinvokable]
+        fn set_task_reminder_typed(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            text: &QString,
+        ) -> bool;
+        /// Clear a task's reminder.
+        #[qinvokable]
+        fn clear_task_reminder(self: Pin<&mut AppController>, task_id: &QString);
+        /// Show the reminders now due (#60). Called every few seconds.
+        #[qinvokable]
+        fn check_reminders(self: Pin<&mut AppController>);
+        /// Open was chosen on a reminder: show task `task_id`, or Today for
+        /// a reminder of several (an empty id).
+        #[qsignal]
+        fn reminder_opened(self: Pin<&mut AppController>, task_id: QString);
         /// Set a task's deadline from typed text; false, changing nothing,
         /// when the text is refused.
         #[qinvokable]
@@ -516,6 +540,10 @@ pub mod qobject {
         /// Whether the task at `row` is scheduled for This Evening.
         #[qinvokable]
         fn evening_at(self: &TaskListModel, row: i32) -> bool;
+        /// The reminder time of the task at `row` (#60), `HH:MM`, or an
+        /// empty string when it has none.
+        #[qinvokable]
+        fn reminder_at(self: &TaskListModel, row: i32) -> QString;
         /// The status of the task at `row` (`open`, `completed` or
         /// `canceled`), or an empty string when out of range.
         #[qinvokable]
@@ -647,6 +675,9 @@ pub mod qobject {
         #[cxx_override]
         fn row_count(self: &ChecklistModel, parent: &QModelIndex) -> i32;
     }
+
+    // Reminder notifications report back from their own threads.
+    impl cxx_qt::Threading for AppController {}
 }
 
 // =============================================================================
@@ -794,6 +825,9 @@ pub struct AppControllerRust {
     deleted_checklist_item: Option<ChecklistItem>,
     /// The tasks as they were before the last action on several (#64).
     remembered: Option<TaskSnapshot>,
+    /// Why reminders can't be shown, once said (#60): it isn't repeated
+    /// on every check.
+    reminder_problem: Option<String>,
 }
 
 impl Default for AppControllerRust {
@@ -839,6 +873,7 @@ impl Default for AppControllerRust {
             deleted_heading: None,
             deleted_checklist_item: None,
             remembered: None,
+            reminder_problem: None,
             db: database(),
         }
     }
@@ -1341,6 +1376,79 @@ impl qobject::AppController {
             Self::date_order(month_first),
         );
         QString::from(date.map(|d| d.to_string()).unwrap_or_default().as_str())
+    }
+
+    pub fn preview_reminder(&self, text: &QString) -> QString {
+        let time = matters_core::reminders::parse_typed_time(&String::from(text));
+        QString::from(
+            time.map(matters_core::reminders::stored_time)
+                .unwrap_or_default()
+                .as_str(),
+        )
+    }
+
+    pub fn set_task_reminder_typed(
+        self: Pin<&mut Self>,
+        task_id: &QString,
+        text: &QString,
+    ) -> bool {
+        let Some(time) = matters_core::reminders::parse_typed_time(&String::from(text)) else {
+            return false;
+        };
+        let result = gone_task_is_fine(self.db.remind_task_at(
+            &String::from(task_id),
+            time,
+            local_today(),
+        ));
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn clear_task_reminder(self: Pin<&mut Self>, task_id: &QString) {
+        let result = gone_task_is_fine(self.db.set_task_reminder(&String::from(task_id), None));
+        self.finish(result);
+    }
+
+    pub fn check_reminders(mut self: Pin<&mut Self>) {
+        let Some(notifier) = crate::reminders::notifier() else {
+            return;
+        };
+        let thread = self.qt_thread();
+        let on_action: crate::notify::OnAction = std::sync::Arc::new(move |action| {
+            // Gone only when the app is quitting.
+            let _ = thread.queue(move |controller| controller.reminder_action(action));
+        });
+        let delivered = crate::reminders::deliver(
+            &self.db,
+            notifier,
+            &on_action,
+            jiff::Timestamp::now(),
+            &jiff::tz::TimeZone::system(),
+        );
+        match delivered {
+            Ok(_) => self.as_mut().rust_mut().reminder_problem = None,
+            Err(err) => {
+                // Said once, not on every check; they are tried again.
+                if self.reminder_problem.as_deref() != Some(err.as_str()) {
+                    self.as_mut().rust_mut().reminder_problem = Some(err.clone());
+                    self.report(format!("Reminders can't be shown: {err}"));
+                }
+            }
+        }
+    }
+
+    /// What the user chose on a reminder.
+    fn reminder_action(mut self: Pin<&mut Self>, action: crate::notify::Action) {
+        match action {
+            crate::notify::Action::Open(id) => {
+                self.as_mut().reminder_opened(QString::from(id.as_str()))
+            }
+            crate::notify::Action::Complete(id) => {
+                let result = gone_task_is_fine(self.db.complete_task(&id));
+                self.finish(result);
+            }
+        }
     }
 
     pub fn set_task_deadline_typed(
@@ -2190,10 +2298,12 @@ enum Role {
     Status,
     /// The task's own tags, as JSON `[{id, name}]` (#57).
     Tags,
+    /// The time an open, dated task reminds at, `HH:MM`, or empty (#60).
+    Reminder,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 16] = [
+    const ALL: [(Role, &'static str); 17] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -2210,6 +2320,7 @@ impl Role {
         (Role::HeadingId, "headingId"),
         (Role::Status, "status"),
         (Role::Tags, "tags"),
+        (Role::Reminder, "reminder"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -2417,6 +2528,15 @@ impl qobject::TaskListModel {
         self.task_at(row).is_some_and(Task::is_evening)
     }
 
+    pub fn reminder_at(&self, row: i32) -> QString {
+        let time = self.task_at(row).and_then(|task| task.reminder);
+        QString::from(
+            time.map(matters_core::reminders::stored_time)
+                .unwrap_or_default()
+                .as_str(),
+        )
+    }
+
     pub fn status_at(&self, row: i32) -> QString {
         self.task_at(row)
             .map_or_else(QString::default, |task| QString::from(task.status.as_str()))
@@ -2494,6 +2614,12 @@ impl qobject::TaskListModel {
             Role::DeadlineStatus => QVariant::from(&QString::from(deadline_key(
                 task.deadline_status(local_today()),
             ))),
+            Role::Reminder => QVariant::from(&QString::from(
+                matters_core::reminders::due(task)
+                    .map(|due| matters_core::reminders::stored_time(due.time()))
+                    .unwrap_or_default()
+                    .as_str(),
+            )),
         }
     }
 
@@ -2523,7 +2649,7 @@ impl qobject::TaskListModel {
                     .unwrap_or_default(),
             )),
             Role::ChecklistDone | Role::ChecklistTotal => QVariant::from(&0_i32),
-            Role::Notes | Role::HeadingId => QVariant::from(&QString::default()),
+            Role::Notes | Role::HeadingId | Role::Reminder => QVariant::from(&QString::default()),
             Role::Tags => QVariant::from(&QString::from("[]")),
         }
     }
@@ -2548,7 +2674,8 @@ impl qobject::TaskListModel {
             | Role::StartDate
             | Role::Deadline
             | Role::DeadlineStatus
-            | Role::Status => QVariant::from(&QString::default()),
+            | Role::Status
+            | Role::Reminder => QVariant::from(&QString::default()),
             Role::Tags => QVariant::from(&QString::from("[]")),
         }
     }

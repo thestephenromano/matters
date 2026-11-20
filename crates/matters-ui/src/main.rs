@@ -26,6 +26,8 @@ fn main() {
             matters_ui::install_settings(None, Some(format!("Your settings can't be kept: {err}")))
         }
     }
+    // Reminders (#60) as desktop notifications.
+    matters_ui::install_notifier(Box::new(matters_ui::notify::DesktopNotifier));
     matters_ui::init_qml();
 
     let mut app = QGuiApplication::new();

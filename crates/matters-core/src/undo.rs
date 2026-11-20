@@ -88,6 +88,9 @@ fn restore_task(db: &Database, old: &Task, tags: &[String], today: Date) -> Resu
     if old.deadline != now.deadline {
         db.set_task_deadline(id, old.deadline)?;
     }
+    if old.reminder != now.reminder {
+        db.set_task_reminder(id, old.reminder)?;
+    }
     if old.status != now.status {
         match old.status {
             Status::Open => db.uncomplete_task(id)?,

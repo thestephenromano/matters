@@ -153,6 +153,15 @@ Until then the Logbook doesn't list them, and the badges count open tasks only. 
 
 Preferences are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
 
+### Reminders
+A task can remind at a time of day on its start date (#60). The When popover's reminder field takes a typed time (`9`, `9:30`, `21:30`, `9am`, `2:30 pm`, `noon`, `midnight`); anything else is refused, never guessed. The open task's **Reminder** pill opens the popover with the keyboard in that field, and **Clear** removes the reminder. A task with no date, or deferred to Someday, is scheduled for Today when given a reminder. Rows show a bell and the time.
+
+* **When it is due:** at that local time on the task's start date, in the system's time zone. A time the clocks skip is due just after the gap; a time that happens twice is due the first time. Moving the task to another day moves its reminder; completing, canceling or trashing it, or moving it to Someday or to no date, cancels it.
+* **How it is shown:** as a desktop notification (the freedesktop notification service), with **Open**, which shows the task in its list, and **Complete**. More than three due at once are one notification.
+* **Shown once, on time:** Matters checks the wall clock every five seconds, so a reminder comes within seconds of its time, and of waking from sleep or a change of clock or time zone. Each device records the reminders it has shown, by task and local date and time, and never shows one twice; that record isn't synced. Reminders that came due while Matters was closed are shown when it starts, as missed. If the notification service can't be reached, Matters says so once and shows them when it can.
+
+The rules are `matters_core::reminders`; the notifications, `matters_ui::reminders` and `matters_ui::notify`.
+
 ---
 
 ## 4. Interaction Design & Keyboard Ergonomics
@@ -164,7 +173,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Enter` | Selected task | Opens a field for a new task directly below the selected item (in the Inbox, Today and projects; elsewhere it focuses the quick-add field). `Enter` again saves it and opens the next; `Escape` or an empty `Enter` closes the field. In Today the new task joins the selected task's section |
 | `Space` | Selected task | Toggles inline expansion (notes + checklist) |
 | `F2` | Selected task | Opens the task with its title selected for editing; `Enter` saves and moves to the notes, `Escape` abandons the edit |
-| `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, and a calendar operable by keyboard). Past days, times of day and phrases that name no day (`week`, `this month`) are refused (`Schedule::parse_typed`) |
+| `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, a calendar operable by keyboard, and a reminder time; see *Reminders*). Past days, times of day and phrases that name no day (`week`, `this month`) are refused as dates (`Schedule::parse_typed`) |
 | `Ctrl + D` | Selected task(s) | Opens the **Deadline** popover: a typed day (`fri`, `in 3 days`, `dec 24`), a calendar, *Today* or *Clear*. Rows show the deadline, in red when due today or overdue |
 | `Ctrl + Shift + T` | Selected task(s) | With several selected, asks for one tag (existing or new) and gives it to all of them. With one, opens the task with its tag field focused. Typing suggests tags (`Up`/`Down` to pick); `Enter` adds the suggestion or the typed tag, creating it if new; `Backspace` in the empty field removes the last tag; `Escape` clears the field, then closes the task |
 | `Ctrl + Shift + M` | Selected task(s) | Opens the **Move** popover: the Inbox, areas, projects and their headings in sidebar order, with the task's current place ticked. Typing filters it (a project's name finds its headings too); `Enter` or a click files the task at the end of the chosen one. Dragging a task onto the sidebar's Inbox, an area or a project does the same, and onto Today or Someday schedules it; dragging a project onto an area files it there. The sidebar scrolls while a dragged item is held near its edge |

@@ -5,6 +5,7 @@ pub mod error;
 pub mod list_diff;
 pub mod ordering;
 pub mod query;
+pub mod reminders;
 pub mod settings;
 pub mod storage;
 pub mod undo;

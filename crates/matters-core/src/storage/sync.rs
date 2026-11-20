@@ -312,6 +312,12 @@ pub(crate) fn create_task(tx: &Transaction<'_>, task: &Task) -> Result<Vec<Comma
         task.completed_at,
         task.trashed_at,
     ));
+    if task.reminder.is_some() {
+        commands.push(Command::SetReminder {
+            id: task.id.clone(),
+            time: task.reminder,
+        });
+    }
     // Placed in Today's order within its section, once its When is known.
     commands.extend(reorder(
         tx,
@@ -778,8 +784,9 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
         tx.execute(
             "INSERT INTO tasks (id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order, created_at,
-                updated_at, trashed_at, today_order, closed_by_project)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                updated_at, trashed_at, today_order, closed_by_project, reminder_time)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                ?19)",
             params![
                 t.id,
                 t.area_id,
@@ -798,7 +805,8 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
                 t.updated_at,
                 t.trashed_at,
                 t.today_order,
-                s.closed_by_project.contains(&t.id)
+                s.closed_by_project.contains(&t.id),
+                t.reminder.map(crate::reminders::stored_time)
             ],
         )?;
     }
