@@ -754,12 +754,17 @@ fn tags_empty_trash_and_task_actions_keep_the_engine_equal() {
     db.rename_tag(&id(32), "House").unwrap();
     db.set_tag_parent(&id(32), Some(&id(30))).unwrap();
     db.add_tag_to(Tagged::Task(&id(10)), &id(31)).unwrap();
+    let before = journal(&db);
     db.add_tag_to(Tagged::Task(&id(10)), &id(31)).unwrap(); // already
+    assert_eq!(journal(&db), before, "a tag it has: nothing journalled");
     db.add_tag_to(Tagged::Project(&id(2)), &id(32)).unwrap();
     db.add_tag_to(Tagged::Area(&id(1)), &id(30)).unwrap();
     db.add_tag_to(Tagged::Task(&id(12)), &id(30)).unwrap();
     db.remove_tag_from(Tagged::Task(&id(12)), &id(30)).unwrap();
+    check(&db);
+    let before = journal(&db);
     db.remove_tag_from(Tagged::Task(&id(12)), &id(30)).unwrap(); // gone
+    assert_eq!(journal(&db), before, "a tag it hasn't: nothing journalled");
     check(&db);
     db.delete_tag(&id(31)).unwrap(); // Errands moves up to Work
     check(&db);
