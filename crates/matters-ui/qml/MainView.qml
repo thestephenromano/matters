@@ -99,6 +99,8 @@ Item {
             controller.selectArea(undoId);
         } else if (undoKind === "heading") {
             controller.restoreHeading();
+        } else if (undoKind === "checklist") {
+            controller.restoreChecklistItem();
         }
         hideUndo();
     }
@@ -2152,6 +2154,23 @@ Item {
                                         text: "Move Down"
                                         onTriggered: controller.moveHeading(sectionHeading.headingId, 1)
                                     }
+                                    // To another project, with its tasks (#169).
+                                    Menu {
+                                        id: headingProjectMenu
+                                        objectName: "moveHeadingToProjectMenu"
+                                        title: "Move to Project"
+                                        Instantiator {
+                                            model: root.projects.filter(p => p.id !== controller.currentProjectId)
+                                            delegate: MenuItem {
+                                                required property var modelData
+                                                objectName: "moveHeadingTo-" + modelData.id
+                                                text: modelData.title
+                                                onTriggered: controller.moveHeadingToProject(sectionHeading.headingId, modelData.id)
+                                            }
+                                            onObjectAdded: (index, object) => headingProjectMenu.insertItem(index, object)
+                                            onObjectRemoved: (index, object) => headingProjectMenu.removeItem(object)
+                                        }
+                                    }
                                     MenuSeparator {}
                                     // Its tasks stay in the project (decided on #22).
                                     MenuItem {
@@ -2921,6 +2940,7 @@ Item {
                                                 sourceComponent: ChecklistEditor {
                                                     taskId: taskRow.taskId
                                                     controller: controller
+                                                    onItemDeleted: (itemId, title) => root.showUndo("checklist", itemId, title)
                                                     textPrimary: root.colTextPrimary
                                                     textSecondary: root.colTextSecondary
                                                     accent: root.colAccent
@@ -3041,8 +3061,12 @@ Item {
             spacing: 12
 
             Text {
-                text: (root.undoKind === "project" ? "Project" : root.undoKind === "area" ? "Area" : "Task")
-                    + " “" + root.undoTitle + "” moved to Trash"
+                objectName: "undoText"
+                // Headings and checklist items are deleted, not trashed.
+                text: root.undoKind === "heading" ? "Heading “" + root.undoTitle + "” deleted"
+                    : root.undoKind === "checklist" ? "Checklist item “" + root.undoTitle + "” deleted"
+                    : (root.undoKind === "project" ? "Project" : root.undoKind === "area" ? "Area" : "Task")
+                        + " “" + root.undoTitle + "” moved to Trash"
                 color: root.isDark ? "#212529" : "#F8F9FA"
                 font.pixelSize: 13
                 elide: Text.ElideMiddle

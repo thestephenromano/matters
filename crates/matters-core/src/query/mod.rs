@@ -745,6 +745,21 @@ impl<'a> QueryEngine<'a> {
         Ok(all.into_iter().filter(|t| wanted.contains(&t.id)).collect())
     }
 
+    /// Whether project `id` exists and is not in the Trash, itself or
+    /// through its area.
+    pub fn project_is_live(&self, id: &str) -> Result<bool> {
+        let sql = format!(
+            "SELECT 1 FROM projects WHERE id = ?1 AND {}",
+            trash::LIVE_PROJECT
+        );
+        self.db.with_conn(|conn| {
+            Ok(conn
+                .query_row(&sql, params![id], |_| Ok(()))
+                .optional()?
+                .is_some())
+        })
+    }
+
     /// Whether task `task_id` has tag `tag_id`, by its own tags or those of
     /// its project and area, the tag's descendants included (`has_tag!`).
     pub fn task_has_tag(&self, task_id: &str, tag_id: &str) -> Result<bool> {

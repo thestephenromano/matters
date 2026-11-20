@@ -42,6 +42,8 @@ Item {
 
     // Escape: the user is done with the checklist.
     signal leave()
+    // An item was deleted; the host offers Undo (#169).
+    signal itemDeleted(string itemId, string title)
 
     // Whether there is anything to show. Hosts bind to this, not to
     // `visible`, which also reads false while the host itself is hidden.
@@ -266,6 +268,7 @@ Item {
                         editor.newFieldLeft(newBelow.input, itemId);
                     titleInput.text = itemRow.title;
                     editor.controller.deleteChecklistItem(itemId);
+                    editor.itemDeleted(itemId, itemRow.title);
                 }
                 function toggleDone() {
                     editor.controller.setChecklistItemDone(itemId, !done);
@@ -428,6 +431,7 @@ Item {
                             event.accepted = true;
                             const before = itemRow.index - 1;
                             editor.controller.deleteChecklistItem(itemRow.itemId);
+                            editor.itemDeleted(itemRow.itemId, itemRow.title);
                             Qt.callLater(editor.focusItem, Math.max(before, 0));
                         }
                     }

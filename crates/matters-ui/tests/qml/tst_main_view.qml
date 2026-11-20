@@ -1614,6 +1614,7 @@ Item {
                       "the task stays in the project: " + headingLayout());
             const toast = findChild(view, "undoToast");
             verify(toast.visible, "the undo notice shows");
+            compare(findChild(view, "undoText").text, "Heading “Planning” deleted", "deleted, not trashed");
             mouseClick(findChild(toast, "undoButton"));
             tryVerify(() => headingLayout() === "hd-edit-2@" + second + ",hd-edit-1@" + first, 2000,
                       "undo puts it back: " + headingLayout());
@@ -2586,6 +2587,50 @@ Item {
             dragGripTo(findChild(p3, "projectGrip"), p2.mapToItem(view, p2.width / 2, p2.height / 2 + 4));
             tryVerify(() => areaProjects(one).join() === "sd-p2,sd-p3,sd-p1", 2000, "filed in sd-one after sd-p2");
             compare(areaProjects(two).length, 0);
+        }
+
+        // ---- Completing the hierarchy (#169) ----------------------------------
+
+        function test_a_heading_moves_to_another_project_with_its_tasks() {
+            controller.createProject("hm-target");
+            const target = projectIdOf("hm-target");
+            openFreshProject("hm-source", ["hm-under", "hm-above"]);
+            const heading = controller.addHeading("hm-heading");
+            controller.placeProjectTask(rowFor("hm-under").taskId, heading, "");
+            tryVerify(() => headingSection("hm-heading") !== null, 2000);
+
+            const section = headingSection("hm-heading");
+            const button = findChild(section, "headingMenuButton");
+            clickWhenShown(button);
+            const menu = findChild(button, "headingMenu");
+            tryVerify(() => menu.opened, 1000);
+            const submenu = findChild(button, "moveHeadingToProjectMenu");
+            submenu.open();
+            const item = findChild(button, "moveHeadingTo-" + target);
+            tryVerify(() => item.visible, 1000, "the projects are offered");
+            waitForRendering(view);
+            mouseClick(item);
+            tryVerify(() => !menu.visible, 2000);
+
+            waitForNoRow("hm-under");
+            verify(indexOf("hm-above") >= 0, "the task above the headings stays");
+            controller.selectProject(target);
+            waitForRow("hm-under");
+            tryVerify(() => headingSection("hm-heading") !== null, 2000, "the heading came along");
+        }
+
+        function test_a_deleted_checklist_item_comes_back_with_undo() {
+            const row = checklistFixture("cl-undo", ["keep", "drop", "last"]);
+            controller.setChecklistItemDone(checklistItem(row, "drop").itemId, true);
+            hoverDelete(checklistItem(row, "drop"));
+            waitForChecklist(row, ["keep", "last"]);
+            tryCompare(view, "undoKind", "checklist");
+            compare(findChild(view, "undoText").text, "Checklist item “drop” deleted");
+            const notice = findChild(view, "undoButton");
+            mouseClick(notice);
+            waitForChecklist(row, ["keep", "drop", "last"], "back in its place");
+            verify(checklistItem(row, "drop").done, "still ticked");
+            compare(view.undoKind, "");
         }
     }
 }
