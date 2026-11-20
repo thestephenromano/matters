@@ -30,7 +30,8 @@ Item {
             // clicks, and opening it again does nothing.
             for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
                                 "emptyTrashDialog", "quickFindDialog", "movePopup",
-                                "finishProjectDialog", "tagsDialog", "preferencesDialog"]) {
+                                "finishProjectDialog", "tagsDialog", "preferencesDialog",
+                                "openLinkDialog"]) {
                 const popup = findChild(view, name);
                 if (popup)
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
@@ -604,6 +605,108 @@ Item {
             const to2 = mid.mapToItem(view, mid.width / 2, mid.height - 6);
             dragGripTo(findChild(nowTop, "dragGrip"), to2);
             tryVerify(() => titlesInOrder() === "d3,d2,d1", 2000, "d2 moved below d3: " + titlesInOrder());
+        }
+
+        // ---- Markdown notes (#63) ---------------------------------------------
+
+        // A Today task with `notes`, open.
+        function openWithNotes(title, notes) {
+            const row = addToToday(title);
+            controller.updateTaskNotes(row.taskId, notes);
+            expandRow(row);
+            const view = findChild(row, "notesView");
+            tryVerify(() => view.visible, 1000, "the notes are shown formatted");
+            return row;
+        }
+
+        // Click at character `index` of the formatted notes.
+        function clickShown(notesView, index) {
+            const r = notesView.positionToRectangle(index);
+            mouseClick(notesView, r.x + 1, r.y + r.height / 2);
+        }
+
+        function test_notes_are_shown_formatted_and_edited_as_markdown() {
+            const row = openWithNotes("md-format", "**bold** and *slanted*");
+            const notesView = findChild(row, "notesView");
+            const notes = findChild(row, "notesInput");
+            compare(notesView.getText(0, notesView.length), "bold and slanted", "no Markdown syntax shown");
+            verify(!notes.activeFocus);
+
+            // A click before "and" edits the source there.
+            clickShown(notesView, 5);
+            tryVerify(() => notes.activeFocus, 1000, "a click edits the notes");
+            verify(!notesView.visible, "the source shows while editing");
+            compare(notes.cursorPosition, 9, "the caret is where the click was, in the source");
+
+            // Typing autosaves as before.
+            typeText("x ");
+            wait(900);
+            compare(row.notes, "**bold** x and *slanted*");
+            // Leaving the notes (here for the title) shows them formatted.
+            mouseClick(findChild(row, "titleInput"));
+            tryVerify(() => notesView.visible, 1000);
+            compare(notesView.getText(0, notesView.length), "bold x and slanted");
+        }
+
+        function test_empty_notes_are_edited_directly() {
+            const row = addToToday("md-empty");
+            expandRow(row);
+            verify(!findChild(row, "notesView").visible, "nothing to format");
+            const notes = findChild(row, "notesInput");
+            mouseClick(notes);
+            verify(notes.activeFocus);
+        }
+
+        function test_web_and_mail_links_open_and_others_ask_first() {
+            const opened = [];
+            const original = view.openExternally;
+            view.openExternally = url => opened.push(url);
+            try {
+                const row = openWithNotes("md-links",
+                    "[site](https://example.com/a) [mail](mailto:me@example.com) [file](file:///tmp/x) and https://example.org/bare");
+                const notesView = findChild(row, "notesView");
+                const notes = findChild(row, "notesInput");
+                const shown = notesView.getText(0, notesView.length);
+                const at = word => shown.indexOf(word) + 1;
+
+                clickShown(notesView, at("site"));
+                compare(opened, ["https://example.com/a"]);
+                verify(!notes.activeFocus, "a link opens; it doesn't edit");
+                clickShown(notesView, at("mail"));
+                compare(opened[1], "mailto:me@example.com");
+
+                // A bare URL is a link too.
+                clickShown(notesView, shown.indexOf("example.org") + 2);
+                compare(opened[2], "https://example.org/bare");
+
+                // Another scheme asks first.
+                const dialog = findChild(view, "openLinkDialog");
+                clickShown(notesView, at("file"));
+                tryVerify(() => dialog.opened, 1000, "asks before opening");
+                compare(findChild(dialog, "openLinkUrl").text, "file:///tmp/x");
+                compare(opened.length, 3, "not opened yet");
+                keyClick(Qt.Key_Escape);
+                tryVerify(() => !dialog.visible, 2000);
+                compare(opened.length, 3, "Cancel opens nothing");
+
+                clickShown(notesView, at("file"));
+                tryVerify(() => dialog.opened, 1000);
+                mouseClick(findChild(dialog, "confirmOpenLink"));
+                tryVerify(() => !dialog.visible, 2000);
+                compare(opened[3], "file:///tmp/x", "opened once agreed");
+            } finally {
+                view.openExternally = original;
+            }
+        }
+
+        function test_closed_rows_with_notes_show_a_marker() {
+            const plain = addToToday("md-no-notes");
+            const noted = addToToday("md-has-notes");
+            controller.updateTaskNotes(noted.taskId, "something");
+            tryVerify(() => findChild(rowFor("md-has-notes"), "notesMarker").visible, 1000);
+            verify(!findChild(rowFor("md-no-notes"), "notesMarker").visible);
+            expandRow(rowFor("md-has-notes"));
+            verify(!findChild(rowFor("md-has-notes"), "notesMarker").visible, "not while open");
         }
 
         // ---- Titles (#27) ---------------------------------------------------
