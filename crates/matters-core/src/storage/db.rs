@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::schema::{
-    MIGRATION_V10, MIGRATION_V11, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5,
-    MIGRATION_V6, MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
+    MIGRATION_V10, MIGRATION_V11, MIGRATION_V12, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4,
+    MIGRATION_V5, MIGRATION_V6, MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -35,6 +35,9 @@ pub struct Database {
     /// The sync engine's document while sync is on (`super::sync`). Locked
     /// after `conn`, never before it.
     engine: Arc<Mutex<Option<crate::crdt::Document>>>,
+    /// The sealing identity and writer of this open, if it seals
+    /// (`super::sealing`). Locked after `engine`.
+    sealing: Arc<Mutex<Option<super::sealing::Sealing>>>,
 }
 
 impl Database {
@@ -80,6 +83,7 @@ impl Database {
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
             engine: Arc::new(Mutex::new(None)),
+            sealing: Arc::new(Mutex::new(None)),
         };
         db.init_schema()?;
         let engine = super::sync::load_engine(&db.conn.lock().unwrap())?;
@@ -95,6 +99,22 @@ impl Database {
         let mut conn = self.conn.lock().unwrap();
         let mut engine = self.engine.lock().unwrap();
         f(&mut conn, &mut engine)
+    }
+
+    /// The connection, the engine and the sealing state, locked in that
+    /// order.
+    pub(crate) fn with_sealing<T>(
+        &self,
+        f: impl FnOnce(
+            &mut Connection,
+            &mut Option<crate::crdt::Document>,
+            &mut Option<super::sealing::Sealing>,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        let mut conn = self.conn.lock().unwrap();
+        let mut engine = self.engine.lock().unwrap();
+        let mut sealing = self.sealing.lock().unwrap();
+        f(&mut conn, &mut engine, &mut sealing)
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -121,6 +141,7 @@ impl Database {
             (9, MIGRATION_V9),
             (10, MIGRATION_V10),
             (11, MIGRATION_V11),
+            (12, MIGRATION_V12),
         ] {
             if version < target {
                 let tx = conn.transaction()?;

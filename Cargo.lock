@@ -2377,6 +2377,7 @@ dependencies = [
  "jiff",
  "loro",
  "matters-core",
+ "matters-sync",
  "rusqlite",
  "serde",
  "serde_json",

@@ -191,3 +191,10 @@ impl<'a> Verified<'a> {
 pub fn derived_key_for_vectors(header: Header<'_>, cek: &ContentKey) -> Result<Vec<u8>> {
     record_key(header.record_id, cek, &wire::record_key_info(header)?)
 }
+
+/// SHA-384 of a complete signed record: its identity in a writer's chain
+/// (the next record's `previous`).
+pub fn record_hash(bytes: &[u8]) -> [u8; 48] {
+    libcrux_sha2::sha384(bytes)
+}
+

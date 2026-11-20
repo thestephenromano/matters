@@ -199,3 +199,21 @@ CREATE TABLE IF NOT EXISTS sync_state (
     enabled_at INTEGER NOT NULL
 );
 "#;
+
+/// v12: sealed records (#36). Each recorded local update is sealed in its
+/// own write transaction; `sync_writers` holds each open's writer
+/// incarnation and record-chain head.
+pub const MIGRATION_V12: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_writers (
+    incarnation BLOB PRIMARY KEY CHECK (length(incarnation) = 32),
+    opened_at INTEGER NOT NULL,
+    head BLOB CHECK (head IS NULL OR length(head) = 48)
+);
+CREATE TABLE IF NOT EXISTS sync_records (
+    seq INTEGER PRIMARY KEY REFERENCES sync_journal(seq),
+    record_id BLOB NOT NULL UNIQUE CHECK (length(record_id) = 32),
+    incarnation BLOB NOT NULL REFERENCES sync_writers(incarnation),
+    bytes BLOB NOT NULL,
+    acked INTEGER NOT NULL DEFAULT 0 CHECK (acked IN (0, 1))
+);
+"#;
