@@ -14,6 +14,11 @@ ignore = [
     # us only through Loro 1.18's postcard -> heapless 0.7. Remove when Loro
     # leaves heapless 0.7 (#174). Approved 2026-11-20.
     { id = "RUSTSEC-2023-0089", reason = "unmaintained, via Loro's postcard; tracked in #174" },
+    # proc-macro-error2 is unmaintained (no known vulnerability). It is a
+    # compile-time macro reached only through libcrux's hax-lib 0.3
+    # (libcrux-intrinsics -> core-models -> hax-lib-macros). Remove when
+    # libcrux leaves hax-lib 0.3 (#192). Approved 2026-11-20.
+    { id = "RUSTSEC-2026-0173", reason = "unmaintained compile-time macro via libcrux's hax-lib; tracked in #192" },
 ]
 
 [licenses]
