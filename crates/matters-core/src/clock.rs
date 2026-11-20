@@ -26,6 +26,13 @@ pub fn local_day_of_millis(ms: i64) -> Option<Date> {
     Some(at.to_zoned(jiff::tz::TimeZone::system()).date())
 }
 
+/// The first moment of local calendar day `day`, in milliseconds since the
+/// Unix epoch.
+pub fn start_of_local_day_millis(day: Date) -> i64 {
+    day.to_zoned(jiff::tz::TimeZone::system())
+        .map_or(i64::MIN, |start| start.timestamp().as_millisecond())
+}
+
 /// Parse a date as Matters stores and exchanges it: ISO 8601 `YYYY-MM-DD`.
 pub fn parse_iso_date(s: &str) -> Option<Date> {
     s.parse().ok()

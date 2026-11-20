@@ -139,6 +139,17 @@ This rule lives in `matters_core::View::new_task` (and `View::accepts_new_tasks`
 ### Completing a task
 Ticking a task done (or not done) leaves it where it is in the current list, shown with its new state, until the user navigates away, including re-selecting the same view. This lets the user see what they finished and undo a misclick. Badge counts update immediately. Any other change that takes a task out of the view, such as rescheduling, moving, trashing or putting it back, applies at once. This rule lives in `matters_core::Visit`.
 
+That is the default. **Preferences** (`Ctrl + ,`) chooses when completed tasks move to the Logbook:
+
+* **When I leave the list** (the default), as above.
+* **Immediately:** a ticked task leaves its list at once.
+* **At the end of the day:** tasks finished today stay in Inbox, Today, Upcoming, Anytime and Someday, shown done, until the day is over.
+* **When I choose Log Completed:** finished tasks stay in those lists until **Log Completed** (`Ctrl + Shift + L`, or the button above the list) moves them to the Logbook. It works at the end of the day too.
+
+Until then the Logbook doesn't list them, and the badges count open tasks only. Choosing a policy logs what is finished so far, so nothing comes back into its list. A project's own list and an area's always show their finished tasks. The rule is `matters_core::Settings::logged_until`, applied by `QueryEngine::logged_until`.
+
+Preferences are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
+
 ---
 
 ## 4. Interaction Design & Keyboard Ergonomics
@@ -160,6 +171,8 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Backspace` | Empty checklist item | Deletes the item and goes to the one above; the Undo notice brings it back |
 | `Ctrl + K` or `/` | Anywhere | Opens **Quick Find** (instant fuzzy search across all items) |
 | `Ctrl + N` | Anywhere | Creates a new task in the current view |
+| `Ctrl + ,` | Anywhere | Opens **Preferences** on the current choice; `Tab` and `Space` choose another, and each takes effect at once |
+| `Ctrl + Shift + L` | Anywhere, when finished tasks wait to be logged | **Log Completed**: the finished tasks still in their lists move to the Logbook |
 | `Ctrl + Shift + N` | Anywhere | Creates a new Project |
 | `Delete` / `Backspace` | Selected task(s) | Moves task to Trash |
 | `Up` / `Down` | Task list | Moves list selection |

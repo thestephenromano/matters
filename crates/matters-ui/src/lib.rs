@@ -8,7 +8,7 @@ mod motion;
 #[cfg(test)]
 mod qml_lint;
 
-pub use bridge::install_database;
+pub use bridge::{install_database, install_settings};
 
 /// The Qt Quick Controls style Matters uses unless `QT_QUICK_CONTROLS_STYLE`
 /// names another: Fusion, a built-in style drawn entirely from the palette,

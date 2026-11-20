@@ -13,7 +13,7 @@
 
 use core::pin::Pin;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{
@@ -21,8 +21,8 @@ use cxx_qt_lib::{
 };
 use matters_core::{
     local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
-    DeadlineStatus, DeletedHeading, Heading, Home, ListRow, Outcome, Project, QueryEngine,
-    Schedule, Status, Tag, Tagged, Task, View, Visit,
+    DeadlineStatus, DeletedHeading, Heading, Home, ListRow, LogPolicy, Outcome, Project,
+    QueryEngine, Schedule, Settings, SettingsFile, Status, Tag, Tagged, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -104,7 +104,20 @@ pub mod qobject {
         /// Whether the desktop asks for reduced motion
         /// (`crate::motion::prefers_reduced_motion`); animations are skipped.
         #[qproperty(bool, reduce_motion)]
+        /// When finished tasks move to the Logbook (#67), as a
+        /// `LogPolicy` key; chosen with `choose_log_policy`.
+        #[qproperty(QString, log_policy)]
         type AppController = super::AppControllerRust;
+
+        /// Choose when finished tasks move to the Logbook (a `LogPolicy`
+        /// key), and keep the choice (#67, #72). What is finished so far
+        /// counts as logged.
+        #[qinvokable]
+        fn choose_log_policy(self: Pin<&mut AppController>, policy: &QString);
+        /// Log Completed: every finished task still in its list moves to the
+        /// Logbook (#67).
+        #[qinvokable]
+        fn log_completed(self: Pin<&mut AppController>);
 
         #[qinvokable]
         fn select_view(self: Pin<&mut AppController>, view: &QString);
@@ -630,6 +643,72 @@ fn database() -> Database {
         .expect("matters-ui: QML object created before install_database()")
 }
 
+// =============================================================================
+// Shared settings
+// =============================================================================
+
+/// This device's settings (#72) and where they are kept.
+struct SettingsState {
+    /// `None` when there is nowhere to keep them: they last until exit.
+    file: Option<SettingsFile>,
+    settings: Settings,
+    /// Why the settings are the defaults, when the file couldn't be read.
+    problem: Option<String>,
+}
+
+impl SettingsState {
+    /// Keep the settings, if there is somewhere to.
+    fn save(&self) -> matters_core::Result<()> {
+        match &self.file {
+            Some(file) => file.save(&self.settings),
+            None => Ok(()),
+        }
+    }
+}
+
+static SETTINGS: OnceLock<Mutex<SettingsState>> = OnceLock::new();
+
+/// Load the settings from `file` (`None`: nowhere to keep them, so the
+/// defaults, unsaved, with `problem` saying why). Call before QML starts;
+/// without it the defaults are used and nothing is saved.
+pub fn install_settings(file: Option<SettingsFile>, problem: Option<String>) {
+    let (settings, problem) = match &file {
+        Some(file) => file.load(),
+        None => (Settings::default(), problem),
+    };
+    let state = SettingsState {
+        file,
+        settings,
+        problem,
+    };
+    if SETTINGS.set(Mutex::new(state)).is_err() {
+        panic!("matters-ui: settings installed twice");
+    }
+}
+
+fn settings() -> std::sync::MutexGuard<'static, SettingsState> {
+    SETTINGS
+        .get_or_init(|| {
+            Mutex::new(SettingsState {
+                file: None,
+                settings: Settings::default(),
+                problem: None,
+            })
+        })
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The time up to which finished tasks are logged today
+/// (`Settings::logged_until`), and whether a visit keeps ticked tasks.
+fn logging() -> (Option<i64>, bool) {
+    let state = settings();
+    (
+        state.settings.logged_until(local_today()),
+        state.settings.logbook.policy.keeps_ticked(),
+    )
+}
+
 fn to_json<T: serde::Serialize>(value: &T) -> QString {
     QString::from(
         serde_json::to_string(value)
@@ -671,6 +750,7 @@ pub struct AppControllerRust {
     search_results_json: QString,
     error_message: QString,
     revision: i32,
+    log_policy: QString,
     visit: i32,
     reorderable: bool,
     accepts_new_tasks: bool,
@@ -723,6 +803,7 @@ impl Default for AppControllerRust {
             reorderable: view.is_reorderable(),
             accepts_new_tasks: view.accepts_new_tasks(),
             reduce_motion: crate::motion::prefers_reduced_motion(),
+            log_policy: QString::from(settings().settings.logbook.policy.key()),
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -734,12 +815,50 @@ impl Default for AppControllerRust {
 }
 
 impl cxx_qt::Initialize for qobject::AppController {
-    fn initialize(self: Pin<&mut Self>) {
-        self.changed();
+    fn initialize(mut self: Pin<&mut Self>) {
+        self.as_mut().changed();
+        let problem = settings().problem.clone();
+        if let Some(problem) = problem {
+            self.report(problem);
+        }
     }
 }
 
 impl qobject::AppController {
+    pub fn choose_log_policy(mut self: Pin<&mut Self>, policy: &QString) {
+        let Some(policy) = LogPolicy::from_key(&String::from(policy)) else {
+            return self.report(format!("unknown Logbook policy '{policy}'"));
+        };
+        let saved = {
+            let mut state = settings();
+            state
+                .settings
+                .set_log_policy(policy, matters_core::clock::now_millis());
+            state.save()
+        };
+        self.as_mut().set_log_policy(QString::from(policy.key()));
+        if let Err(err) = saved {
+            self.as_mut()
+                .report(format!("Your settings couldn't be saved: {err}"));
+        }
+        self.changed();
+    }
+
+    pub fn log_completed(mut self: Pin<&mut Self>) {
+        let saved = {
+            let mut state = settings();
+            state
+                .settings
+                .log_completed(matters_core::clock::now_millis());
+            state.save()
+        };
+        if let Err(err) = saved {
+            self.as_mut()
+                .report(format!("Your settings couldn't be saved: {err}"));
+        }
+        self.changed();
+    }
+
     pub fn select_view(self: Pin<&mut Self>, view: &QString) {
         match View::from_key(&String::from(view), None) {
             Some(view) => self.set_view(view),
@@ -1644,7 +1763,7 @@ impl qobject::AppController {
             open_tasks,
             details,
         ) = {
-            let engine = QueryEngine::new(&self.db);
+            let engine = QueryEngine::new(&self.db).logged_until(logging().0);
             let counts = engine.counts(self.day.day())?;
             let projects = self.db.list_projects()?;
             let trashed_projects = self.db.list_trashed_projects()?;
@@ -2109,8 +2228,10 @@ impl qobject::TaskListModel {
                 this.visit_id = Some(visit);
                 this.visit.restart();
             }
+            let (logged_until, keep_ticked) = logging();
+            this.visit.keep_ticked(keep_ticked);
             let db = &this.db;
-            let engine = QueryEngine::new(db);
+            let engine = QueryEngine::new(db).logged_until(logged_until);
             engine
                 .tasks_in(&view, local_today())
                 .and_then(|members| {

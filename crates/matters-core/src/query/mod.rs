@@ -89,13 +89,24 @@ pub struct ViewCounts {
 // `?1` is the reference date (YYYY-MM-DD) wherever a rule depends on it.
 // These rules apply to live tasks only: `select_live` and `counts` exclude the
 // Trash, whose tasks belong to no other view.
+//
+// The rules for Inbox, Today, Upcoming, Anytime and Someday say where a task
+// belongs, not whether it is finished: the list shows its open tasks and the
+// finished ones not yet logged (`QueryEngine::listed`, #67), and the badge
+// counts the open ones (`OPEN`). The Logbook lists the logged ones
+// (`QueryEngine::logged`).
+
+/// The badges count open tasks only.
+const OPEN: &str = "status = 'open'";
+
+/// A finished task.
+const FINISHED: &str = "status IN ('completed', 'canceled')";
 
 // `LIVE` and `TRASH_WHERE` (the tasks the Trash lists one by one) come from
 // `storage::trash`, which defines trash membership for every query.
 
 /// INBOX: unassigned tasks with no project, area, date, or Someday flag.
-const INBOX_WHERE: &str = "status = 'open'
-    AND project_id IS NULL AND area_id IS NULL
+const INBOX_WHERE: &str = "project_id IS NULL AND area_id IS NULL
     AND start_date IS NULL AND is_someday = 0";
 
 /// The task is in no project, or in an open one. A finished project's tasks
@@ -172,7 +183,7 @@ macro_rules! project_has_tag {
 /// TODAY: scheduled for today or earlier (overdue), or undated with a deadline
 /// today or earlier.
 const TODAY_WHERE: &str = concat!(
-    "status = 'open' AND is_someday = 0
+    "is_someday = 0
     AND (start_date <= ?1 OR (start_date IS NULL AND deadline <= ?1)) AND ",
     outside_finished_projects!(),
     " AND ",
@@ -181,7 +192,7 @@ const TODAY_WHERE: &str = concat!(
 
 /// UPCOMING: start date strictly after the reference date.
 const UPCOMING_WHERE: &str = concat!(
-    "status = 'open' AND is_someday = 0 AND start_date > ?1 AND ",
+    "is_someday = 0 AND start_date > ?1 AND ",
     outside_finished_projects!(),
     " AND ",
     not_in_someday_project!()
@@ -189,7 +200,7 @@ const UPCOMING_WHERE: &str = concat!(
 
 /// ANYTIME: actionable now and organised under an area or project.
 const ANYTIME_WHERE: &str = concat!(
-    "status = 'open' AND is_someday = 0
+    "is_someday = 0
     AND (start_date IS NULL OR start_date <= ?1)
     AND (project_id IS NOT NULL OR area_id IS NOT NULL) AND ",
     outside_finished_projects!(),
@@ -198,17 +209,12 @@ const ANYTIME_WHERE: &str = concat!(
 );
 
 /// SOMEDAY: explicitly deferred.
-const SOMEDAY_WHERE: &str = concat!(
-    "status = 'open' AND is_someday = 1 AND ",
-    outside_finished_projects!()
-);
+const SOMEDAY_WHERE: &str = concat!("is_someday = 1 AND ", outside_finished_projects!());
 
-/// LOGBOOK: finished tasks, apart from those of finished projects, which
-/// the Logbook lists as the project ([`QueryEngine::list_rows`]).
-const LOGBOOK_WHERE: &str = concat!(
-    "status IN ('completed', 'canceled') AND ",
-    outside_finished_projects!()
-);
+/// LOGBOOK: the logged tasks (`QueryEngine::logged`), apart from those of
+/// finished projects, which the Logbook lists as the project
+/// ([`QueryEngine::list_rows`]).
+const LOGBOOK_WHERE: &str = outside_finished_projects!();
 
 // Projects listed as rows of their own (#56), beside the tasks, for live
 // projects only. `?1` is the reference date.
@@ -254,11 +260,61 @@ const TRASH_ORDER: &str = "trashed_at DESC, id ASC";
 
 pub struct QueryEngine<'a> {
     db: &'a Database,
+    /// Finished tasks are logged up to this time (milliseconds); `None`:
+    /// all of them.
+    logged_until: Option<i64>,
 }
 
 impl<'a> QueryEngine<'a> {
+    /// Queries in which every finished task is in the Logbook.
     pub fn new(db: &'a Database) -> Self {
-        Self { db }
+        Self {
+            db,
+            logged_until: None,
+        }
+    }
+
+    /// Queries in which only the tasks finished up to `until` (milliseconds
+    /// since the Unix epoch) are in the Logbook: those finished later stay
+    /// in their lists, shown done, until they are logged (#67,
+    /// [`crate::Settings::logged_until`]). `None`: every finished task.
+    pub fn logged_until(self, until: Option<i64>) -> Self {
+        Self {
+            logged_until: until,
+            ..self
+        }
+    }
+
+    /// The tasks Inbox, Today, Upcoming, Anytime and Someday list among
+    /// those their rule places there: the open ones, and the finished ones
+    /// not yet logged.
+    fn listed(&self) -> String {
+        match self.logged_until {
+            None => OPEN.to_string(),
+            Some(until) => format!("({OPEN} OR ({FINISHED} AND completed_at > {until}))"),
+        }
+    }
+
+    /// The finished tasks the Logbook lists: those logged. A task finished
+    /// at an unknown time counts as logged.
+    fn logged(&self) -> String {
+        match self.logged_until {
+            None => FINISHED.to_string(),
+            Some(until) => {
+                format!("({FINISHED} AND (completed_at IS NULL OR completed_at <= {until}))")
+            }
+        }
+    }
+
+    /// Live tasks listed by one of the views whose rule places tasks
+    /// (`listed`).
+    fn select_placed(
+        &self,
+        rule: &str,
+        order: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<Task>> {
+        self.select_live(&format!("{} AND {rule}", self.listed()), order, params)
     }
 
     /// Live tasks matching a view rule.
@@ -304,7 +360,11 @@ impl<'a> QueryEngine<'a> {
             View::Anytime => self.anytime(reference_date)?,
             View::Someday => self.someday_tasks()?,
             // Every finished task, so the list matches its badge count.
-            View::Logbook => self.select_live(LOGBOOK_WHERE, LOGBOOK_ORDER, [])?,
+            View::Logbook => self.select_live(
+                &format!("{} AND {LOGBOOK_WHERE}", self.logged()),
+                LOGBOOK_ORDER,
+                [],
+            )?,
             View::Trash => self.trash()?,
             View::Project(id) => self.project_tasks(id)?,
             View::Area(id) => self.select_live(AREA_WHERE, MANUAL_ORDER, params![id])?,
@@ -315,14 +375,15 @@ impl<'a> QueryEngine<'a> {
     /// loading any rows.
     pub fn counts(&self, reference_date: Date) -> Result<ViewCounts> {
         let ref_str = reference_date.to_string();
+        let logged = self.logged();
         let sql = format!(
             "SELECT
-                COUNT(CASE WHEN {INBOX_WHERE} THEN 1 END),
-                COUNT(CASE WHEN {TODAY_WHERE} THEN 1 END),
-                COUNT(CASE WHEN {UPCOMING_WHERE} THEN 1 END),
-                COUNT(CASE WHEN {ANYTIME_WHERE} THEN 1 END),
-                COUNT(CASE WHEN {SOMEDAY_WHERE} THEN 1 END),
-                COUNT(CASE WHEN {LOGBOOK_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {OPEN} AND {INBOX_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {OPEN} AND {TODAY_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {OPEN} AND {UPCOMING_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {OPEN} AND {ANYTIME_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {OPEN} AND {SOMEDAY_WHERE} THEN 1 END),
+                COUNT(CASE WHEN {logged} AND {LOGBOOK_WHERE} THEN 1 END),
                 (SELECT COUNT(*) FROM projects
                   WHERE {live} AND status IN ('completed', 'canceled')),
                 (SELECT COUNT(*) FROM projects WHERE {live} AND {PROJECT_TODAY_WHERE}),
@@ -347,14 +408,14 @@ impl<'a> QueryEngine<'a> {
     }
 
     pub fn inbox(&self) -> Result<Vec<Task>> {
-        self.select_live(INBOX_WHERE, MANUAL_ORDER, [])
+        self.select_placed(INBOX_WHERE, MANUAL_ORDER, [])
     }
 
     /// Today's tasks, split into daytime and This Evening.
     pub fn today(&self, reference_date: Date) -> Result<TodayView> {
         let ref_str = reference_date.to_string();
         let (evening, daytime) = self
-            .select_live(TODAY_WHERE, TODAY_ORDER, params![ref_str])?
+            .select_placed(TODAY_WHERE, TODAY_ORDER, params![ref_str])?
             .into_iter()
             .partition(Task::is_evening);
         Ok(TodayView { daytime, evening })
@@ -363,7 +424,7 @@ impl<'a> QueryEngine<'a> {
     /// Future tasks grouped by calendar date.
     pub fn upcoming(&self, reference_date: Date) -> Result<Vec<UpcomingGroup>> {
         let ref_str = reference_date.to_string();
-        let tasks = self.select_live(
+        let tasks = self.select_placed(
             UPCOMING_WHERE,
             &format!("start_date ASC, {MANUAL_ORDER}"),
             params![ref_str],
@@ -386,7 +447,7 @@ impl<'a> QueryEngine<'a> {
     /// with no area. Within a group, the manual order is kept.
     pub fn anytime(&self, reference_date: Date) -> Result<Vec<Task>> {
         let ref_str = reference_date.to_string();
-        let mut tasks = self.select_live(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])?;
+        let mut tasks = self.select_placed(ANYTIME_WHERE, MANUAL_ORDER, params![ref_str])?;
         let areas: HashMap<String, Area> = self
             .db
             .list_areas()?
@@ -512,13 +573,13 @@ impl<'a> QueryEngine<'a> {
     }
 
     pub fn someday_tasks(&self) -> Result<Vec<Task>> {
-        self.select_live(SOMEDAY_WHERE, MANUAL_ORDER, [])
+        self.select_placed(SOMEDAY_WHERE, MANUAL_ORDER, [])
     }
 
     /// The `limit` most recently finished tasks.
     pub fn logbook(&self, limit: usize) -> Result<Vec<Task>> {
         self.select_live(
-            LOGBOOK_WHERE,
+            &format!("{} AND {LOGBOOK_WHERE}", self.logged()),
             &format!("{LOGBOOK_ORDER} LIMIT ?1"),
             params![i64::try_from(limit).unwrap_or(i64::MAX)],
         )
