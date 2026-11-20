@@ -97,3 +97,7 @@ The [fixed-epoch inbox experiment](../../docs/SYNC_DURABLE_RECEIVE.md) adds pers
 ## Atomic local edits and encrypted outbox
 
 The [atomic sender contract](../../docs/SYNC_ATOMIC_SENDER.md) connects the existing command boundary and outbox in one WAL database. Journal, projection and outgoing intent commit together; sealing follows the commit. The harness tests end-to-end encrypted delivery, request retry, SQL rollback, WAL contention, restored unsent work and eight additional process exits. A retired unsealed intent blocks new state-changing commands until explicit recovery; production migration, bidirectional receive integration and recovery UI remain open.
+
+## Two-device bidirectional simulation
+
+The [bidirectional contract](../../docs/SYNC_BIDIRECTIONAL.md) connects authenticated receive to each device's existing atomic sender database. Independent fixture devices exchange ciphertext and controls, continue editing received state, restart, converge under concurrent/duplicate delivery, and retain rejected input. Incoming application waits for local sealing so restart re-issue preserves command history. Four additional subprocess exits cover receipt and shared application commits. This remains a fixed-epoch, one-document simulation.

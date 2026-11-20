@@ -91,7 +91,7 @@ pub trait LocalOutbox {
     /// its request produced when re-run as this writer.
     fn reissue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()>;
 }
-pub const ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/1";
+pub const ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/2";
 /// How long an integrated store's connections wait for another short write
 /// on the same file (a seal or an acknowledgement) before failing.
 pub const INTEGRATED_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -172,6 +172,18 @@ impl Replica {
             None => vec![],
         };
         let first_stranded = stranded.first().map(|s| s.seq);
+        if let Some(first) = first_stranded {
+            let remote_after: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM journal WHERE seq>?1 AND outgoing=0)",
+                [first],
+                |r| r.get(0),
+            )?;
+            if remote_after {
+                return Err(invalid(
+                    "stranded local requests interleave accepted remote history",
+                ));
+            }
+        }
         let checkpoint: Option<(Vec<u8>, i64, Option<Vec<u8>>)> = tx
             .query_row(
                 "SELECT bytes,through_seq,pending FROM checkpoint WHERE singleton=1",
@@ -381,6 +393,55 @@ impl Replica {
             return Err(invalid("injected acknowledgement loss after commit"));
         }
         Ok(record)
+    }
+    /// Trusted authenticated-inbox composition. The caller stages admission
+    /// through this transaction and returns only newly accepted remote records.
+    /// They share the local journal/projection commit and never enter the outbox.
+    #[cfg(feature = "local-outbox")]
+    pub fn apply_authenticated(
+        &mut self,
+        prepare: impl FnOnce(&Transaction<'_>, &LoroDoc) -> Result<(LoroDoc, Vec<Record>)>,
+        fault: Fault,
+    ) -> Result<()> {
+        let outbox = self
+            .local_outbox
+            .as_ref()
+            .ok_or_else(|| invalid("integrated replica required"))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        outbox.check_owner(&tx)?;
+        let (stage, imports) = prepare(&tx, &self.doc)?;
+        stage.set_peer_id(self.doc.peer_id())?;
+        configure(&stage, self.jitter);
+        let identities = model::Index::build(&stage)?;
+        let state = model::project(&stage)?;
+        for record in imports {
+            tx.execute(
+                "INSERT INTO journal(id,bytes,outgoing) VALUES (?1,?2,0)",
+                params![record.id, record.bytes],
+            )?;
+        }
+        write_projection(&tx, &state)?;
+        if fault == Fault::BeforeCommit {
+            return Err(invalid("injected failure before receive commit"));
+        }
+        if fault == Fault::ExitBeforeCommit {
+            std::process::exit(93);
+        }
+        tx.commit()?;
+        if fault == Fault::ExitAfterCommit {
+            std::process::exit(94);
+        }
+        self.doc = stage;
+        self.state = state;
+        self.identities = identities;
+        if fault == Fault::AfterCommit {
+            return Err(invalid(
+                "injected acknowledgement loss after receive commit",
+            ));
+        }
+        Ok(())
     }
     /// Durable admission precedes import. Errors retain bytes and a reason;
     /// Pending outcomes and inbox entries make blocked causal streams observable.
@@ -765,7 +826,9 @@ fn initialize(
             DROP TABLE journal;
             ALTER TABLE journal_v2 RENAME TO journal;")?;
     }
-    tx.execute_batch("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) SELECT id,bytes,'received','restoring admission status' FROM journal WHERE outgoing=0;")?;
+    if !integrated {
+        tx.execute_batch("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) SELECT id,bytes,'received','restoring admission status' FROM journal WHERE outgoing=0;")?;
+    }
     let outbox = setup.map(|setup| setup(&tx, exists)).transpose()?;
     tx.execute("INSERT INTO prototype_meta VALUES ('format',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         [if integrated { ATOMIC_FORMAT } else { "matters-sync-prototype/2" }])?;

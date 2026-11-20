@@ -493,6 +493,7 @@ impl Outbox {
                 Err(error("batch identity conflicts with retained intent"))
             };
         }
+        Self::check_authoring(tx)?;
         // Only undelivered work counts: acknowledged intents are history.
         count_limit(
             tx,
@@ -544,6 +545,23 @@ impl Outbox {
         }
         Ok(())
     }
+    pub(super) fn check_authoring(conn: &Connection) -> Result<()> {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='inbox_meta')",
+            [],
+            |r| r.get(0),
+        )?;
+        if exists
+            && conn.query_row(
+                "SELECT local_frozen FROM inbox_meta WHERE singleton=1",
+                [],
+                |r| r.get::<_, bool>(0),
+            )?
+        {
+            return Err(error("local device lineage is frozen"));
+        }
+        Ok(())
+    }
     pub(super) fn require_reconciled(tx: &Transaction<'_>, writer: Writer) -> Result<()> {
         let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM intents WHERE writer!=?1 AND NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq))", [writer.incarnation.as_slice()], |r| r.get(0))?;
         if blocked {
@@ -567,6 +585,7 @@ impl Outbox {
         if let Some(record) = stored(&tx, &batch)? {
             return Ok(record);
         }
+        Self::check_authoring(&tx)?;
         let (intent, incarnation, plaintext, previous): (i64, Vec<u8>, Vec<u8>, Option<Vec<u8>>) = tx.query_row("SELECT intents.seq,writer,plaintext,head FROM intents JOIN writers ON writer=incarnation WHERE batch=?1", [batch.as_slice()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
         if incarnation != self.writer.incarnation {
             return Err(RecoveryRequired.into());
