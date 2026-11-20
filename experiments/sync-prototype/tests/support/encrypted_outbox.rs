@@ -430,7 +430,11 @@ impl Outbox {
             |r| r.get(0),
         )?;
         let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
-        if format != matters_sync_prototype::ATOMIC_FORMAT
+        if ![
+            matters_sync_prototype::ATOMIC_FORMAT,
+            matters_sync_prototype::SHARED_ATOMIC_FORMAT,
+        ]
+        .contains(&format.as_str())
             || composition != Composition::Atomic.name()
             || mode != "wal"
         {
@@ -494,6 +498,7 @@ impl Outbox {
             };
         }
         Self::check_authoring(tx)?;
+        crate::encrypted_inbox::Inbox::charge_local_intent(tx)?;
         // Only undelivered work counts: acknowledged intents are history.
         count_limit(
             tx,
@@ -546,12 +551,7 @@ impl Outbox {
         Ok(())
     }
     pub(super) fn check_authoring(conn: &Connection) -> Result<()> {
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='inbox_meta')",
-            [],
-            |r| r.get(0),
-        )?;
-        if exists
+        if crate::encrypted_inbox::has_shared_inbox(conn)?
             && conn.query_row(
                 "SELECT local_frozen FROM inbox_meta WHERE singleton=1",
                 [],
