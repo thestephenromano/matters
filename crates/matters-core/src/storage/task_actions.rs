@@ -20,13 +20,14 @@ impl Database {
     pub fn duplicate_task(&self, id: &str) -> Result<String> {
         let copy = Uuid::new_v4().to_string();
         let now = crate::clock::now_millis();
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let task = live_task(&tx, id)?;
-            let sort_order = key_after(&tx, "sort_order", task.sort_order)?;
-            let today_order = key_after(&tx, "today_order", task.today_order)?;
-            tx.execute(
-                "INSERT INTO tasks (
+        self.write(
+            now,
+            |tx| {
+                let task = live_task(tx, id)?;
+                let sort_order = key_after(tx, "sort_order", task.sort_order)?;
+                let today_order = key_after(tx, "today_order", task.today_order)?;
+                tx.execute(
+                    "INSERT INTO tasks (
                     id, area_id, project_id, heading_id, title, notes, start_date,
                     time_of_day, is_someday, deadline, status, completed_at, sort_order,
                     created_at, updated_at, trashed_at, today_order, closed_by_project
@@ -35,24 +36,25 @@ impl Database {
                     time_of_day, is_someday, deadline, 'open', NULL, ?3,
                     ?5, ?5, NULL, ?4, 0
                  FROM tasks WHERE id = ?1",
-                params![id, copy, sort_order, today_order, now],
-            )?;
-            for (title, _, sort_order) in checklist(&tx, id)? {
-                tx.execute(
-                    "INSERT INTO checklist_items
+                    params![id, copy, sort_order, today_order, now],
+                )?;
+                for (title, _, sort_order) in checklist(tx, id)? {
+                    tx.execute(
+                        "INSERT INTO checklist_items
                         (id, task_id, title, is_completed, sort_order, created_at, updated_at)
                      VALUES (?1, ?2, ?3, 0, ?4, ?5, ?5)",
-                    params![Uuid::new_v4().to_string(), copy, title, sort_order, now],
-                )?;
-            }
-            tx.execute(
-                "INSERT INTO task_tags (task_id, tag_id)
+                        params![Uuid::new_v4().to_string(), copy, title, sort_order, now],
+                    )?;
+                }
+                tx.execute(
+                    "INSERT INTO task_tags (task_id, tag_id)
                  SELECT ?2, tag_id FROM task_tags WHERE task_id = ?1",
-                params![id, copy],
-            )?;
-            tx.commit()?;
-            Ok(copy)
-        })
+                    params![id, copy],
+                )?;
+                Ok(copy.clone())
+            },
+            |tx, copy| super::sync::created_task_with_children(tx, copy),
+        )
     }
 
     /// Turn open task `id` into a project and return the project's id. The
@@ -64,89 +66,102 @@ impl Database {
     pub fn convert_task_to_project(&self, id: &str) -> Result<String> {
         let project = Uuid::new_v4().to_string();
         let now = crate::clock::now_millis();
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let task = live_task(&tx, id)?;
-            if task.status != Status::Open {
-                return Err(MattersError::Validation(
-                    "only an open task can become a project".into(),
-                ));
-            }
-            let area: Option<String> = match &task.project_id {
-                Some(project) => tx.query_row(
-                    "SELECT area_id FROM projects WHERE id = ?1",
-                    params![project],
+        self.write(
+            now,
+            |tx| {
+                let task = live_task(tx, id)?;
+                if task.status != Status::Open {
+                    return Err(MattersError::Validation(
+                        "only an open task can become a project".into(),
+                    ));
+                }
+                let area: Option<String> = match &task.project_id {
+                    Some(project) => tx.query_row(
+                        "SELECT area_id FROM projects WHERE id = ?1",
+                        params![project],
+                        |r| r.get(0),
+                    )?,
+                    None => task.area_id.clone(),
+                };
+                let sort_order: f64 = tx.query_row(
+                    "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM projects",
+                    [],
                     |r| r.get(0),
-                )?,
-                None => task.area_id.clone(),
-            };
-            let sort_order: f64 = tx.query_row(
-                "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM projects",
-                [],
-                |r| r.get(0),
-            )?;
-            tx.execute(
-                "INSERT INTO projects (
+                )?;
+                tx.execute(
+                    "INSERT INTO projects (
                     id, area_id, title, notes, start_date, time_of_day, is_someday,
                     deadline, status, completed_at, sort_order, created_at, updated_at,
                     trashed_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'open', NULL, ?9, ?10, ?10, NULL)",
-                params![
-                    project,
-                    area,
-                    task.title,
-                    task.notes,
-                    task.start_date.map(|d| d.to_string()),
-                    task.time_of_day,
-                    task.is_someday,
-                    task.deadline.map(|d| d.to_string()),
-                    sort_order,
-                    now,
-                ],
-            )?;
-            tx.execute(
-                "INSERT INTO project_tags (project_id, tag_id)
-                 SELECT ?2, tag_id FROM task_tags WHERE task_id = ?1",
-                params![id, project],
-            )?;
-            let (home, today): (f64, f64) = tx.query_row(
-                "SELECT COALESCE(MAX(sort_order), 0) + 1, COALESCE(MAX(today_order), 0) + 1
-                 FROM tasks",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            for (i, (title, done, _)) in checklist(&tx, id)?.into_iter().enumerate() {
-                let (status, completed_at) = if done {
-                    (Status::Completed, Some(now))
-                } else {
-                    (Status::Open, None)
-                };
-                tx.execute(
-                    "INSERT INTO tasks (
-                        id, project_id, title, notes, status, completed_at, sort_order,
-                        today_order, created_at, updated_at
-                     ) VALUES (?1, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8, ?8)",
                     params![
-                        Uuid::new_v4().to_string(),
                         project,
-                        title,
-                        status.as_str(),
-                        completed_at,
-                        home + i as f64,
-                        today + i as f64,
+                        area,
+                        task.title,
+                        task.notes,
+                        task.start_date.map(|d| d.to_string()),
+                        task.time_of_day,
+                        task.is_someday,
+                        task.deadline.map(|d| d.to_string()),
+                        sort_order,
                         now,
                     ],
                 )?;
-            }
-            tx.execute(
-                "DELETE FROM checklist_items WHERE task_id = ?1",
-                params![id],
-            )?;
-            tx.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])?;
-            tx.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
-            tx.commit()?;
-            Ok(project)
-        })
+                tx.execute(
+                    "INSERT INTO project_tags (project_id, tag_id)
+                 SELECT ?2, tag_id FROM task_tags WHERE task_id = ?1",
+                    params![id, project],
+                )?;
+                let (home, today): (f64, f64) = tx.query_row(
+                    "SELECT COALESCE(MAX(sort_order), 0) + 1, COALESCE(MAX(today_order), 0) + 1
+                 FROM tasks",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let mut new_tasks = Vec::new();
+                let old_items = super::sync::task_ids(
+                    tx,
+                    "SELECT id FROM checklist_items WHERE task_id = ?1",
+                    id,
+                )?;
+                for (i, (title, done, _)) in checklist(tx, id)?.into_iter().enumerate() {
+                    let (status, completed_at) = if done {
+                        (Status::Completed, Some(now))
+                    } else {
+                        (Status::Open, None)
+                    };
+                    let new_task = Uuid::new_v4().to_string();
+                    new_tasks.push(new_task.clone());
+                    tx.execute(
+                        "INSERT INTO tasks (
+                        id, project_id, title, notes, status, completed_at, sort_order,
+                        today_order, created_at, updated_at
+                     ) VALUES (?1, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8, ?8)",
+                        params![
+                            new_task,
+                            project,
+                            title,
+                            status.as_str(),
+                            completed_at,
+                            home + i as f64,
+                            today + i as f64,
+                            now,
+                        ],
+                    )?;
+                }
+                tx.execute(
+                    "DELETE FROM checklist_items WHERE task_id = ?1",
+                    params![id],
+                )?;
+                tx.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])?;
+                tx.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+                let mut gone = old_items;
+                gone.push(id.to_string());
+                Ok((project.clone(), new_tasks, gone))
+            },
+            |tx, (project, new_tasks, gone)| super::sync::converted(tx, project, new_tasks, gone),
+        )
+        .map(|(project, _, _)| project)
     }
 }
 

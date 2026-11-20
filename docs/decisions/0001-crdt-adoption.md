@@ -112,7 +112,7 @@ Persist authoritative engine changes, outgoing work and SQL projection atomicall
 Before the engine is wired in, every write in `matters-core` goes through a typed operation, and the raw connection is read-only:
 
 - Whole-entity saves are gone. `update_task`, `update_project` and `update_area` are replaced by field operations: `set_task_notes`, `set_task_schedule`, `set_task_deadline`, `cancel_task`, `set_project_notes`, `set_project_schedule` and `set_project_deadline`, alongside the existing renames, `complete_task`/`uncomplete_task`, `finish_project`/`reopen_project` and `set_task_home`/`set_project_area`. Moving a Today task between sections writes only its schedule tuple. Both frontends and the measurement baseline use these operations.
-- `Database::with_conn` sets `PRAGMA query_only` for its duration, so SQLite refuses any write through it. Writes use the crate-private `with_conn_mut`. The audit found one write on the read path (`remove_tag_from`), which now uses the write path. Tests that must stage states the operations never produce use `with_raw_conn`, which exists only with the `test-support` feature.
+- `Database::with_conn` sets `PRAGMA query_only` for its duration, so SQLite refuses any write through it. Every write goes through the crate-private `Database::write`, which records the write's engine commands in the same SQLite transaction when sync is on. The audit found one write on the read path (`remove_tag_from`), which now uses the write path. Tests that must stage states the operations never produce use `with_raw_conn`, which exists only with the `test-support` feature.
 - The public write surface is the `Database` operations for areas, projects, headings, tasks, checklist items and tags, plus `crate::ordering`. Each is one intent with its own validation, so the engine adapter maps operations to commands one for one.
 
 ### Application document model (#35, 2026-11-20)
@@ -124,6 +124,10 @@ Before the engine is wired in, every write in `matters-core` goes through a type
 - **Projects, areas and tasks take tags.** An assignment is a boolean register per (item, tag).
 
 Status, finish time and the "closed by its project" mark share one register, and an open item never carries a finish time or the mark. Every command stamps the entity's `updated_at`. Order keys in the projected rows are ranks, so only their relative order is meaningful.
+
+### Recorded writes (#35)
+
+With sync on, every typed write records its engine commands in the transaction that changes the rows, and the engine is rebuilt from the journal if that transaction fails. Only schema migrations write outside `Database::write`. Ordering records each changed key as a placement after its predecessor among its siblings, and Today anchors within the task's section. Empty Trash records the exact set of entities it deletes, cascades included. Converting a task into a project purges the task and its checklist, so a concurrent edit to the old task elsewhere is dropped, as with Empty Trash.
 
 ## Migration and evaluation gates
 

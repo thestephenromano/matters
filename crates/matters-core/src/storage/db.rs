@@ -132,17 +132,6 @@ impl Database {
         Ok(())
     }
 
-    /// The write boundary. Every change to the database goes through a
-    /// typed operation in this crate, so a later sync layer can capture
-    /// each one as a domain command (ADR 0001, #35).
-    pub(crate) fn with_conn_mut<F, T>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&mut Connection) -> Result<T>,
-    {
-        let mut conn = self.conn.lock().unwrap();
-        f(&mut conn)
-    }
-
     /// Read through the connection. SQLite refuses any write for the
     /// duration (`PRAGMA query_only`), so this can't bypass the typed
     /// operations.
@@ -164,7 +153,8 @@ impl Database {
     where
         F: FnOnce(&mut Connection) -> Result<T>,
     {
-        self.with_conn_mut(f)
+        let mut conn = self.conn.lock().unwrap();
+        f(&mut conn)
     }
 
     /// Run one `UPDATE … WHERE id = ?` that sets `assignments` (with
@@ -1260,24 +1250,39 @@ impl Database {
     /// a task, project or area is destroyed. Returns how many tasks were
     /// deleted.
     pub fn empty_trash(&self) -> Result<usize> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        // Innermost first: each pass reads the trash state of the containers
-        // that later passes delete.
-        let tasks = tx.execute(
-            &format!("DELETE FROM tasks WHERE {}", trash::ANY_TRASHED_TASK),
-            [],
-        )?;
-        tx.execute(
-            &format!("DELETE FROM projects WHERE {}", trash::ANY_TRASHED_PROJECT),
-            [],
-        )?;
-        tx.execute(
-            &format!("DELETE FROM areas WHERE {}", trash::TRASHED_AREA),
-            [],
-        )?;
-        tx.commit()?;
-        Ok(tasks)
+        self.write(
+            crate::clock::now_millis(),
+            |tx| {
+                // Everything this deletes, cascades included, for sync: the
+                // exact set this device saw (ADR 0001, Empty Trash).
+                let doomed = super::sync::trashed_entities(tx)?;
+                // Innermost first: each pass reads the trash state of the
+                // containers that later passes delete.
+                let tasks = tx.execute(
+                    &format!("DELETE FROM tasks WHERE {}", trash::ANY_TRASHED_TASK),
+                    [],
+                )?;
+                tx.execute(
+                    &format!("DELETE FROM projects WHERE {}", trash::ANY_TRASHED_PROJECT),
+                    [],
+                )?;
+                tx.execute(
+                    &format!("DELETE FROM areas WHERE {}", trash::TRASHED_AREA),
+                    [],
+                )?;
+                Ok((tasks, doomed))
+            },
+            |_, (_, doomed)| {
+                Ok(if doomed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![crate::crdt::Command::Purge {
+                        ids: doomed.clone(),
+                    }]
+                })
+            },
+        )
+        .map(|(tasks, _)| tasks)
     }
 
     // =========================================================================
@@ -1517,7 +1522,7 @@ impl Database {
         })
     }
 
-    fn map_checklist_row(row: &Row) -> rusqlite::Result<ChecklistItem> {
+    pub(crate) fn map_checklist_row(row: &Row) -> rusqlite::Result<ChecklistItem> {
         let is_completed_int: i64 = row.get(3)?;
         Ok(ChecklistItem {
             id: row.get(0)?,
