@@ -133,6 +133,17 @@ fn rebuilding_the_rows_from_the_engine_keeps_every_view() {
     let before = views(&db);
     db.rebuild_from_engine().unwrap();
     assert_eq!(views(&db), before);
+
+    // Rows lost or damaged outside the engine come back from it.
+    db.with_raw_conn(|c| {
+        c.execute_batch("DELETE FROM tasks; UPDATE projects SET title = 'damaged';")?;
+        Ok(())
+    })
+    .unwrap();
+    assert_ne!(views(&db), before);
+    db.rebuild_from_engine().unwrap();
+    assert_eq!(views(&db), before);
+    assert_eq!(db.get_project(&id(1)).unwrap().unwrap().title, "Garden");
 }
 
 #[test]
