@@ -29,7 +29,8 @@ Item {
             // previous test's popover or dialog; while one is, it catches
             // clicks, and opening it again does nothing.
             for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
-                                "emptyTrashDialog", "quickFindDialog", "movePopup"]) {
+                                "emptyTrashDialog", "quickFindDialog", "movePopup",
+                                "finishProjectDialog"]) {
                 const popup = findChild(view, name);
                 if (popup)
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
@@ -2115,6 +2116,98 @@ Item {
             tryVerify(() => JSON.parse(controller.projectsJson).find(p => p.title === "pa-proj").area_id === area,
                       2000, "the project is filed in the area");
             tryVerify(() => sidebarAreaProject("pa-proj") !== null, 2000, "listed under the area");
+        }
+
+        // ---- Finishing projects (#55) -----------------------------------------
+
+        function projectIdOf(name) {
+            return JSON.parse(controller.projectsJson).find(p => p.title === name).id;
+        }
+
+        function rowDone(title) {
+            const row = rowFor(title);
+            return row !== null && row.done;
+        }
+
+        function logbookProject(title) {
+            for (const item of childrenNamed(list.contentItem, "logbookProject")) {
+                if (item.visible && item.title === title)
+                    return item;
+            }
+            return null;
+        }
+
+        function test_completing_a_project_asks_about_its_open_tasks_and_reopening_restores_them() {
+            openFreshProject("fin-proj", ["fin-1", "fin-2", "fin-3"]);
+            const id = projectIdOf("fin-proj");
+            controller.toggleTask(waitForRow("fin-1").taskId);
+            tryCompare(controller, "currentProjectOpenTasks", 2);
+
+            // Keep Open changes nothing.
+            const dialog = findChild(view, "finishProjectDialog");
+            menuAction("completeProjectItem");
+            tryVerify(() => dialog.opened, 1000, "open tasks are asked about");
+            verify(findChild(dialog, "finishProjectText").text.indexOf("2 open tasks") >= 0, "says how many");
+            clickWhenShown(findChild(dialog, "keepProjectOpen"));
+            tryVerify(() => !dialog.visible, 2000);
+            compare(controller.currentProjectStatus, "open");
+
+            menuAction("completeProjectItem");
+            tryVerify(() => dialog.opened, 1000);
+            clickWhenShown(findChild(dialog, "completeOpenTasks"));
+            tryVerify(() => !dialog.visible, 2000);
+            tryCompare(controller, "currentProjectStatus", "completed");
+            const label = findChild(view, "projectStatusLabel");
+            verify(label.visible);
+            compare(label.text, "Completed");
+            verify(!JSON.parse(controller.projectsJson).some(p => p.id === id), "it leaves the sidebar");
+
+            // The Logbook lists the project, not its tasks.
+            controller.selectView("logbook");
+            let row = null;
+            tryVerify(() => (row = logbookProject("fin-proj")) !== null, 2000, "listed in the Logbook");
+            compare(findChild(row, "logbookProjectOutcome").text, "Completed project");
+            verify(indexOf("fin-1") < 0 && indexOf("fin-2") < 0);
+            mouseClick(row);
+            tryCompare(controller, "currentProjectId", id);
+
+            // Reopening puts back what completing closed; fin-1 was done before.
+            menuAction("completeProjectItem");
+            tryCompare(controller, "currentProjectStatus", "open");
+            verify(!label.visible);
+            for (const t of ["fin-1", "fin-2", "fin-3"])
+                waitForRow(t);
+            tryVerify(() => !rowDone("fin-2") && !rowDone("fin-3") && rowDone("fin-1"), 2000,
+                      "fin-2 and fin-3 open again, fin-1 still done");
+            verify(JSON.parse(controller.projectsJson).some(p => p.id === id), "back in the sidebar");
+        }
+
+        function test_canceling_a_project_can_cancel_its_open_tasks() {
+            openFreshProject("cancel-proj", ["cx-1"]);
+            menuAction("cancelProjectItem");
+            const dialog = findChild(view, "finishProjectDialog");
+            tryVerify(() => dialog.opened, 1000);
+            clickWhenShown(findChild(dialog, "cancelOpenTasks"));
+            tryCompare(controller, "currentProjectStatus", "canceled");
+            compare(findChild(view, "projectStatusLabel").text, "Canceled");
+            waitForNoRow("cx-1"); // a project lists its canceled tasks nowhere
+            controller.selectView("logbook");
+            let row = null;
+            tryVerify(() => (row = logbookProject("cancel-proj")) !== null, 2000);
+            compare(findChild(row, "logbookProjectOutcome").text, "Canceled project");
+        }
+
+        function test_a_project_with_every_task_done_offers_to_be_completed() {
+            openFreshProject("all-done", ["ad-1"]);
+            const button = findChild(view, "completeProjectButton");
+            verify(!button.visible);
+            controller.toggleTask(waitForRow("ad-1").taskId);
+            tryVerify(() => button.visible, 2000, "offered once every task is done");
+            clickWhenShown(button);
+            // Nothing left open: nothing to ask.
+            tryCompare(controller, "currentProjectStatus", "completed");
+            verify(!findChild(view, "finishProjectDialog").visible);
+            verify(!button.visible);
         }
     }
 }

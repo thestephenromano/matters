@@ -43,6 +43,9 @@ Area (e.g. Work, Personal, Finances)
    * Has an iconic **circular progress ring** displaying `completed / total` ratio.
    * Can have a start date (`When`), `Deadline`, tags, and notes.
    * Can reside inside an Area or at the top level.
+   * Completed or canceled from its menu, or with **Complete Project** once every task is done. If tasks are still open, a dialog asks whether to complete or cancel them with the project, or keep it open: no task is closed silently.
+   * A finished project leaves the sidebar, and its tasks leave Today, Upcoming, Anytime and Someday. The Logbook lists it as one row, which opens it.
+   * **Reopen Project** in its menu reopens it, along with the tasks finishing it closed. Tasks finished on their own stay finished.
 
 3. **Heading:**
    * A visual section divider inside a Project to group related tasks.
@@ -97,7 +100,7 @@ The sidebar provides access to the foundational GTD buckets:
 * Tasks and projects marked `When = Someday` are hidden from Today, Upcoming, and Anytime.
 
 ### 6. Logbook
-* Archive of completed and canceled tasks and projects, grouped by completion date.
+* Archive of completed and canceled tasks and projects, grouped by completion date. A finished project is one row standing for its tasks.
 * Provides a sense of accomplishment and an auditable history.
 
 ### 7. Trash

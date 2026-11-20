@@ -21,8 +21,8 @@ use cxx_qt_lib::{
 };
 use matters_core::{
     local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
-    DeadlineStatus, DeletedHeading, Heading, Home, ListRow, Project, QueryEngine, Schedule, Status,
-    Task, View, Visit,
+    DeadlineStatus, DeletedHeading, Heading, Home, ListRow, Outcome, Project, QueryEngine,
+    Schedule, Status, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -57,6 +57,11 @@ pub mod qobject {
         /// The open area, in an area view (#15).
         #[qproperty(QString, current_area_id)]
         #[qproperty(f64, current_project_progress)]
+        /// The open project's status (`open`, `completed` or `canceled`),
+        /// in a project view; empty elsewhere (#55).
+        #[qproperty(QString, current_project_status)]
+        /// How many of the open project's tasks are still open.
+        #[qproperty(i32, current_project_open_tasks)]
         #[qproperty(i32, inbox_count)]
         #[qproperty(i32, today_count)]
         #[qproperty(i32, upcoming_count)]
@@ -171,6 +176,19 @@ pub mod qobject {
         /// Put a trashed project back with its tasks.
         #[qinvokable]
         fn restore_project(self: Pin<&mut AppController>, project_id: &QString);
+        /// Complete or cancel a project (`outcome`: `completed` or
+        /// `canceled`), closing its open tasks as `open_tasks` says, the same
+        /// two choices (#55). Returns false, changing nothing, when refused.
+        #[qinvokable]
+        fn finish_project(
+            self: Pin<&mut AppController>,
+            project_id: &QString,
+            outcome: &QString,
+            open_tasks: &QString,
+        ) -> bool;
+        /// Reopen a finished project, with the tasks finishing it closed.
+        #[qinvokable]
+        fn reopen_project(self: Pin<&mut AppController>, project_id: &QString);
         #[qinvokable]
         fn schedule_task(self: Pin<&mut AppController>, task_id: &QString, when: &QString);
         #[qinvokable]
@@ -505,6 +523,8 @@ pub struct AppControllerRust {
     current_title: QString,
     current_project_id: QString,
     current_project_progress: f64,
+    current_project_status: QString,
+    current_project_open_tasks: i32,
     inbox_count: i32,
     today_count: i32,
     upcoming_count: i32,
@@ -541,6 +561,8 @@ impl Default for AppControllerRust {
             current_title: QString::from(view.title()),
             current_project_id: QString::default(),
             current_project_progress: 0.0,
+            current_project_status: QString::default(),
+            current_project_open_tasks: 0,
             inbox_count: 0,
             today_count: 0,
             upcoming_count: 0,
@@ -820,6 +842,45 @@ impl qobject::AppController {
         let ok = result.is_ok();
         self.finish(result);
         ok
+    }
+
+    pub fn finish_project(
+        self: Pin<&mut Self>,
+        project_id: &QString,
+        outcome: &QString,
+        open_tasks: &QString,
+    ) -> bool {
+        let parse = |s: &QString| match String::from(s).as_str() {
+            "completed" => Ok(Outcome::Completed),
+            "canceled" => Ok(Outcome::Canceled),
+            other => Err(matters_core::MattersError::Validation(format!(
+                "'{other}' is not how a project finishes"
+            ))),
+        };
+        let result = parse(outcome).and_then(|outcome| {
+            let open_tasks = parse(open_tasks)?;
+            self.db
+                .finish_project(&String::from(project_id), outcome, open_tasks)
+        });
+        let ok = result.is_ok();
+        self.finish_project_change(result);
+        ok
+    }
+
+    pub fn reopen_project(self: Pin<&mut Self>, project_id: &QString) {
+        let result = self.db.reopen_project(&String::from(project_id));
+        self.finish_project_change(result);
+    }
+
+    /// Finishing or reopening a project changes its tasks all at once: the
+    /// list starts a new visit, so they are shown as they now are rather
+    /// than kept in place like a task ticked by hand (`Visit`).
+    fn finish_project_change(mut self: Pin<&mut Self>, result: matters_core::Result<()>) {
+        if result.is_ok() {
+            let visit = self.visit.wrapping_add(1);
+            self.as_mut().set_visit(visit);
+        }
+        self.finish(result);
     }
 
     pub fn toggle_task(self: Pin<&mut Self>, task_id: &QString) {
@@ -1223,21 +1284,36 @@ impl qobject::AppController {
     }
 
     fn refresh_sidebar_and_header(mut self: Pin<&mut Self>) -> matters_core::Result<()> {
-        let (counts, projects, trashed_projects, areas, trashed_areas, title, progress) = {
+        let (
+            counts,
+            projects,
+            trashed_projects,
+            areas,
+            trashed_areas,
+            title,
+            progress,
+            status,
+            open_tasks,
+        ) = {
             let engine = QueryEngine::new(&self.db);
             let counts = engine.counts(self.day.day())?;
             let projects = self.db.list_projects()?;
             let trashed_projects = self.db.list_trashed_projects()?;
             let areas = self.db.list_areas()?;
             let trashed_areas = self.db.list_trashed_areas()?;
+            let mut status = "";
+            let mut open_tasks = 0;
             let (title, progress) = match &self.view {
-                View::Project(id) => (
-                    self.db
-                        .get_project(id)?
-                        .map(|p| p.title)
-                        .unwrap_or_else(|| "Project".into()),
-                    engine.project_progress(id)?.ratio(),
-                ),
+                View::Project(id) => {
+                    let project = self.db.get_project(id)?;
+                    let progress = engine.project_progress(id)?;
+                    status = project.as_ref().map_or("", |p| p.status.as_str());
+                    open_tasks = progress.total_tasks - progress.completed_tasks;
+                    (
+                        project.map_or_else(|| "Project".into(), |p| p.title),
+                        progress.ratio(),
+                    )
+                }
                 View::Area(id) => (
                     self.db
                         .get_area(id)?
@@ -1255,6 +1331,8 @@ impl qobject::AppController {
                 trashed_areas,
                 title,
                 progress,
+                status,
+                open_tasks,
             )
         };
 
@@ -1274,6 +1352,10 @@ impl qobject::AppController {
         self.as_mut()
             .set_current_title(QString::from(title.as_str()));
         self.as_mut().set_current_project_progress(progress);
+        self.as_mut()
+            .set_current_project_status(QString::from(status));
+        self.as_mut()
+            .set_current_project_open_tasks(count(open_tasks));
         Ok(())
     }
 

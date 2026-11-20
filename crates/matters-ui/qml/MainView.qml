@@ -550,6 +550,18 @@ Item {
         }
     }
 
+    // Complete or cancel the open project (#55). With tasks still open, a
+    // dialog asks what happens to them: nothing is closed silently.
+    function askFinishProject(outcome) {
+        const id = controller.currentProjectId;
+        if (controller.currentProjectOpenTasks === 0) {
+            controller.finishProject(id, outcome, outcome);
+            return;
+        }
+        finishProjectDialog.outcome = outcome;
+        finishProjectDialog.open();
+    }
+
     function toggleSelectedExpansion() {
         const id = taskListView.selectedTaskId;
         if (taskModel.rowOf(id) < 0)
@@ -1227,12 +1239,49 @@ Item {
                         ToolTip.text: Math.round(progress * 100) + "% done"
                     }
 
-                    Text {
-                        text: controller.currentTitle
-                        font.pixelSize: 28
-                        font.weight: Font.Bold
-                        color: root.colTextPrimary
+                    // The title, and beside it whether a project is finished
+                    // (#55).
+                    Row {
                         Layout.fillWidth: true
+                        spacing: 12
+
+                        Text {
+                            id: viewTitle
+                            text: controller.currentTitle
+                            font.pixelSize: 28
+                            font.weight: Font.Bold
+                            color: projectStatusLabel.visible ? root.colTextSecondary : root.colTextPrimary
+                        }
+
+                        Label {
+                            id: projectStatusLabel
+                            objectName: "projectStatusLabel"
+                            readonly property string status: controller.currentProjectStatus
+                            anchors.verticalCenter: viewTitle.verticalCenter
+                            visible: status === "completed" || status === "canceled"
+                            text: status === "completed" ? "Completed" : "Canceled"
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            color: root.colTextSecondary
+                            leftPadding: 8
+                            rightPadding: 8
+                            topPadding: 3
+                            bottomPadding: 3
+                            background: Rectangle {
+                                radius: 9
+                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                            }
+                        }
+                    }
+
+                    // Once every task is done, the project offers to be
+                    // completed (#55).
+                    Button {
+                        objectName: "completeProjectButton"
+                        text: "Complete Project"
+                        visible: controller.currentView === "project" && controller.currentProjectStatus === "open"
+                            && controller.currentProjectProgress >= 1
+                        onClicked: root.askFinishProject("completed")
                     }
 
                     Button {
@@ -1302,6 +1351,28 @@ Item {
                                 objectName: "addHeadingItem"
                                 text: "Add Heading…"
                                 onTriggered: root.openRename("newHeading", "", "")
+                            }
+
+                            MenuSeparator {}
+
+                            // Finishing (#55); a finished project is reopened
+                            // from the same item.
+                            MenuItem {
+                                objectName: "completeProjectItem"
+                                readonly property bool open: controller.currentProjectStatus === "open"
+                                text: open ? "Complete Project" : "Reopen Project"
+                                onTriggered: {
+                                    if (open)
+                                        root.askFinishProject("completed");
+                                    else
+                                        controller.reopenProject(controller.currentProjectId);
+                                }
+                            }
+                            MenuItem {
+                                objectName: "cancelProjectItem"
+                                text: "Cancel Project"
+                                enabled: controller.currentProjectStatus === "open"
+                                onTriggered: root.askFinishProject("canceled")
                             }
 
                             MenuSeparator {}
@@ -1807,6 +1878,84 @@ Item {
                                     readonly property real targetHeight: height
                                     width: taskListView.width
                                     height: 12
+                                }
+                            }
+
+                            // A finished project in the Logbook stands for its
+                            // tasks (#55); clicking it opens the project.
+                            DelegateChoice {
+                                roleValue: "project"
+                                delegate: Rectangle {
+                                    id: projectRow
+                                    objectName: "logbookProject"
+                                    required property string taskId
+                                    required property string title
+                                    required property bool done
+                                    required property int index
+                                    readonly property real targetHeight: height
+                                    width: taskListView.width
+                                    height: 48
+                                    radius: 8
+                                    color: projectRowMouse.containsMouse ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                    Accessible.role: Accessible.ListItem
+                                    Accessible.name: (done ? "Completed project: " : "Canceled project: ") + title
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        // Lined up with the tasks' checkboxes.
+                                        anchors.leftMargin: 32
+                                        anchors.rightMargin: 16
+                                        spacing: 12
+
+                                        // A full pie when completed, a crossed
+                                        // ring when canceled.
+                                        Rectangle {
+                                            Layout.preferredWidth: 20
+                                            Layout.preferredHeight: 20
+                                            radius: 10
+                                            color: "transparent"
+                                            border.width: 2
+                                            border.color: projectRow.done ? root.colAccent : root.colTextSecondary
+
+                                            Rectangle {
+                                                visible: projectRow.done
+                                                anchors.centerIn: parent
+                                                width: 12
+                                                height: 12
+                                                radius: 6
+                                                color: root.colAccent
+                                            }
+                                            Icon {
+                                                visible: !projectRow.done
+                                                anchors.centerIn: parent
+                                                name: "close"
+                                                size: 12
+                                                color: root.colTextSecondary
+                                            }
+                                        }
+                                        Text {
+                                            text: projectRow.title
+                                            font.pixelSize: 15
+                                            font.weight: Font.DemiBold
+                                            color: root.colTextSecondary
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                        Text {
+                                            objectName: "logbookProjectOutcome"
+                                            text: projectRow.done ? "Completed project" : "Canceled project"
+                                            font.pixelSize: 12
+                                            color: root.colTextSecondary
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: projectRowMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: controller.selectProject(projectRow.taskId)
+                                    }
                                 }
                             }
 
@@ -2707,6 +2856,55 @@ Item {
         // Focus returns to the button that opened the dialog, which hides once
         // the Trash is empty; give it to the task list instead.
         onClosed: if (!emptyTrashButton.visible) taskListView.forceActiveFocus()
+    }
+
+    // What happens to a project's open tasks when it is completed or
+    // canceled (#55): they are completed or canceled with it, or the project
+    // stays open.
+    Dialog {
+        id: finishProjectDialog
+        objectName: "finishProjectDialog"
+        // "completed" or "canceled": what the project becomes.
+        property string outcome: "completed"
+        readonly property int openTasks: controller.currentProjectOpenTasks
+        title: (outcome === "completed" ? "Complete" : "Cancel") + " \u201C" + controller.currentTitle + "\u201D?"
+        modal: true
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 420
+
+        Label {
+            objectName: "finishProjectText"
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: (finishProjectDialog.openTasks === 1 ? "It has 1 open task." : "It has " + finishProjectDialog.openTasks + " open tasks.")
+                + " Complete or cancel " + (finishProjectDialog.openTasks === 1 ? "it" : "them")
+                + " with the project?"
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                objectName: "completeOpenTasks"
+                text: "Complete Tasks"
+                onClicked: finishProjectDialog.finishWith("completed")
+            }
+            Button {
+                objectName: "cancelOpenTasks"
+                text: "Cancel Tasks"
+                onClicked: finishProjectDialog.finishWith("canceled")
+            }
+            Button {
+                objectName: "keepProjectOpen"
+                text: "Keep Open"
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+
+        function finishWith(openTasks) {
+            controller.finishProject(controller.currentProjectId, outcome, openTasks);
+            close();
+        }
+        onClosed: taskListView.forceActiveFocus()
     }
 
     Dialog {
