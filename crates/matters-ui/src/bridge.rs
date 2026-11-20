@@ -180,6 +180,19 @@ pub mod qobject {
         /// first when `after_id` is empty.
         #[qinvokable]
         fn place_project(self: Pin<&mut AppController>, project_id: &QString, after_id: &QString);
+        /// File a project in an area (empty: none) right after `after_id`
+        /// among its projects, or first when that is empty (#164).
+        #[qinvokable]
+        fn place_project_in_area(
+            self: Pin<&mut AppController>,
+            project_id: &QString,
+            area_id: &QString,
+            after_id: &QString,
+        );
+        /// Move an area in the sidebar so it follows `after_id`, or comes
+        /// first when that is empty.
+        #[qinvokable]
+        fn place_area(self: Pin<&mut AppController>, area_id: &QString, after_id: &QString);
         /// Permanently delete everything in the Trash.
         #[qinvokable]
         fn empty_trash(self: Pin<&mut AppController>);
@@ -996,6 +1009,32 @@ impl qobject::AppController {
             let visit = self.visit.wrapping_add(1);
             self.as_mut().set_visit(visit);
         }
+        self.finish(result);
+    }
+
+    pub fn place_project_in_area(
+        self: Pin<&mut Self>,
+        project_id: &QString,
+        area_id: &QString,
+        after_id: &QString,
+    ) {
+        let (area, after) = (String::from(area_id), String::from(after_id));
+        let result = matters_core::ordering::place_project_in_area(
+            &self.db,
+            &String::from(project_id),
+            (!area.is_empty()).then_some(area.as_str()),
+            (!after.is_empty()).then_some(after.as_str()),
+        );
+        self.finish(result);
+    }
+
+    pub fn place_area(self: Pin<&mut Self>, area_id: &QString, after_id: &QString) {
+        let after = String::from(after_id);
+        let result = matters_core::ordering::place_area(
+            &self.db,
+            &String::from(area_id),
+            (!after.is_empty()).then_some(after.as_str()),
+        );
         self.finish(result);
     }
 
