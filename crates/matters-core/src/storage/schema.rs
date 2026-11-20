@@ -160,3 +160,18 @@ CREATE TABLE IF NOT EXISTS area_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_area_tags_tag ON area_tags(tag_id);
 "#;
+
+/// v9: the sync engine's journal (#35). Every engine update, local or
+/// received, in commit order; `outgoing` marks local ones. `sync_state`
+/// exists once sync is enabled. Both stay empty while sync is off.
+pub const MIGRATION_V9: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_journal (
+    seq INTEGER PRIMARY KEY,
+    bytes BLOB NOT NULL,
+    outgoing INTEGER NOT NULL CHECK (outgoing IN (0, 1))
+);
+CREATE TABLE IF NOT EXISTS sync_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    enabled_at INTEGER NOT NULL
+);
+"#;
