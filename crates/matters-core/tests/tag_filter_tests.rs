@@ -197,5 +197,9 @@ fn a_deeply_nested_tag_offers_every_tag_above_it() {
         .into_iter()
         .map(|t| t.id)
         .collect();
-    assert_eq!(offered, ["a", "b", "c"], "every tag above it, not its sibling");
+    assert_eq!(
+        offered,
+        ["a", "b", "c"],
+        "every tag above it, not its sibling"
+    );
 }
