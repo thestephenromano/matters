@@ -174,6 +174,11 @@ Item {
         // A project or area view loads the tasks of that project or area.
         const container = controller.currentView === "area" ? controller.currentAreaId : controller.currentProjectId;
         taskModel.load(controller.currentView, container, controller.visit);
+        if (movedTaskId !== "") {
+            if (taskModel.rowOf(movedTaskId) < 0 && taskListView.selectedTaskId === movedTaskId)
+                taskListView.selectedTaskId = movedNextId;
+            movedTaskId = "";
+        }
         if (pendingRevealId !== "") {
             if (taskModel.rowOf(pendingRevealId) >= 0) {
                 taskListView.selectedTaskId = pendingRevealId;
@@ -361,6 +366,13 @@ Item {
             taskDrop = null;
             return;
         }
+        // Over the sidebar, the task goes to the entry under the pointer
+        // (#54) instead of a place in the list.
+        sidebarDrop = sidebarTargetAt(scenePos, ["inbox", "today", "someday", "area", "project"]);
+        if (sidebarDrop) {
+            taskDrop = null;
+            return;
+        }
         // Today is split into daytime and This Evening, and a project into
         // its headings; dropping in another section moves the task there
         // (decided on #53 and #22).
@@ -374,9 +386,13 @@ Item {
     function endTaskDrag() {
         const id = dragTaskId;
         const drop = taskDrop;
+        const target = sidebarDrop;
         dragTaskId = "";
         taskDrop = null;
-        if (drop && id !== "") {
+        sidebarDrop = null;
+        if (target && id !== "") {
+            sendTask(id, target.kind, target.id);
+        } else if (drop && id !== "") {
             if (controller.currentView === "today")
                 controller.placeTodayTask(id, drop.section, drop.afterId);
             else if (controller.currentView === "project")
@@ -390,20 +406,93 @@ Item {
     property string dragProjectId: ""
     property var projectDrop: null
 
+    property point projectDragPos
+
     function updateProjectDrag(scenePos) {
+        projectDragPos = scenePos;
         const projects = projectsList.model;
         const from = projects.findIndex(p => p.id === dragProjectId);
-        projectDrop = from < 0 ? null
+        // Dropped on an area, the project is filed there (#54).
+        sidebarDrop = from < 0 ? null : sidebarTargetAt(scenePos, ["area"]);
+        projectDrop = from < 0 || sidebarDrop ? null
             : dropSlot(projectsList, from, row => projects[row].id, row => false, scenePos);
     }
 
     function endProjectDrag() {
         const id = dragProjectId;
         const drop = projectDrop;
+        const target = sidebarDrop;
         dragProjectId = "";
         projectDrop = null;
-        if (drop && id !== "")
+        sidebarDrop = null;
+        if (target && id !== "")
+            controller.setProjectArea(id, target.id);
+        else if (drop && id !== "")
             controller.placeProject(id, drop.afterId);
+    }
+
+    // ---- Move (Ctrl+Shift+M, dragging onto the sidebar; #54) -----------
+
+    // The sidebar entry under a dragged task or project, as { kind, id }.
+    // Entries say what they are with `dropKind` and `dropId`; only `kinds`
+    // are wanted.
+    property var sidebarDrop: null
+
+    function sidebarTargetAt(scenePos, kinds) {
+        if (!root.sidebarShown)
+            return null;
+        return dropTargetUnder(sidebar, scenePos, kinds);
+    }
+
+    // The outermost wanted entry under the pointer within `item`. Every
+    // visible child under the point is searched, topmost first: `childAt`
+    // stops at the first child there, which in a ListView can be one of its
+    // own empty items rather than the delegate.
+    function dropTargetUnder(item: Item, scenePos: point, kinds: var): var {
+        if (!item.visible || !item.contains(item.mapFromItem(null, scenePos.x, scenePos.y)))
+            return null;
+        const target = dropTargetOf(item);
+        if (target && kinds.indexOf(target.kind) >= 0)
+            return target;
+        for (let i = item.children.length - 1; i >= 0; --i) {
+            const found = dropTargetUnder(item.children[i], scenePos, kinds);
+            if (found)
+                return found;
+        }
+        return null;
+    }
+
+    // What a sidebar entry accepts, or null for any other item. Entries are
+    // plain Items to the type checker, so this reads them untyped.
+    function dropTargetOf(item: var): var {
+        return typeof item.dropKind === "string" && item.dropKind !== ""
+            ? { kind: item.dropKind, id: item.dropId } : null;
+    }
+
+    // A task sent elsewhere, and the row to select if it leaves the list,
+    // so repeated moves work through the list as Delete does.
+    property string movedTaskId: ""
+    property string movedNextId: ""
+
+    // Send a task to `kind` (inbox, area, project or heading, with `id`), or
+    // schedule it for Today or Someday.
+    function sendTask(id, kind, targetId) {
+        const row = taskModel.rowOf(id);
+        movedTaskId = id;
+        movedNextId = row < 0 ? "" : taskModel.idAt(row + 1) || taskModel.idAt(row - 1);
+        if (kind === "today" || kind === "someday")
+            controller.scheduleTask(id, kind);
+        else
+            controller.moveTaskTo(id, kind, targetId);
+    }
+
+    function openMoveFor(id) {
+        if (taskModel.rowOf(id) < 0)
+            return;
+        taskListView.selectedTaskId = id;
+        scrollToTask(id);
+        movePopup.taskId = id;
+        movePopup.open();
     }
 
     // Scroll the task list while a dragged task is held near its top or
@@ -417,6 +506,9 @@ Item {
             const edge = 40;
             const maxY = Math.max(0, taskListView.contentHeight - taskListView.height);
             let y = taskListView.contentY;
+            // Not while the task is over the sidebar.
+            if (p.x < 0 || p.x > taskListView.width)
+                return;
             if (p.y < edge)
                 y = Math.max(0, y - 12);
             else if (p.y > taskListView.height - edge)
@@ -425,6 +517,36 @@ Item {
                 taskListView.contentY = y;
                 root.updateTaskDrag(root.taskDragPos);
             }
+        }
+    }
+
+    // Scroll the sidebar's projects and areas while a dragged task or
+    // project is held near their top or bottom edge, so every entry can be
+    // reached (#54).
+    Timer {
+        interval: 30
+        repeat: true
+        running: root.dragTaskId !== "" || root.dragProjectId !== ""
+        onTriggered: {
+            const pos = root.dragTaskId !== "" ? root.taskDragPos : root.projectDragPos;
+            const p = projectsList.mapFromItem(null, pos.x, pos.y);
+            if (p.x < 0 || p.x > projectsList.width || p.y < 0 || p.y > projectsList.height)
+                return;
+            const edge = 30;
+            const top = projectsList.originY;
+            const bottom = Math.max(top, top + projectsList.contentHeight - projectsList.height);
+            let y = projectsList.contentY;
+            if (p.y < edge)
+                y = Math.max(top, y - 10);
+            else if (p.y > projectsList.height - edge)
+                y = Math.min(bottom, y + 10);
+            if (y === projectsList.contentY)
+                return;
+            projectsList.contentY = y;
+            if (root.dragTaskId !== "")
+                root.updateTaskDrag(pos);
+            else
+                root.updateProjectDrag(pos);
         }
     }
 
@@ -691,12 +813,19 @@ Item {
 
                         delegate: Rectangle {
                             id: navItem
+                            objectName: "nav-" + modelData.id
                             required property var modelData
                             Layout.fillWidth: true
                             height: 32
                             radius: 6
                             readonly property bool isSelected: controller.currentView === navItem.modelData.id
+                            // A task dropped here moves to the Inbox or is
+                            // scheduled for Today or Someday (#54).
+                            readonly property string dropKind: ["inbox", "today", "someday"].indexOf(modelData.id) >= 0 ? modelData.id : ""
+                            readonly property string dropId: ""
                             color: isSelected ? root.colSidebarActive : (navItemMouse.containsMouse ? root.colSidebarHover : "transparent")
+                            border.width: root.sidebarDrop && root.sidebarDrop.kind === dropKind ? 2 : 0
+                            border.color: root.colAccent
 
                             RowLayout {
                                 anchors.fill: parent
@@ -829,10 +958,14 @@ Item {
                                         readonly property string areaTitle: areaBlock.modelData.title
                                         readonly property bool isSelected: controller.currentView === "area"
                                             && controller.currentAreaId === areaBlock.modelData.id
+                                        readonly property string dropKind: "area"
+                                        readonly property string dropId: areaBlock.modelData.id
                                         width: parent.width
                                         height: 30
                                         radius: 6
                                         color: isSelected ? root.colSidebarActive : (areaMouse.containsMouse ? root.colSidebarHover : "transparent")
+                                        border.width: root.sidebarDrop && root.sidebarDrop.kind === dropKind && root.sidebarDrop.id === dropId ? 2 : 0
+                                        border.color: root.colAccent
 
                                         RowLayout {
                                             anchors.fill: parent
@@ -874,10 +1007,14 @@ Item {
                                             readonly property string projectTitle: modelData.title
                                             readonly property bool isSelected: controller.currentView === "project"
                                                 && controller.currentProjectId === modelData.id
+                                            readonly property string dropKind: "project"
+                                            readonly property string dropId: modelData.id
                                             width: areaBlock.width
                                             height: 28
                                             radius: 6
                                             color: isSelected ? root.colSidebarActive : (areaProjectMouse.containsMouse ? root.colSidebarHover : "transparent")
+                                            border.width: root.sidebarDrop && root.sidebarDrop.kind === dropKind && root.sidebarDrop.id === dropId ? 2 : 0
+                                            border.color: root.colAccent
 
                                             // The same circle as projects without an area,
                                             // indented under the area.
@@ -936,12 +1073,17 @@ Item {
 
                         delegate: Rectangle {
                             id: projItem
+                            objectName: "projectItem"
                             required property var modelData
                             width: projectsList.width
                             height: 30
                             radius: 6
                             readonly property bool isSelected: controller.currentView === "project" && controller.currentProjectId === projItem.modelData.id
+                            readonly property string dropKind: "project"
+                            readonly property string dropId: modelData.id
                             color: isSelected ? root.colSidebarActive : (projMouse.containsMouse ? root.colSidebarHover : "transparent")
+                            border.width: root.sidebarDrop && root.sidebarDrop.kind === dropKind && root.sidebarDrop.id === dropId ? 2 : 0
+                            border.color: root.colAccent
 
                             RowLayout {
                                 anchors.fill: parent
@@ -2683,11 +2825,177 @@ Item {
         enabled: taskListView.selectedTaskId !== ""
         onActivated: root.openDeadlineFor(taskListView.selectedTaskId)
     }
+    // Trashed tasks can't be moved; Put Back first.
+    Shortcut {
+        sequence: "Ctrl+Shift+M"
+        enabled: taskListView.selectedTaskId !== "" && controller.currentView !== "trash"
+        onActivated: root.openMoveFor(taskListView.selectedTaskId)
+    }
     // Text editors keep Ctrl+Z for their own undo.
     Shortcut {
         sequence: StandardKey.Undo
         enabled: root.undoKind !== ""
         onActivated: root.undo()
+    }
+
+    // Move popover (Ctrl+Shift+M; #54): files the task in the Inbox, an area,
+    // a project or one of its headings, listed in sidebar order. Typing
+    // filters the list (a project's headings match its name too); Up and
+    // Down pick, Enter moves.
+    Popup {
+        id: movePopup
+        objectName: "movePopup"
+        property string taskId: ""
+        property var destinations: []
+        readonly property var shown: {
+            const text = moveFilter.text.trim().toLowerCase();
+            return text === "" ? destinations
+                : destinations.filter(d => (d.title + " " + d.context).toLowerCase().indexOf(text) >= 0);
+        }
+
+        x: (parent.width - width) / 2
+        y: 80
+        width: Math.min(parent.width - 32, 380)
+        padding: 12
+        modal: true
+        dim: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        onAboutToShow: {
+            try {
+                destinations = JSON.parse(controller.moveDestinations(taskId));
+            } catch (e) {
+                destinations = [];
+            }
+            moveFilter.text = "";
+            moveList.currentIndex = 0;
+        }
+        onOpened: moveFilter.forceActiveFocus()
+        onClosed: taskListView.forceActiveFocus()
+
+        function choose(index) {
+            const destination = shown[index];
+            if (!destination)
+                return;
+            close();
+            root.sendTask(taskId, destination.kind, destination.id);
+        }
+
+        background: Rectangle {
+            color: root.isDark ? "#202124" : "#FFFFFF"
+            radius: 10
+            border.color: root.colBorder
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Text {
+                text: "Move"
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                color: root.colTextPrimary
+            }
+
+            TextField {
+                id: moveFilter
+                objectName: "moveFilter"
+                Layout.fillWidth: true
+                placeholderText: "Filter areas, projects and headings"
+                font.pixelSize: 13
+                onTextChanged: moveList.currentIndex = 0
+                Keys.onUpPressed: moveList.decrementCurrentIndex()
+                Keys.onDownPressed: moveList.incrementCurrentIndex()
+                Keys.onReturnPressed: movePopup.choose(moveList.currentIndex)
+                Keys.onEnterPressed: movePopup.choose(moveList.currentIndex)
+            }
+
+            // As tall as its entries, up to what fits below the popover's top.
+            ListView {
+                id: moveList
+                objectName: "moveDestinations"
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(contentHeight, Math.max(120, root.height - 240))
+                clip: true
+                model: movePopup.shown
+                highlightMoveDuration: 0
+
+                delegate: Rectangle {
+                    id: destinationRow
+                    objectName: "moveDestination"
+                    required property var modelData
+                    required property int index
+                    readonly property string kind: modelData.kind
+                    width: moveList.width
+                    height: 30
+                    radius: 6
+                    color: destinationRow.ListView.isCurrentItem ? root.colSidebarActive
+                        : destinationMouse.containsMouse ? root.colSidebarHover : "transparent"
+                    Accessible.role: Accessible.ListItem
+                    Accessible.name: (kind === "area" ? "Area: " : kind === "project" ? "Project: "
+                        : kind === "heading" ? "Heading: " : "") + modelData.title
+
+                    RowLayout {
+                        anchors.fill: parent
+                        // Filtered, the list is flat; otherwise it is laid
+                        // out like the sidebar.
+                        anchors.leftMargin: 8 + (moveFilter.text === "" ? destinationRow.modelData.depth * 18 : 0)
+                        anchors.rightMargin: 8
+                        spacing: 8
+
+                        Item {
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
+                            visible: destinationRow.kind !== "heading"
+                            Icon {
+                                anchors.centerIn: parent
+                                name: destinationRow.kind
+                                size: destinationRow.kind === "project" ? 13 : 16
+                                color: destinationRow.kind === "inbox" ? "#339AF0"
+                                    : destinationRow.kind === "project" ? root.colAccent : root.colTextSecondary
+                            }
+                        }
+
+                        Text {
+                            text: destinationRow.modelData.title
+                            font.pixelSize: 13
+                            font.weight: destinationRow.kind === "area" || destinationRow.kind === "heading"
+                                ? Font.DemiBold : Font.Normal
+                            color: destinationRow.kind === "heading" ? root.colAccent : root.colTextPrimary
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+
+                        Text {
+                            visible: moveFilter.text !== "" && destinationRow.modelData.context !== ""
+                            text: destinationRow.modelData.context
+                            font.pixelSize: 11
+                            color: root.colTextSecondary
+                            elide: Text.ElideRight
+                            Layout.maximumWidth: 120
+                        }
+
+                        // Where the task is now.
+                        Icon {
+                            objectName: "moveCurrent"
+                            visible: destinationRow.modelData.current
+                            name: "check"
+                            size: 14
+                            color: root.colAccent
+                        }
+                    }
+
+                    MouseArea {
+                        id: destinationMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: movePopup.choose(destinationRow.index)
+                    }
+                }
+            }
+        }
     }
 
     // When popover for a task (Ctrl+S, Date…): quick choices, a typed date

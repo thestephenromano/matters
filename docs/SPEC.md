@@ -143,7 +143,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `F2` | Selected task | Opens the task with its title selected for editing; `Enter` saves and moves to the notes, `Escape` abandons the edit |
 | `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, and a calendar operable by keyboard). Past days, times of day and phrases that name no day (`week`, `this month`) are refused (`Schedule::parse_typed`) |
 | `Ctrl + D` | Selected task(s) | Opens the **Deadline** popover: a typed day (`fri`, `in 3 days`, `dec 24`), a calendar, *Today* or *Clear*. Rows show the deadline, in red when due today or overdue |
-| `Ctrl + Shift + M` | Selected task(s) | Opens **Move** popover (select destination Area / Project / Heading) |
+| `Ctrl + Shift + M` | Selected task(s) | Opens the **Move** popover: the Inbox, areas, projects and their headings in sidebar order, with the task's current place ticked. Typing filters it (a project's name finds its headings too); `Enter` or a click files the task at the end of the chosen one. Dragging a task onto the sidebar's Inbox, an area or a project does the same, and onto Today or Someday schedules it; dragging a project onto an area files it there. The sidebar scrolls while a dragged item is held near its edge |
 | `Enter` | Checklist item | Opens a field for a new item directly below; `Enter` again saves it and opens the next. `Escape` leaves the checklist, with the task still open |
 | `Up` / `Down` | Checklist item | Goes to the item above or below; `Ctrl + Up` / `Ctrl + Down` move the item |
 | `Ctrl + .` | Checklist item | Ticks or unticks the item |
@@ -299,13 +299,13 @@ The [encrypted sync design](SYNC_DESIGN.md) records the security contract, propo
 Status of the Qt app. **Done** items are built; **Partly** items say what is missing and link the issue tracking it.
 
 - [x] **Done:** local SQLite persistence with WAL mode.
-- [ ] **Partly:** domain hierarchy Area → Project → Heading → Task → Checklist. The core stores all of it. The app has areas (sidebar, area view, filing projects, rename, Trash), projects with headings, tasks and their checklists; tasks are filed in areas only by capturing them in the area until Move (#54).
+- [x] **Done:** domain hierarchy Area → Project → Heading → Task → Checklist. The app has areas (sidebar, area view, filing projects, rename, Trash), projects with headings, tasks and their checklists; Move files a task in the Inbox, an area, a project or a heading. The core refuses any write that would break the hierarchy.
 - [x] **Done:** core views Inbox, Today (with a This Evening section), Upcoming (grouped by day), Anytime (grouped by area and project), Someday, Logbook (grouped by the day tasks were finished) and Trash.
 - [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
 - [x] **Done:** inline task expansion. Title, notes, checklist, When and deadline are edited in place; a closed row shows how much of its checklist is done.
-- [ ] **Partly:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find and `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) work. Missing: `Ctrl+Shift+M` (#19, with #54).
+- [x] **Done:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find, `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) and `Ctrl+Shift+M` (Move popover) work, for one selected task at a time (several: #64).
 - [x] **Done:** project progress, as a pie beside the project's title that fills as its tasks are done.
-- [ ] **Partly:** Quick Find popover. Finds tasks; projects and areas are found by the core but not shown (#26).
+- [x] **Done:** Quick Find popover. Finds areas, projects and tasks, and opens the one chosen.
 - [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.
 
 ### Post-MVP (v0.2+)
