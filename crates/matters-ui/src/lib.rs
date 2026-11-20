@@ -4,11 +4,14 @@
 //! this library holds everything else so tests can link against it.
 
 pub mod bridge;
+pub mod calendar;
+pub mod eds;
 mod motion;
 #[cfg(test)]
 mod qml_lint;
 
 pub use bridge::{install_database, install_settings};
+pub use calendar::install_calendar_source;
 
 /// The Qt Quick Controls style Matters uses unless `QT_QUICK_CONTROLS_STYLE`
 /// names another: Fusion, a built-in style drawn entirely from the palette,

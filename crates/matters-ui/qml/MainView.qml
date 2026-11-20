@@ -1049,6 +1049,57 @@ Item {
         whenPopup.close();
     }
 
+    // A local date-time from `YYYY-MM-DDTHH:MM:SS`.
+    function parseLocal(iso) {
+        const [d, t] = iso.split("T");
+        const [y, mo, day] = d.split("-").map(Number);
+        const [h, mi] = (t || "0:0").split(":").map(Number);
+        return new Date(y, mo - 1, day, h, mi);
+    }
+
+    // When a calendar event happens on the day it is listed under (#62):
+    // "All day" for an all-day event, or one that started earlier and goes
+    // on past the day; its times, in the locale's short format; "Until" the
+    // end for one that started on an earlier day; "From" the start for one
+    // that goes on past the day.
+    function describeEventTime(day, start, end, allDay) {
+        if (allDay)
+            return "All day";
+        const time = d => d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
+        const from = parseLocal(start);
+        const to = parseLocal(end);
+        const dayStart = parseLocal(day);
+        const nextDay = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1);
+        const startsBefore = from < dayStart;
+        const endsAfter = to > nextDay;
+        if (startsBefore && (endsAfter || to.getTime() === nextDay.getTime()))
+            return "All day";
+        if (startsBefore)
+            return "Until " + time(to);
+        if (endsAfter)
+            return "From " + time(from);
+        if (to <= from)
+            return time(from);
+        return time(from) + " – " + time(to);
+    }
+
+    // The user's calendars (#62): [{id, name, color}], and the ids of those
+    // not shown.
+    readonly property var calendars: {
+        try {
+            return JSON.parse(controller.calendarsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+    readonly property var hiddenCalendars: {
+        try {
+            return JSON.parse(controller.hiddenCalendarsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
     // The heading for a section key (`QueryEngine::section_keys`, #25).
     function describeSection(key) {
         if (key === "")
@@ -1151,7 +1202,12 @@ Item {
         return Qt.formatDate(date, "dddd, MMMM d, yyyy");
     }
 
-    Component.onCompleted: reloadTasks()
+    Component.onCompleted: {
+        // Calendar events (#62); after a read that changes them, the lists
+        // reload.
+        controller.refreshCalendars();
+        reloadTasks();
+    }
 
     // Root Container
     RowLayout {
@@ -2622,6 +2678,67 @@ Item {
                                 }
                             }
 
+                            // A calendar event (#62): read-only context in
+                            // Today and Upcoming, drawn quieter than a task,
+                            // with its calendar's colour. Nothing happens on
+                            // a click: events are edited in their calendar.
+                            DelegateChoice {
+                                roleValue: "event"
+                                delegate: Item {
+                                    id: eventRow
+                                    objectName: "eventRow"
+                                    required property string taskId
+                                    required property string title
+                                    required property string startDate
+                                    required property string eventStart
+                                    required property string eventEnd
+                                    required property bool allDay
+                                    required property string calendarColor
+                                    required property string calendarName
+                                    required property string section
+                                    required property int index
+                                    readonly property string when: root.describeEventTime(startDate, eventStart, eventEnd, allDay)
+                                    readonly property real targetHeight: height
+                                    width: taskListView.width
+                                    height: 32
+                                    Accessible.role: Accessible.StaticText
+                                    Accessible.name: "Event: " + title + ", " + when
+                                        + (calendarName !== "" ? ", " + calendarName : "")
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        // Lined up with the tasks' checkboxes.
+                                        anchors.leftMargin: 32
+                                        anchors.rightMargin: 16
+                                        spacing: 10
+
+                                        Rectangle {
+                                            objectName: "eventColor"
+                                            Layout.preferredWidth: 4
+                                            Layout.preferredHeight: 18
+                                            radius: 2
+                                            color: eventRow.calendarColor !== "" ? eventRow.calendarColor : root.colTextSecondary
+                                        }
+                                        Text {
+                                            objectName: "eventTime"
+                                            Layout.preferredWidth: 110
+                                            text: eventRow.when
+                                            elide: Text.ElideRight
+                                            font.pixelSize: 13
+                                            color: root.colTextSecondary
+                                        }
+                                        Text {
+                                            objectName: "eventTitle"
+                                            Layout.fillWidth: true
+                                            text: eventRow.title
+                                            elide: Text.ElideRight
+                                            font.pixelSize: 14
+                                            color: root.colTextPrimary
+                                        }
+                                    }
+                                }
+                            }
+
                             // A project listed as a row: finished, in the
                             // Logbook, standing for its tasks (#55); due in
                             // Today, starting in Upcoming, or deferred in Someday
@@ -3888,6 +4005,52 @@ Item {
                 ButtonGroup.group: logPolicyGroup
                 checked: controller.logPolicy === "manually"
                 onClicked: controller.chooseLogPolicy("manually")
+            }
+
+            // Calendar events in Today and Upcoming (#62).
+            Label {
+                Layout.topMargin: 12
+                text: "Calendar events"
+                font.bold: true
+            }
+            CheckBox {
+                id: showEventsBox
+                objectName: "showEventsBox"
+                text: "Show events in Today and Upcoming"
+                checked: controller.showEvents
+                onClicked: controller.chooseShowEvents(checked)
+            }
+            Repeater {
+                model: root.calendars
+                delegate: RowLayout {
+                    required property var modelData
+                    Layout.leftMargin: 24
+                    spacing: 4
+                    CheckBox {
+                        objectName: "calendarBox-" + modelData.id
+                        text: modelData.name
+                        enabled: controller.showEvents
+                        checked: !root.hiddenCalendars.includes(modelData.id)
+                        onClicked: controller.showCalendar(modelData.id, checked)
+                    }
+                    // The calendar's colour, as its events show it.
+                    Rectangle {
+                        Layout.preferredWidth: 10
+                        Layout.preferredHeight: 10
+                        radius: 5
+                        color: modelData.color !== "" ? modelData.color : root.colTextSecondary
+                    }
+                }
+            }
+            // Why there are no calendars to choose from.
+            Label {
+                objectName: "calendarProblem"
+                Layout.fillWidth: true
+                visible: text !== ""
+                text: controller.calendarProblem !== "" ? controller.calendarProblem
+                    : root.calendars.length === 0 ? "No calendars were found." : ""
+                wrapMode: Text.WordWrap
+                color: root.colTextSecondary
             }
         }
     }

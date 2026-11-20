@@ -1,3 +1,4 @@
+pub mod calendar;
 pub mod clock;
 pub mod crdt;
 pub mod domain;
@@ -20,7 +21,7 @@ pub use query::{
     heading_section_key, logbook_section_key, project_section_key, ListRow, ProjectView,
     QueryEngine, QuickFindResult, TodayView, UpcomingGroup, ViewCounts,
 };
-pub use settings::{LogPolicy, LogbookSettings, Settings, SettingsFile};
+pub use settings::{CalendarSettings, LogPolicy, LogbookSettings, Settings, SettingsFile};
 pub use storage::Database;
 pub use undo::TaskSnapshot;
 pub use visit::Visit;

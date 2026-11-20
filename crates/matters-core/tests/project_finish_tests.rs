@@ -346,6 +346,7 @@ fn the_logbook_lists_a_finished_project_as_one_row_among_the_tasks() {
             ListRow::Task(t) => t.id,
             ListRow::Project(p) => format!("<{}>", p.id),
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
+            ListRow::Event(e) => format!("({})", e.key()),
         })
         .collect();
     assert_eq!(
@@ -415,6 +416,7 @@ fn a_task_reopened_during_a_logbook_visit_keeps_its_place_among_projects() {
             ListRow::Task(t) => t.id,
             ListRow::Project(p) => format!("<{}>", p.id),
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
+            ListRow::Event(e) => format!("({})", e.key()),
         })
         .collect();
     assert_eq!(rows, ["t1", "<p>", "t2"]);
