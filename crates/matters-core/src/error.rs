@@ -17,6 +17,10 @@ pub enum MattersError {
     #[error("No per-user configuration directory could be determined (is HOME set?)")]
     NoConfigDir,
 
+    /// The sync engine refused or failed an operation.
+    #[error("Sync engine error: {0}")]
+    Engine(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
