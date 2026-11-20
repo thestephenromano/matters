@@ -138,7 +138,10 @@ impl Database {
                     ],
                 )?;
             }
-            tx.execute("DELETE FROM checklist_items WHERE task_id = ?1", params![id])?;
+            tx.execute(
+                "DELETE FROM checklist_items WHERE task_id = ?1",
+                params![id],
+            )?;
             tx.execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])?;
             tx.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
             tx.commit()?;

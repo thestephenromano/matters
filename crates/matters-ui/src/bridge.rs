@@ -506,6 +506,10 @@ pub mod qobject {
         /// Whether the task at `row` is scheduled for This Evening.
         #[qinvokable]
         fn evening_at(self: &TaskListModel, row: i32) -> bool;
+        /// The status of the task at `row` (`open`, `completed` or
+        /// `canceled`), or an empty string when out of range.
+        #[qinvokable]
+        fn status_at(self: &TaskListModel, row: i32) -> QString;
         /// The heading the row at `row` is under (a task) or is (an empty
         /// heading's row), or an empty string.
         #[qinvokable]
@@ -2369,6 +2373,11 @@ impl qobject::TaskListModel {
 
     pub fn evening_at(&self, row: i32) -> bool {
         self.task_at(row).is_some_and(Task::is_evening)
+    }
+
+    pub fn status_at(&self, row: i32) -> QString {
+        self.task_at(row)
+            .map_or_else(QString::default, |task| QString::from(task.status.as_str()))
     }
 
     pub fn heading_at(&self, row: i32) -> QString {

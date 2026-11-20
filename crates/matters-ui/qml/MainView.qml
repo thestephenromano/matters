@@ -40,6 +40,77 @@ Item {
     // Completed is offered then.
     readonly property bool logsByHand: controller.logPolicy === "daily" || controller.logPolicy === "manually"
 
+    // ---- Task actions (#65) ------------------------------------------------
+
+    // Cancel the open task `id`, or reopen it if it is finished.
+    function cancelOrReopen(id: string) {
+        const row = taskModel.rowOf(id);
+        if (row < 0)
+            return;
+        if (taskModel.statusAt(row) === "open")
+            controller.cancelTask(id);
+        else
+            controller.toggleTask(id);
+    }
+
+    // Copy task `id` below itself and select the copy.
+    function duplicateTask(id: string) {
+        const copy = controller.duplicateTask(id);
+        if (copy !== "") {
+            pendingRevealId = copy;
+            Qt.callLater(root.reloadTasks);
+        }
+    }
+
+    // The delegate showing task `id`, if it has one.
+    function rowItem(id: string): Item {
+        return taskListView.itemAtIndex(taskModel.rowOf(id));
+    }
+
+    // Open the menu for task `id`, at `pos` in `item` (a click), or below
+    // the selected row (the keyboard).
+    function openTaskMenu(id: string, pos: point, item: Item) {
+        if (id === "" || controller.currentView === "trash")
+            return;
+        taskListView.selectedTaskId = id;
+        taskMenu.taskId = id;
+        taskMenu.open_ = taskModel.statusAt(taskModel.rowOf(id)) === "open";
+        taskMenu.parent = item;
+        taskMenu.popup(item, pos);
+    }
+
+    Menu {
+        id: taskMenu
+        objectName: "taskMenu"
+        property string taskId: ""
+        // Whether the task is open (not done or canceled).
+        property bool open_: true
+        onClosed: taskListView.forceActiveFocus()
+
+        MenuItem {
+            objectName: "menuCancel"
+            text: taskMenu.open_ ? "Cancel Task" : "Reopen Task"
+            onTriggered: root.cancelOrReopen(taskMenu.taskId)
+        }
+        MenuItem {
+            objectName: "menuDuplicate"
+            text: "Duplicate"
+            onTriggered: root.duplicateTask(taskMenu.taskId)
+        }
+        MenuItem {
+            objectName: "menuConvert"
+            text: "Convert to Project"
+            enabled: taskMenu.open_
+            onTriggered: controller.convertTaskToProject(taskMenu.taskId)
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "menuTrash"
+            text: "Move to Trash"
+            onTriggered: controller.trashTask(taskMenu.taskId)
+        }
+    }
+
     // Opens a URL with the desktop's handler. Tests replace it, so nothing
     // is launched.
     property var openExternally: url => Qt.openUrlExternally(url)
@@ -2472,6 +2543,11 @@ Item {
                                     required property string title
                                     required property string notes
                                     required property bool done
+                                    // `open`, `completed` or `canceled` (#65).
+                                    required property string status
+                                    readonly property bool canceled: status === "canceled"
+                                    // Finished: done or canceled.
+                                    readonly property bool finished: status !== "open"
                                     required property string startDate
                                     required property bool evening
                                     required property string deadline
@@ -2551,6 +2627,12 @@ Item {
                                     // Passive hover tracking: unlike a MouseArea it never
                                     // blocks clicks from reaching the controls in the row.
                                     HoverHandler { id: rowHover }
+
+                                    // A right click opens the task's menu (#65).
+                                    TapHandler {
+                                        acceptedButtons: Qt.RightButton
+                                        onTapped: (point, button) => root.openTaskMenu(taskRow.taskId, taskRow.mapFromItem(null, point.scenePosition.x, point.scenePosition.y), taskRow)
+                                    }
 
                                     // Click on empty row space toggles expansion. Declared
                                     // first, so it sits beneath the row's controls and only
@@ -2644,6 +2726,16 @@ Item {
                                                     color: "#FFFFFF"
                                                     visible: taskRow.done
                                                 }
+                                                // Canceled (#65): a cross, not a tick.
+                                                Icon {
+                                                    objectName: "canceledMark"
+                                                    anchors.centerIn: parent
+                                                    name: "close"
+                                                    size: 12
+                                                    strokeWidth: 2.4
+                                                    color: root.colTextSecondary
+                                                    visible: taskRow.canceled
+                                                }
 
                                                 MouseArea {
                                                     id: checkMouse
@@ -2660,8 +2752,8 @@ Item {
                                                 visible: !taskRow.isExpanded
                                                 text: taskRow.title
                                                 font.pixelSize: 14
-                                                font.strikeout: taskRow.done
-                                                color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
+                                                font.strikeout: taskRow.finished
+                                                color: taskRow.finished ? root.colTextSecondary : root.colTextPrimary
                                                 Layout.fillWidth: true
                                                 elide: Text.ElideRight
                                             }
@@ -2672,8 +2764,8 @@ Item {
                                                 visible: taskRow.isExpanded
                                                 text: taskRow.title
                                                 font.pixelSize: 14
-                                                font.strikeout: taskRow.done
-                                                color: taskRow.done ? root.colTextSecondary : root.colTextPrimary
+                                                font.strikeout: taskRow.finished
+                                                color: taskRow.finished ? root.colTextSecondary : root.colTextPrimary
                                                 selectByMouse: true
                                                 clip: true
                                                 // Only as wide as the text, so a click on the
@@ -3822,6 +3914,26 @@ Item {
     Shortcut {
         sequence: "/"
         onActivated: quickFindDialog.open()
+    }
+    // Task actions on the selection (#65); not in the Trash.
+    Shortcut {
+        sequence: "Ctrl+Alt+K"
+        enabled: taskListView.selectedTaskId !== "" && controller.currentView !== "trash"
+        onActivated: root.cancelOrReopen(taskListView.selectedTaskId)
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+D"
+        enabled: taskListView.selectedTaskId !== "" && controller.currentView !== "trash"
+        onActivated: root.duplicateTask(taskListView.selectedTaskId)
+    }
+    Shortcut {
+        sequences: ["Menu", "Shift+F10"]
+        enabled: taskListView.selectedTaskId !== ""
+        onActivated: {
+            const row = root.rowItem(taskListView.selectedTaskId);
+            if (row)
+                root.openTaskMenu(taskListView.selectedTaskId, Qt.point(40, row.height), row);
+        }
     }
     Shortcut {
         sequence: "Ctrl+,"

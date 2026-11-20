@@ -2,8 +2,8 @@
 
 use jiff::civil::Date;
 use matters_core::{
-    Area, ChecklistItem, Database, Home, MattersError, Project, QueryEngine, Schedule, Status,
-    Tag, Tagged, Task, View,
+    Area, ChecklistItem, Database, Home, MattersError, Project, QueryEngine, Schedule, Status, Tag,
+    Tagged, Task, View,
 };
 
 fn today() -> Date {
@@ -54,9 +54,24 @@ fn in_project(project: &str) -> Home {
 fn a_canceled_task_is_finished_like_a_completed_one() {
     let db = Database::open_in_memory().unwrap();
     db.create_project(&Project::new("p", "P", 0.0)).unwrap();
-    add(&db, "done", in_project("p"), Schedule::Today { evening: false });
-    add(&db, "dropped", in_project("p"), Schedule::Today { evening: false });
-    add(&db, "open", in_project("p"), Schedule::Today { evening: false });
+    add(
+        &db,
+        "done",
+        in_project("p"),
+        Schedule::Today { evening: false },
+    );
+    add(
+        &db,
+        "dropped",
+        in_project("p"),
+        Schedule::Today { evening: false },
+    );
+    add(
+        &db,
+        "open",
+        in_project("p"),
+        Schedule::Today { evening: false },
+    );
     db.complete_task("done").unwrap();
     db.cancel_task("dropped").unwrap();
 
@@ -149,7 +164,11 @@ fn a_copy_is_open_below_the_original_with_its_details() {
     let project = ids(&db, &View::Project("p".into()));
     assert_eq!(project, ["before", "orig", &copy, "after"], "just below it");
     let today_list = ids(&db, &View::Today);
-    assert_eq!(today_list, ["before", "orig", &copy, "after"], "in Today too");
+    assert_eq!(
+        today_list,
+        ["before", "orig", &copy, "after"],
+        "in Today too"
+    );
 
     let tags: Vec<String> = db
         .tags_of(Tagged::Task(&copy))
