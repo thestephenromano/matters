@@ -81,8 +81,13 @@ pub enum Command {
         title: String,
         created_at: i64,
     },
-    /// File an entity under `parent` (`None`: the top level) at `at`;
-    /// also how siblings are reordered.
+    /// Reorder an entity among its current siblings. Unlike [`Command::Move`]
+    /// this is not an edit of the entity: its `updated_at` stays.
+    Place {
+        id: String,
+        at: Anchor,
+    },
+    /// File an entity under `parent` (`None`: the top level) at `at`.
     Move {
         id: String,
         parent: Option<String>,
@@ -434,6 +439,14 @@ impl Document {
                 self.place(&home, node, parent, anchor, false)?;
                 self.touch(node, at)?;
                 return Ok(());
+            }
+            Command::Place { id, at: anchor } => {
+                let (node, _) = self.entity(id)?;
+                let parent = match home.parent(node) {
+                    Some(TreeParentId::Node(p)) => Some(p),
+                    _ => None,
+                };
+                return self.place(&home, node, parent, anchor, false);
             }
             Command::PlaceInToday { id, at: anchor } => {
                 let (_, kind) = self.entity(id)?;

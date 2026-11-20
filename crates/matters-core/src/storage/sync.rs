@@ -289,16 +289,6 @@ pub(crate) fn create_task(tx: &Transaction<'_>, task: &Task) -> Result<Vec<Comma
         title: task.title.clone(),
         created_at: task.created_at,
     }];
-    let today = previous(
-        tx,
-        "SELECT id FROM tasks WHERE id != ?1 AND today_order < ?2
-         ORDER BY today_order DESC LIMIT 1",
-        &[&task.id, &task.today_order],
-    )?;
-    commands.push(Command::PlaceInToday {
-        id: task.id.clone(),
-        at: after(today),
-    });
     commands.extend(fields(
         &task.id,
         &task.notes,
@@ -308,6 +298,13 @@ pub(crate) fn create_task(tx: &Transaction<'_>, task: &Task) -> Result<Vec<Comma
         task.completed_at,
         task.trashed_at,
     ));
+    // Placed in Today's order within its section, once its When is known.
+    commands.extend(reorder(
+        tx,
+        "tasks",
+        "today_order",
+        std::slice::from_ref(&task.id),
+    )?);
     Ok(commands)
 }
 
@@ -339,6 +336,13 @@ pub(crate) fn create_checklist_item(
 }
 
 /// A task's When as stored, as one command.
+/// A task's new When, and its place in the Today section it now belongs to.
+pub(crate) fn rescheduled(tx: &Transaction<'_>, id: &str) -> Result<Vec<Command>> {
+    let mut commands = task_schedule(tx, id)?;
+    commands.extend(reorder(tx, "tasks", "today_order", &[id.to_string()])?);
+    Ok(commands)
+}
+
 pub(crate) fn task_schedule(tx: &Transaction<'_>, id: &str) -> Result<Vec<Command>> {
     let (start_date, time_of_day, someday): (Option<String>, Option<String>, bool) = tx.query_row(
         "SELECT start_date, time_of_day, is_someday FROM tasks WHERE id = ?1",
@@ -424,5 +428,87 @@ pub(crate) fn refile_in_order(tx: &Transaction<'_>, tasks: &[String]) -> Result<
             at: after(previous_in_home(tx, task)?),
         });
     }
+    Ok(commands)
+}
+
+/// Re-place each row of `table` whose `column` key changed (`ids`), right
+/// after the row before it by that key among its siblings, in ascending key
+/// order. Rows whose keys stayed keep their places, so the engine's order
+/// ends up as the keys say, even after a renumbering.
+pub(crate) fn reorder(
+    tx: &Transaction<'_>,
+    table: &str,
+    column: &str,
+    ids: &[String],
+) -> Result<Vec<Command>> {
+    // The siblings of a row, and its key.
+    let siblings = match (table, column) {
+        // Today's keys order each section (daytime, This Evening) apart.
+        ("tasks", "today_order") => {
+            "(time_of_day IS 'evening') = ((SELECT time_of_day FROM tasks WHERE id = ?1) IS 'evening')"
+        }
+        ("tasks", _) => {
+            "heading_id IS (SELECT heading_id FROM tasks WHERE id = ?1)
+             AND project_id IS (SELECT project_id FROM tasks WHERE id = ?1)
+             AND area_id IS (SELECT area_id FROM tasks WHERE id = ?1)"
+        }
+        ("headings", _) => "project_id = (SELECT project_id FROM headings WHERE id = ?1)",
+        ("projects", _) => "area_id IS (SELECT area_id FROM projects WHERE id = ?1)",
+        ("checklist_items", _) => "task_id = (SELECT task_id FROM checklist_items WHERE id = ?1)",
+        _ => "1",
+    };
+    let key_sql = format!("SELECT {column} FROM {table} WHERE id = ?1");
+    let mut keyed = Vec::new();
+    for id in ids {
+        let key: f64 = tx.query_row(&key_sql, params![id], |r| r.get(0))?;
+        keyed.push((key, id));
+    }
+    keyed.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let prev_sql = format!(
+        "SELECT id FROM {table} WHERE id != ?1 AND {siblings} AND {column} < ?2
+         ORDER BY {column} DESC LIMIT 1"
+    );
+    let mut commands = Vec::new();
+    for (key, id) in keyed {
+        let at = after(previous(tx, &prev_sql, &[id, &key])?);
+        commands.push(if column == "today_order" {
+            Command::PlaceInToday { id: id.clone(), at }
+        } else {
+            Command::Place { id: id.clone(), at }
+        });
+    }
+    Ok(commands)
+}
+
+/// A heading filed in another project, with its tasks: each is moved, so
+/// the engine stamps them as the rows are.
+pub(crate) fn moved_heading(tx: &Transaction<'_>, id: &str) -> Result<Vec<Command>> {
+    let heading = tx.query_row(
+        "SELECT id, project_id, title, sort_order, created_at, updated_at FROM headings WHERE id = ?1",
+        params![id],
+        |r| {
+            Ok(Heading {
+                id: r.get(0)?,
+                project_id: r.get(1)?,
+                title: r.get(2)?,
+                sort_order: r.get(3)?,
+                created_at: r.get(4)?,
+                updated_at: r.get(5)?,
+            })
+        },
+    )?;
+    let prev = previous(
+        tx,
+        "SELECT id FROM headings WHERE id != ?1 AND project_id = ?2 AND sort_order < ?3
+         ORDER BY sort_order DESC LIMIT 1",
+        &[&heading.id, &heading.project_id, &heading.sort_order],
+    )?;
+    let mut commands = vec![Command::Move {
+        id: id.into(),
+        parent: Some(heading.project_id.clone()),
+        at: after(prev),
+    }];
+    let tasks = task_ids(tx, "SELECT id FROM tasks WHERE heading_id = ?1", id)?;
+    commands.extend(refile_in_order(tx, &tasks)?);
     Ok(commands)
 }
