@@ -182,16 +182,32 @@ Item {
     // Task to scroll to once the list has loaded (set by Quick Find).
     property string pendingRevealId: ""
 
+    // The tag the list is narrowed to (#58), or "" for the whole list.
+    // Navigating clears it; choosing one reloads the list.
+    property string tagFilter: ""
+    onTagFilterChanged: Qt.callLater(root.reloadTasks)
+
+    // The tags the current list can be narrowed to.
+    readonly property var presentTags: {
+        try {
+            return JSON.parse(taskModel.presentTagsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
     function reloadTasks() {
-        // A new visit (navigation) starts with nothing selected.
+        // A new visit (navigation) starts with nothing selected, and the
+        // whole list: the tag filter clears (#58).
         if (controller.visit !== loadedVisit) {
             loadedVisit = controller.visit;
             taskListView.selectedTaskId = "";
             newBelowId = "";
+            tagFilter = "";
         }
         // A project or area view loads the tasks of that project or area.
         const container = controller.currentView === "area" ? controller.currentAreaId : controller.currentProjectId;
-        taskModel.load(controller.currentView, container, controller.visit);
+        taskModel.load(controller.currentView, container, controller.visit, tagFilter);
         if (movedTaskId !== "") {
             if (taskModel.rowOf(movedTaskId) < 0 && taskListView.selectedTaskId === movedTaskId)
                 taskListView.selectedTaskId = movedNextId;
@@ -1794,6 +1810,53 @@ Item {
                                     font.pixelSize: 11
                                     onClicked: controller.restoreProject(trashedProject.modelData.id)
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // The tags present in the list (#58): choosing one narrows the
+                // list to it (a parent includes its children); choosing it
+                // again, or All, shows everything.
+                Flow {
+                    objectName: "tagBar"
+                    visible: root.presentTags.length > 0
+                    Layout.fillWidth: true
+                    Layout.topMargin: -8
+                    spacing: 6
+
+                    Repeater {
+                        model: [{ id: "", name: "All", depth: 0 }].concat(root.presentTags)
+                        delegate: Rectangle {
+                            id: filterChip
+                            objectName: "filterTag"
+                            required property var modelData
+                            readonly property string tagId: modelData.id
+                            readonly property string name: modelData.name
+                            readonly property bool chosen: root.tagFilter === tagId
+                            height: 24
+                            width: filterText.contentWidth + 20
+                            radius: 12
+                            color: chosen ? root.colAccent : (filterMouse.containsMouse ? root.colSidebarHover : "transparent")
+                            border.width: 1
+                            border.color: chosen ? root.colAccent : root.colBorder
+                            Accessible.role: Accessible.Button
+                            Accessible.name: tagId === "" ? "Show all tasks" : "Show only " + name
+                            Accessible.checked: chosen
+
+                            Text {
+                                id: filterText
+                                anchors.centerIn: parent
+                                text: filterChip.name
+                                font.pixelSize: 12
+                                color: filterChip.chosen ? "#FFFFFF" : root.colTextSecondary
+                            }
+                            MouseArea {
+                                id: filterMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.tagFilter = filterChip.chosen ? "" : filterChip.tagId
                             }
                         }
                     }

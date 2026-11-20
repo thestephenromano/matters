@@ -526,6 +526,10 @@ Item {
             tryVerify(() => ids().indexOf("proj-b") === ids().indexOf("proj-a") + 1, 2000, "new projects go last");
 
             const projects = findChild(view, "projectsList");
+            // A user scrolls the sidebar to them first; other tests may have
+            // filled it.
+            projects.positionViewAtIndex(projects.model.findIndex(p => p.title === "proj-b"), ListView.Contain);
+            wait(50);
             let a = null, b = null;
             tryVerify(() => {
                 for (let i = 0; i < projects.count; ++i) {
@@ -1049,7 +1053,7 @@ Item {
             waitForRow("area-task");
             controller.selectView("inbox");
             waitForNoRow("area-task");
-            mouseClick(sidebarArea("Home Base"));
+            mouseClick(shownArea("Home Base"));
             compare(controller.currentView, "area");
             waitForRow("area-task");
         }
@@ -2453,6 +2457,73 @@ Item {
             tryVerify(() => !dialog.visible, 2000);
             const task = rowFor("tg-dlg-task");
             tryVerify(() => compareArrays(chipNames(task, "rowTag"), ["tg-dlg-renamed"]), 2000);
+        }
+
+        // ---- Filtering by tag (#58) ---------------------------------------------
+
+        function filterChip(name) {
+            return childrenNamed(findChild(view, "tagBar"), "filterTag").find(c => c.visible && c.name === name) || null;
+        }
+
+        function clickFilter(name) {
+            let chip = null;
+            tryVerify(() => (chip = filterChip(name)) !== null, 2000, name + " offered in the tag bar");
+            mouseClick(chip);
+        }
+
+        function test_a_list_is_narrowed_to_a_tag_and_cleared_on_navigation() {
+            const parent = controller.createTag("tf-errands", "");
+            const child = controller.createTag("tf-hardware", parent);
+            const a = addToToday("tf-a").taskId;
+            const b = addToToday("tf-b").taskId;
+            addToToday("tf-c");
+            controller.addTag("task", a, child);
+            controller.addTag("task", b, parent);
+            settle();
+            const before = indexOf("tf-a") < indexOf("tf-b");
+
+            // A parent narrows to its children too, in the same order.
+            clickFilter("tf-errands");
+            waitForNoRow("tf-c");
+            verify(indexOf("tf-a") >= 0 && indexOf("tf-b") >= 0);
+            compare(indexOf("tf-a") < indexOf("tf-b"), before, "the order is kept");
+            verify(filterChip("tf-errands").chosen);
+
+            clickFilter("tf-hardware");
+            waitForNoRow("tf-b");
+            verify(indexOf("tf-a") >= 0);
+
+            // Choosing it again shows everything.
+            clickFilter("tf-hardware");
+            waitForRow("tf-c");
+            compare(view.tagFilter, "");
+
+            // Leaving the view clears the filter.
+            clickFilter("tf-errands");
+            waitForNoRow("tf-c");
+            controller.selectView("inbox");
+            controller.selectView("today");
+            waitForRow("tf-c");
+            compare(view.tagFilter, "");
+            verify(filterChip("All").chosen);
+        }
+
+        function test_a_projects_tag_narrows_lists_to_its_tasks() {
+            openFreshProject("tf-proj", ["tf-in-proj"]);
+            const project = projectIdOf("tf-proj");
+            const tag = controller.createTag("tf-project-tag", "");
+            controller.addTag("project", project, tag);
+            controller.selectView("anytime");
+            waitForRow("tf-in-proj");
+            clickFilter("tf-project-tag");
+            tryVerify(() => {
+                for (let i = 0; i < list.count; ++i) {
+                    const title = list.model.titleAt(i);
+                    if (title !== "" && title !== "tf-in-proj")
+                        return false;
+                }
+                return indexOf("tf-in-proj") >= 0;
+            }, 2000, "only the project's task, which inherits its tag");
         }
     }
 }

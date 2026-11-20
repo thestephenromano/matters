@@ -427,12 +427,23 @@ pub mod qobject {
         #[qml_element]
         #[base = QAbstractListModel]
         #[qproperty(QString, error_message)]
+        /// The tags the view can be narrowed to (#58), its tasks' own and
+        /// inherited tags with their parents, as JSON `[{id, name, depth}]`;
+        /// worked out before any filter applies.
+        #[qproperty(QString, present_tags_json)]
         type TaskListModel = super::TaskListModelRust;
 
         /// Show the tasks of `view` (a `View` key; `project_id` for projects)
-        /// during navigation `visit` (`AppController.visit`).
+        /// during navigation `visit` (`AppController.visit`), narrowed to
+        /// the tag `tag` unless it is empty (#58).
         #[qinvokable]
-        fn load(self: Pin<&mut TaskListModel>, view: &QString, project_id: &QString, visit: i32);
+        fn load(
+            self: Pin<&mut TaskListModel>,
+            view: &QString,
+            project_id: &QString,
+            visit: i32,
+            tag: &QString,
+        );
         /// Row of the task with this id, or -1.
         #[qinvokable]
         fn row_of(self: &TaskListModel, task_id: &QString) -> i32;
@@ -1954,6 +1965,7 @@ fn row_task(row: &ListRow) -> Option<&Task> {
 
 pub struct TaskListModelRust {
     error_message: QString,
+    present_tags_json: QString,
     rows: Vec<ListRow>,
     /// Section key per row (`row_key`), #25.
     sections: HashMap<String, String>,
@@ -1968,7 +1980,7 @@ pub struct TaskListModelRust {
     /// of those notifications is queued here and run afterwards, so row
     /// mutations never interleave.
     loading: bool,
-    queued: Option<(String, String, i32)>,
+    queued: Option<(String, String, i32, String)>,
     /// The navigation the current rows belong to.
     visit_id: Option<i32>,
 }
@@ -1977,6 +1989,7 @@ impl Default for TaskListModelRust {
     fn default() -> Self {
         Self {
             error_message: QString::default(),
+            present_tags_json: QString::from("[]"),
             rows: Vec::new(),
             db: database(),
             visit: Visit::new(),
@@ -1991,15 +2004,27 @@ impl Default for TaskListModelRust {
 }
 
 impl qobject::TaskListModel {
-    pub fn load(mut self: Pin<&mut Self>, view: &QString, project_id: &QString, visit: i32) {
-        let mut request = (String::from(view), String::from(project_id), visit);
+    pub fn load(
+        mut self: Pin<&mut Self>,
+        view: &QString,
+        project_id: &QString,
+        visit: i32,
+        tag: &QString,
+    ) {
+        let mut request = (
+            String::from(view),
+            String::from(project_id),
+            visit,
+            String::from(tag),
+        );
         if self.loading {
             self.as_mut().rust_mut().queued = Some(request);
             return;
         }
         self.as_mut().rust_mut().loading = true;
         loop {
-            self.as_mut().load_now(&request.0, &request.1, request.2);
+            self.as_mut()
+                .load_now(&request.0, &request.1, request.2, &request.3);
             match self.as_mut().rust_mut().queued.take() {
                 Some(next) => request = next,
                 None => break,
@@ -2008,7 +2033,7 @@ impl qobject::TaskListModel {
         self.as_mut().rust_mut().loading = false;
     }
 
-    fn load_now(mut self: Pin<&mut Self>, view_key: &str, project_id: &str, visit: i32) {
+    fn load_now(mut self: Pin<&mut Self>, view_key: &str, project_id: &str, visit: i32, tag: &str) {
         let Some(view) = View::from_key(view_key, Some(project_id)) else {
             let message = format!("unknown view '{view_key}'");
             return self.set_error_message(QString::from(message.as_str()));
@@ -2039,7 +2064,13 @@ impl qobject::TaskListModel {
                         .into_iter()
                         .map(|(task, tags)| (task, tag_chips(&tags)))
                         .collect();
+                    let present = tag_entries(&engine.tags_present(&tasks)?);
                     let rows = engine.list_rows(&view, tasks, local_today())?;
+                    let rows = if tag.is_empty() {
+                        rows
+                    } else {
+                        engine.filter_rows(rows, tag)?
+                    };
                     for row in &rows {
                         let key = match row {
                             ListRow::EmptyHeading(h) => {
@@ -2050,11 +2081,12 @@ impl qobject::TaskListModel {
                         };
                         sections.insert(row_key(row), key);
                     }
-                    Ok((rows, sections, progress, tags))
+                    Ok((rows, sections, progress, tags, present))
                 })
         };
         match target {
-            Ok((rows, sections, progress, tags)) => {
+            Ok((rows, sections, progress, tags, present)) => {
+                self.as_mut().set_present_tags_json(to_json(&present));
                 let this = self.as_mut().rust_mut().get_mut();
                 let old_sections = std::mem::replace(&mut this.sections, sections);
                 let old_progress = std::mem::replace(&mut this.progress, progress);

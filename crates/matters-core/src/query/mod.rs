@@ -2,7 +2,7 @@ use jiff::civil::Date;
 use rusqlite::{params, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::domain::{Area, Heading, Project, ProjectProgress, Task, View};
+use crate::domain::{Area, Heading, Project, ProjectProgress, Tag, Task, View};
 use crate::error::Result;
 use crate::storage::db::{Database, AREA_COLUMNS, PROJECT_COLUMNS, TASK_COLUMNS};
 use crate::storage::trash::{self, LISTED_TRASHED_TASK as TRASH_WHERE, LIVE_TASK as LIVE};
@@ -145,6 +145,25 @@ macro_rules! has_tag {
                 UNION SELECT tag_id FROM area_tags WHERE area_id = tasks.area_id
                 UNION SELECT tag_id FROM area_tags WHERE area_id =
                     (SELECT area_id FROM projects WHERE id = tasks.project_id)
+            )
+        )"
+    };
+}
+
+/// The project (the row of `projects` being tested) has the tag `?2`:
+/// through its own tags or its area's, a tag matching those nested under
+/// it, as for tasks (`has_tag!`). Filtering a list by tag keeps the project
+/// rows that match (#58).
+macro_rules! project_has_tag {
+    () => {
+        "EXISTS (
+            WITH RECURSIVE wanted(id) AS (
+                SELECT ?2
+                UNION SELECT t.id FROM tags t JOIN wanted ON t.parent_id = wanted.id
+            )
+            SELECT 1 FROM wanted WHERE wanted.id IN (
+                SELECT tag_id FROM project_tags WHERE project_id = projects.id
+                UNION SELECT tag_id FROM area_tags WHERE area_id = projects.area_id
             )
         )"
     };
@@ -646,6 +665,84 @@ impl<'a> QueryEngine<'a> {
         }
         rows.extend(projects.map(ListRow::Project));
         Ok(rows)
+    }
+
+    /// A view's rows narrowed to tag `tag_id` (#58): the tasks that have it
+    /// (`has_tag!`), and the project rows whose project has it; empty
+    /// headings are left out. The rows keep their order: filtering never
+    /// reorders, it only hides.
+    pub fn filter_rows(&self, rows: Vec<ListRow>, tag_id: &str) -> Result<Vec<ListRow>> {
+        let tasks = self.ids_with_tag("tasks", has_tag!(), tag_id)?;
+        let projects = self.ids_with_tag("projects", project_has_tag!(), tag_id)?;
+        Ok(rows
+            .into_iter()
+            .filter(|row| match row {
+                ListRow::Task(t) => tasks.contains(&t.id),
+                ListRow::Project(p) => projects.contains(&p.id),
+                ListRow::EmptyHeading(_) => false,
+            })
+            .collect())
+    }
+
+    /// The ids in `table` matching `rule`, with `?2` the tag: the rules
+    /// keep the tag at `?2`, as the view rules have the date at `?1`, so
+    /// `?1` is bound here to NULL.
+    fn ids_with_tag(
+        &self,
+        table: &str,
+        rule: &str,
+        tag_id: &str,
+    ) -> Result<std::collections::HashSet<String>> {
+        let sql = format!("SELECT id FROM {table} WHERE ?1 IS NULL AND {rule}");
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![Option::<String>::None, tag_id], |r| r.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// The tags a list of `tasks` can be narrowed to (#58): the tags each
+    /// task has, its own and those of its project and area, with the tags
+    /// they are nested under, so a parent can be chosen too. In tag-list
+    /// order (`Database::list_tags`).
+    pub fn tags_present(&self, tasks: &[Task]) -> Result<Vec<Tag>> {
+        let all = self.db.list_tags()?;
+        let mut present: std::collections::HashSet<String> = std::collections::HashSet::new();
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT tag_id FROM task_tags WHERE task_id = ?1
+                 UNION SELECT tag_id FROM project_tags WHERE project_id = ?2
+                 UNION SELECT tag_id FROM area_tags WHERE area_id = ?3
+                 UNION SELECT tag_id FROM area_tags WHERE area_id =
+                     (SELECT area_id FROM projects WHERE id = ?2)",
+            )?;
+            for task in tasks {
+                let rows = stmt
+                    .query_map(params![task.id, task.project_id, task.area_id], |r| {
+                        r.get::<_, String>(0)
+                    })?;
+                for id in rows {
+                    present.insert(id?);
+                }
+            }
+            Ok(())
+        })?;
+        // And everything above them.
+        let parent: HashMap<&str, Option<&str>> = all
+            .iter()
+            .map(|t| (t.id.as_str(), t.parent_id.as_deref()))
+            .collect();
+        let mut wanted = present.clone();
+        for id in &present {
+            let mut up = parent.get(id.as_str()).copied().flatten();
+            while let Some(p) = up {
+                if !wanted.insert(p.to_string()) {
+                    break;
+                }
+                up = parent.get(p).copied().flatten();
+            }
+        }
+        Ok(all.into_iter().filter(|t| wanted.contains(&t.id)).collect())
     }
 
     /// Whether task `task_id` has tag `tag_id`, by its own tags or those of
