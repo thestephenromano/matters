@@ -1,0 +1,51 @@
+; Relay API bodies for sync service contract v0 (docs/SYNC_SERVICE_CONTRACT.md).
+; RFC 8610 structural schema; RFC 8949 core deterministic encoding is also required.
+; Record and authority bytes are not described here: they travel exactly as
+; signed (sync-record-v0.cddl, sync-key-distribution-v0.cddl).
+
+route = [application: id16, tenant: id16, collection: id16]
+
+challenge-request = {"route": route, "device": hash48}
+challenge-response = {"challenge": id32, "expires": unix-ms}
+
+session-request = {
+  "route": route, "device": hash48, "challenge": id32,
+  "signature": bstr .size 3309
+}
+; signed input: CBOR(["matters-sync/v0/relay-session",
+;                     application, tenant, collection, device, challenge])
+session-response = {"token": id32, "expires": unix-ms, "generation": id16}
+
+receipt = {"sequence": seq, "generation": id16, "digest": hash48}
+
+page = {
+  "generation": id16,
+  "high-water": seq / 0,
+  "records": [* [seq, bstr]],
+  "next": cursor,
+  "complete": bool
+}
+cursor = bstr .cbor [generation: id16, last-sequence: seq / 0]
+
+hint = {"generation": id16, "sequence": seq}
+
+error = {
+  "code": error-code,
+  "retry": bool,
+  ? "retry-after-ms": uint,
+  ? "digest": hash48,
+  ? "generation": id16
+}
+error-code = "malformed" / "session-expired" / "unauthenticated" / "not-a-member"
+  / "revoked" / "unknown-route" / "unsupported-version" / "record-conflict"
+  / "generation-changed" / "too-large" / "context-mismatch" / "unsupported-suite"
+  / "rate-limited" / "unavailable" / "quota-exhausted"
+
+export = ["matters-sync-export", 0, route, generation: id16,
+          authority: [* bstr], records: [* [seq, bstr]]]
+
+seq = uint .size 8
+unix-ms = uint .size 8
+id16 = bstr .size 16
+id32 = bstr .size 32
+hash48 = bstr .size 48
