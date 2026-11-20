@@ -1557,6 +1557,7 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "jiff",
  "matters-core",
  "serde",
  "serde_json",

@@ -73,12 +73,54 @@ pub struct LogbookSettings {
     pub logged_at: i64,
 }
 
+/// Which calendar events Today and Upcoming show (#62).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct CalendarSettings {
+    /// Whether events are shown at all.
+    pub show_events: bool,
+    /// The calendars not shown, by id. Recording the hidden ones, not the
+    /// shown, means a calendar added later is shown.
+    pub hidden: Vec<String>,
+}
+
+impl Default for CalendarSettings {
+    fn default() -> Self {
+        Self {
+            show_events: true,
+            hidden: Vec::new(),
+        }
+    }
+}
+
+impl CalendarSettings {
+    /// Whether the events of calendar `id` are shown.
+    pub fn shows(&self, id: &str) -> bool {
+        self.show_events && !self.is_hidden(id)
+    }
+
+    /// Whether calendar `id` was chosen not to be shown (whether or not
+    /// events are shown at all).
+    pub fn is_hidden(&self, id: &str) -> bool {
+        self.hidden.iter().any(|h| h == id)
+    }
+
+    /// Show or hide calendar `id`.
+    pub fn set_shown(&mut self, id: &str, shown: bool) {
+        self.hidden.retain(|h| h != id);
+        if !shown {
+            self.hidden.push(id.to_string());
+        }
+    }
+}
+
 /// Everything this device remembers. Missing keys take their defaults and
 /// unknown ones are ignored, so files written by other versions still load.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Settings {
     pub logbook: LogbookSettings,
+    pub calendar: CalendarSettings,
 }
 
 impl Settings {
