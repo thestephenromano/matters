@@ -151,6 +151,8 @@ Item {
             controller.restoreHeading();
         } else if (undoKind === "checklist") {
             controller.restoreChecklistItem();
+        } else if (undoKind === "batch") {
+            controller.restoreRememberedTasks();
         }
         hideUndo();
     }
@@ -268,6 +270,10 @@ Item {
         // A project or area view loads the tasks of that project or area.
         const container = controller.currentView === "area" ? controller.currentAreaId : controller.currentProjectId;
         taskModel.load(controller.currentView, container, controller.visit, tagFilter);
+        // The selection survives the reload, less what left the list (#64).
+        const kept = taskListView.selectedIds.filter(id => taskModel.rowOf(id) >= 0);
+        if (kept.length !== taskListView.selectedIds.length)
+            taskListView.selectedIds = kept;
         if (movedTaskId !== "") {
             if (taskModel.rowOf(movedTaskId) < 0 && taskListView.selectedTaskId === movedTaskId)
                 taskListView.selectedTaskId = movedNextId;
@@ -310,11 +316,100 @@ Item {
     // KEYBOARD COMMANDS on the selected task (SPEC §4)
     // =========================================================================
 
+    // ---- Selecting several tasks (#64) -----------------------------------
+
+    // The selected tasks still listed, in list order.
+    function selection(): var {
+        return taskListView.selectedIds
+            .filter(id => taskModel.rowOf(id) >= 0)
+            .sort((a, b) => taskModel.rowOf(a) - taskModel.rowOf(b));
+    }
+
+    // The tasks an action on task `id` applies to: the selection, when `id`
+    // is in it; otherwise `id` alone.
+    function targetsOf(id: string): var {
+        const selected = selection();
+        return selected.indexOf(id) >= 0 ? selected : [id];
+    }
+
+    // Select task `id` alone, with the cursor on it.
+    function selectOnly(id: string) {
+        taskListView.selectedIds = id === "" ? [] : [id];
+        taskListView.selectionAnchor = id;
+        taskListView.selectedTaskId = id;
+    }
+
+    // Select the tasks from the anchor to task `id`, with the cursor on it
+    // (Shift+click, Shift+Up/Down).
+    function extendSelectionTo(id: string) {
+        const anchor = taskModel.rowOf(taskListView.selectionAnchor);
+        const to = taskModel.rowOf(id);
+        if (to < 0)
+            return;
+        if (anchor < 0) {
+            selectOnly(id);
+            return;
+        }
+        const ids = [];
+        for (let row = Math.min(anchor, to); row <= Math.max(anchor, to); ++row) {
+            const rowId = taskModel.idAt(row);
+            if (rowId !== "")
+                ids.push(rowId);
+        }
+        taskListView.selectedIds = ids;
+        taskListView.selectedTaskId = id;
+    }
+
+    // Shift+Up/Down: move the cursor `step` rows, extending the selection.
+    function extendSelection(step: int) {
+        const current = taskModel.rowOf(taskListView.selectedTaskId);
+        if (current < 0) {
+            moveSelection(step);
+            return;
+        }
+        let row = current + step;
+        while (row >= 0 && row < taskListView.count && taskModel.idAt(row) === "")
+            row += step;
+        if (row < 0 || row >= taskListView.count)
+            return;
+        extendSelectionTo(taskModel.idAt(row));
+        taskListView.positionViewAtIndex(row, ListView.Contain);
+    }
+
+    // Ctrl+click: add task `id` to the selection, or take it out.
+    function toggleInSelection(id: string) {
+        const ids = selection();
+        const at = ids.indexOf(id);
+        if (at >= 0) {
+            ids.splice(at, 1);
+            taskListView.selectedIds = ids;
+            if (taskListView.selectedTaskId === id)
+                taskListView.selectedTaskId = ids.length > 0 ? ids[ids.length - 1] : "";
+        } else {
+            taskListView.selectedIds = ids.concat([id]);
+            taskListView.selectedTaskId = id;
+        }
+        taskListView.selectionAnchor = id;
+    }
+
+    // Run `act` on each of `ids`. For several, they are remembered first,
+    // so one Undo puts them all back, and the notice says `done` ("%n" is
+    // how many).
+    function actOn(ids: var, act: var, done: string) {
+        const several = ids.length > 1;
+        if (several)
+            controller.rememberTasks(JSON.stringify(ids));
+        for (const id of ids)
+            act(id);
+        if (several)
+            showUndo("batch", "", done.replace("%n", ids.length));
+    }
+
     function selectRow(row) {
         const id = taskModel.idAt(row);
         if (id === "")
             return;
-        taskListView.selectedTaskId = id;
+        selectOnly(id);
         taskListView.positionViewAtIndex(row, ListView.Contain);
     }
 
@@ -440,6 +535,12 @@ Item {
         const id = taskListView.selectedTaskId;
         if (taskModel.rowOf(id) < 0)
             return;
+        const ids = targetsOf(id);
+        if (ids.length > 1) {
+            batchTagPopup.taskIds = ids;
+            batchTagPopup.open();
+            return;
+        }
         taskListView.expandedTaskId = id;
         tagEditId = id;
     }
@@ -462,6 +563,7 @@ Item {
     function beginTaskDrag(id) {
         dragTaskId = id;
         taskDrop = null;
+        // A selected task drags the whole selection with it (#64).
         taskListView.selectedTaskId = id;
     }
 
@@ -496,15 +598,21 @@ Item {
         dragTaskId = "";
         taskDrop = null;
         sidebarDrop = null;
+        const ids = id === "" ? [] : targetsOf(id);
         if (target && id !== "") {
-            sendTask(id, target.kind, target.id);
+            sendTasks(ids, target.kind, target.id);
         } else if (drop && id !== "") {
-            if (controller.currentView === "today")
-                controller.placeTodayTask(id, drop.section, drop.afterId);
-            else if (controller.currentView === "project")
-                controller.placeProjectTask(id, drop.section, drop.afterId);
-            else
-                controller.placeTask(id, drop.afterId);
+            // The dragged tasks land in their order, one after another.
+            let after = drop.afterId;
+            actOn(ids.filter(moved => moved !== after), moved => {
+                if (controller.currentView === "today")
+                    controller.placeTodayTask(moved, drop.section, after);
+                else if (controller.currentView === "project")
+                    controller.placeProjectTask(moved, drop.section, after);
+                else
+                    controller.placeTask(moved, after);
+                after = moved;
+            }, "%n tasks moved");
             Qt.callLater(root.scrollToTask, id);
         }
     }
@@ -673,9 +781,16 @@ Item {
             controller.moveTaskTo(id, kind, targetId);
     }
 
+    // Send tasks `ids` as `sendTask` does; one Undo brings them all back.
+    function sendTasks(ids: var, kind: string, targetId: string) {
+        const scheduled = kind === "today" || kind === "someday";
+        actOn(ids, id => sendTask(id, kind, targetId), scheduled ? "%n tasks scheduled" : "%n tasks moved");
+    }
+
     function openMoveFor(id) {
         if (taskModel.rowOf(id) < 0)
             return;
+        movePopup.taskIds = targetsOf(id);
         taskListView.selectedTaskId = id;
         scrollToTask(id);
         movePopup.taskId = id;
@@ -761,13 +876,43 @@ Item {
     // Move the selected task to the Trash and select its neighbour, so
     // repeated presses work through the list.
     function trashSelected() {
-        const id = taskListView.selectedTaskId;
-        const row = taskModel.rowOf(id);
-        if (row < 0)
+        trashTasks(targetsOf(taskListView.selectedTaskId));
+    }
+
+    // Move tasks `ids` to the Trash and select the next task left, so
+    // repeated presses work through the list. One Undo brings them back.
+    function trashTasks(ids: var) {
+        if (ids.length === 0 || taskModel.rowOf(ids[0]) < 0)
             return;
-        showUndo("task", id, taskModel.titleAt(row));
-        taskListView.selectedTaskId = taskModel.idAt(row + 1) || taskModel.idAt(row - 1);
-        controller.trashTask(id);
+        const last = taskModel.rowOf(ids[ids.length - 1]);
+        let next = "";
+        for (let row = last + 1; row < taskListView.count && next === ""; ++row) {
+            const id = taskModel.idAt(row);
+            if (id !== "" && ids.indexOf(id) < 0)
+                next = id;
+        }
+        for (let row = taskModel.rowOf(ids[0]) - 1; row >= 0 && next === ""; --row) {
+            const id = taskModel.idAt(row);
+            if (id !== "" && ids.indexOf(id) < 0)
+                next = id;
+        }
+        if (ids.length === 1)
+            showUndo("task", ids[0], taskModel.titleAt(taskModel.rowOf(ids[0])));
+        selectOnly(next);
+        actOn(ids, id => controller.trashTask(id), "%n tasks moved to Trash");
+    }
+
+    // Ctrl+.: complete the selected tasks, or reopen them all when none is
+    // open (#64).
+    function completeSelected() {
+        const ids = selection();
+        if (ids.length === 0)
+            return;
+        const open = ids.filter(id => taskModel.statusAt(taskModel.rowOf(id)) === "open");
+        if (open.length > 0)
+            actOn(open, id => controller.toggleTask(id), "%n tasks completed");
+        else
+            actOn(ids, id => controller.toggleTask(id), "%n tasks reopened");
     }
 
     // ---- When popover (Ctrl+S, the Date… button; #59) ------------------
@@ -784,6 +929,7 @@ Item {
         const row = taskModel.rowOf(id);
         if (row < 0)
             return;
+        whenPopup.taskIds = targetsOf(id);
         taskListView.selectedTaskId = id;
         scrollToTask(id);
         whenPopup.taskId = id;
@@ -2090,7 +2236,20 @@ Item {
                         // here, outside the delegates, so they survive list updates
                         // and scrolling.
                         property string expandedTaskId: ""
+                        // The task the keyboard is on (the cursor).
                         property string selectedTaskId: ""
+                        // The selected tasks (#64): the cursor's task, or several
+                        // around it. Setting the cursor to a task outside them
+                        // selects that task alone; within them, they stay.
+                        property var selectedIds: []
+                        // Where Shift extends the selection from.
+                        property string selectionAnchor: ""
+                        onSelectedTaskIdChanged: {
+                            if (selectedIds.indexOf(selectedTaskId) < 0) {
+                                selectedIds = selectedTaskId === "" ? [] : [selectedTaskId];
+                                selectionAnchor = selectedTaskId;
+                            }
+                        }
 
                         // Arrow keys are handled below, by task id; ListView's own
                         // current-index navigation is not used.
@@ -2274,6 +2433,19 @@ Item {
                             if (event.modifiers === Qt.ControlModifier
                                     && (event.key === Qt.Key_Up || event.key === Qt.Key_Down)) {
                                 root.moveSelected(event.key === Qt.Key_Up ? -1 : 1);
+                                event.accepted = true;
+                                return;
+                            }
+                            // Shift+Up/Down selects several tasks (#64).
+                            if (event.modifiers === Qt.ShiftModifier
+                                    && (event.key === Qt.Key_Up || event.key === Qt.Key_Down)) {
+                                root.extendSelection(event.key === Qt.Key_Up ? -1 : 1);
+                                event.accepted = true;
+                                return;
+                            }
+                            // Ctrl+. completes the selected tasks (#64).
+                            if (event.modifiers === Qt.ControlModifier && event.key === Qt.Key_Period) {
+                                root.completeSelected();
                                 event.accepted = true;
                                 return;
                             }
@@ -2485,7 +2657,7 @@ Item {
                                     required property int index
 
                                     readonly property bool isExpanded: taskListView.expandedTaskId === taskId
-                                    readonly property bool isSelected: taskListView.selectedTaskId === taskId
+                                    readonly property bool isSelected: taskListView.selectedIds.indexOf(taskId) >= 0
 
                                     // F2 asked to edit this task's title: focus it once open.
                                     // The new-task field is open under this row (Enter).
@@ -2557,9 +2729,17 @@ Item {
                                     // receives clicks that none of them accept.
                                     MouseArea {
                                         anchors.fill: parent
-                                        onClicked: {
-                                            taskListView.selectedTaskId = taskRow.taskId;
-                                            taskListView.expandedTaskId = taskRow.isExpanded ? "" : taskRow.taskId;
+                                        onClicked: mouse => {
+                                            // Shift extends the selection to this task,
+                                            // Ctrl adds or removes it (#64).
+                                            if (mouse.modifiers & Qt.ShiftModifier)
+                                                root.extendSelectionTo(taskRow.taskId);
+                                            else if (mouse.modifiers & Qt.ControlModifier)
+                                                root.toggleInSelection(taskRow.taskId);
+                                            else {
+                                                root.selectOnly(taskRow.taskId);
+                                                taskListView.expandedTaskId = taskRow.isExpanded ? "" : taskRow.taskId;
+                                            }
                                             taskListView.forceActiveFocus();
                                         }
                                     }
@@ -3212,7 +3392,8 @@ Item {
             Text {
                 objectName: "undoText"
                 // Headings and checklist items are deleted, not trashed.
-                text: root.undoKind === "heading" ? "Heading “" + root.undoTitle + "” deleted"
+                text: root.undoKind === "batch" ? root.undoTitle
+                    : root.undoKind === "heading" ? "Heading “" + root.undoTitle + "” deleted"
                     : root.undoKind === "checklist" ? "Checklist item “" + root.undoTitle + "” deleted"
                     : (root.undoKind === "project" ? "Project" : root.undoKind === "area" ? "Area" : "Task")
                         + " “" + root.undoTitle + "” moved to Trash"
@@ -3481,6 +3662,73 @@ Item {
         }
         onAccepted: root.openExternally(url)
         onClosed: taskListView.forceActiveFocus()
+    }
+
+    // Tag several tasks at once (Ctrl+Shift+T on a selection, #64): type a
+    // tag, existing or new; Enter gives it to every selected task.
+    Popup {
+        id: batchTagPopup
+        objectName: "batchTagPopup"
+        property var taskIds: []
+        // The tags matching what is typed, as the tag field suggests them.
+        readonly property var suggestions: {
+            const typed = batchTagInput.text.trim().toLowerCase();
+            return typed === "" ? [] : root.allTags.filter(t => t.name.toLowerCase().indexOf(typed) >= 0).slice(0, 6);
+        }
+        x: (parent.width - width) / 2
+        y: 120
+        width: 320
+        modal: true
+        focus: true
+        onOpened: {
+            batchTagInput.text = "";
+            batchTagInput.forceActiveFocus();
+        }
+        onClosed: taskListView.forceActiveFocus()
+
+        function commit() {
+            const first = suggestions[0];
+            const typed = batchTagInput.text.trim();
+            const name = first && first.name.toLowerCase().indexOf(typed.toLowerCase()) === 0 ? first.name : typed;
+            close();
+            if (name === "")
+                return;
+            root.actOn(taskIds, id => controller.tagByName("task", id, name), "%n tasks tagged " + name);
+        }
+
+        background: Rectangle {
+            color: root.isDark ? "#202124" : "#FFFFFF"
+            radius: 10
+            border.color: root.colBorder
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Text {
+                text: "Tag " + batchTagPopup.taskIds.length + " tasks"
+                font.pixelSize: 13
+                font.bold: true
+                color: root.colTextPrimary
+            }
+            TextField {
+                id: batchTagInput
+                objectName: "batchTagInput"
+                Layout.fillWidth: true
+                placeholderText: "Tag"
+                Keys.onReturnPressed: batchTagPopup.commit()
+                Keys.onEnterPressed: batchTagPopup.commit()
+            }
+            Repeater {
+                model: batchTagPopup.suggestions
+                delegate: Text {
+                    required property var modelData
+                    objectName: "batchTagSuggestion"
+                    text: modelData.name
+                    font.pixelSize: 12
+                    color: root.colTextSecondary
+                }
+            }
+        }
     }
 
     // Preferences (#72): this device's settings. Each takes effect at once.
@@ -3914,7 +4162,7 @@ Item {
             if (!destination)
                 return;
             close();
-            root.sendTask(taskId, destination.kind, destination.id);
+            root.sendTasks(taskIds, destination.kind, destination.id);
         }
 
         background: Rectangle {
@@ -4040,6 +4288,8 @@ Item {
         objectName: "whenPopup"
         // The task, or with `forProject` the project (#56), being dated.
         property string taskId: ""
+        // The tasks being dated: the selection the task is in (#64).
+        property var taskIds: []
         property bool forProject: false
         // "when" sets the When; "deadline" the deadline.
         property string mode: "when"
@@ -4053,21 +4303,33 @@ Item {
                 if (forProject)
                     controller.setProjectDeadline(taskId, value);
                 else
-                    controller.setTaskDeadline(taskId, value);
+                    root.actOn(taskIds, id => controller.setTaskDeadline(id, value), "Deadline set for %n tasks");
             } else if (forProject) {
                 controller.scheduleProject(taskId, value);
             } else {
-                controller.scheduleTask(taskId, value);
+                root.actOn(taskIds, id => controller.scheduleTask(id, value), "%n tasks scheduled");
             }
         }
 
         // Typed text; false when it is refused.
         function applyTyped(text) {
-            if (mode === "deadline")
-                return forProject ? controller.setProjectDeadlineTyped(taskId, text, root.monthFirst)
-                    : controller.setTaskDeadlineTyped(taskId, text, root.monthFirst);
-            return forProject ? controller.scheduleProjectTyped(taskId, text, root.monthFirst)
-                : controller.scheduleTaskTyped(taskId, text, root.monthFirst);
+            if (forProject)
+                return mode === "deadline" ? controller.setProjectDeadlineTyped(taskId, text, root.monthFirst)
+                    : controller.scheduleProjectTyped(taskId, text, root.monthFirst);
+            const typed = id => mode === "deadline" ? controller.setTaskDeadlineTyped(id, text, root.monthFirst)
+                : controller.scheduleTaskTyped(id, text, root.monthFirst);
+            // The first task says whether the text is understood; then the
+            // rest follow (#64).
+            const several = taskIds.length > 1;
+            if (several)
+                controller.rememberTasks(JSON.stringify(taskIds));
+            if (!typed(taskIds[0]))
+                return false;
+            for (const id of taskIds.slice(1))
+                typed(id);
+            if (several)
+                root.showUndo("batch", "", (mode === "deadline" ? "Deadline set for %n tasks" : "%n tasks scheduled").replace("%n", taskIds.length));
+            return true;
         }
 
         x: (parent.width - width) / 2
