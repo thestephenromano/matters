@@ -336,6 +336,7 @@ fn stopping_a_repeat_ends_the_series() {
 #[test]
 fn only_one_occurrence_carries_the_rule() {
     let db = Database::open_in_memory().unwrap();
+    db.enable_sync().unwrap();
     let t = task_on(&db, 1, Some(day(2)));
     db.set_task_repeat(&t, Some(rule(Frequency::Daily)), day(2))
         .unwrap();
@@ -349,6 +350,19 @@ fn only_one_occurrence_carries_the_rule() {
         .filter(|t| t.repeat.is_some())
         .count();
     assert_eq!(carriers, 1);
+    // The engine hears that the newer one gave it up.
+    let engine = db.engine_snapshot().unwrap().unwrap();
+    let in_engine = |id: &str| {
+        engine
+            .tasks
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .repeat
+            .clone()
+    };
+    assert_eq!(in_engine(&next), None);
+    assert!(in_engine(&t).is_some());
 }
 
 #[test]
