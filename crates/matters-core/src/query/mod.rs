@@ -31,12 +31,14 @@ pub struct ProjectView {
 /// a task; a project's heading with no tasks listed under it (#22), as a
 /// heading with tasks needs no row of its own, being their section
 /// ([`QueryEngine::section_keys`]); or a finished project in the Logbook,
-/// which stands for its tasks (#55).
+/// which stands for its tasks (#55); or a calendar event on one of its days,
+/// in Today and Upcoming (#62, [`crate::calendar::merge_events`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListRow {
     Task(Task),
     EmptyHeading(Heading),
     Project(Project),
+    Event(crate::calendar::DayEvent),
 }
 
 /// The section key of tasks under heading `id` titled `title`.
@@ -731,7 +733,7 @@ impl<'a> QueryEngine<'a> {
 
     /// A view's rows narrowed to tag `tag_id` (#58): the tasks that have it
     /// (`has_tag!`), and the project rows whose project has it; empty
-    /// headings are left out. The rows keep their order: filtering never
+    /// headings and events, which have no tags, are left out. The rows keep their order: filtering never
     /// reorders, it only hides.
     pub fn filter_rows(&self, rows: Vec<ListRow>, tag_id: &str) -> Result<Vec<ListRow>> {
         let tasks = self.ids_with_tag("tasks", has_tag!(), tag_id)?;
@@ -741,7 +743,7 @@ impl<'a> QueryEngine<'a> {
             .filter(|row| match row {
                 ListRow::Task(t) => tasks.contains(&t.id),
                 ListRow::Project(p) => projects.contains(&p.id),
-                ListRow::EmptyHeading(_) => false,
+                ListRow::EmptyHeading(_) | ListRow::Event(_) => false,
             })
             .collect())
     }

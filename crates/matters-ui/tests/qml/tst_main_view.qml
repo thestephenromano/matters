@@ -37,6 +37,10 @@ Item {
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
             }
             view.hideUndo();
+            // The fake calendar's events (tests/ui.rs) show only in the tests
+            // about them (#62).
+            if (controller.showEvents)
+                controller.chooseShowEvents(false);
             controller.selectView("today");
             list.expandedTaskId = "";
             settle();
@@ -662,8 +666,8 @@ Item {
             waitForRow("act-cancel");
 
             // The checkbox reopens a canceled task too.
-            const again = rowFor("act-cancel");
-            controller.cancelTask(again.taskId);
+            controller.cancelTask(rowFor("act-cancel").taskId);
+            const again = waitForRow("act-cancel");
             tryCompare(again, "status", "canceled");
             mouseClick(findChild(again, "checkCircle"));
             tryCompare(again, "status", "open");
@@ -3375,17 +3379,163 @@ Item {
             compare(view.undoKind, "");
         }
 
+        // ---- Calendar events (#62) -------------------------------------------
+
+        // The event rows listed, in order, as {title, when, section}: each
+        // row is scrolled into view to read it.
+        function eventRows() {
+            wait(0);
+            const found = [];
+            for (let i = 0; i < list.count; ++i) {
+                list.positionViewAtIndex(i, ListView.Contain);
+                const item = list.itemAtIndex(i);
+                if (item && item.objectName === "eventRow")
+                    found.push({ index: i, title: item.title, when: item.when, day: item.startDate,
+                                 color: findChild(item, "eventColor").color });
+            }
+            list.positionViewAtBeginning();
+            return found;
+        }
+
+        function isoDay(offset) {
+            const d = new Date();
+            d.setDate(d.getDate() + offset);
+            return Qt.formatDate(d, "yyyy-MM-dd");
+        }
+
+        function showEvents() {
+            controller.chooseShowEvents(true);
+            compare(controller.showEvents, true);
+        }
+
+        function test_today_lists_calendar_events_above_its_tasks() {
+            addToToday("ev-neighbour");
+            showEvents();
+            controller.selectView("today");
+            tryVerify(() => eventRows().length === 2, 2000, "today's two events are listed");
+            const events = eventRows();
+            compare(events.map(e => e.title), ["Public holiday", "Team standup"],
+                    "all-day first, then by time");
+            compare(events.map(e => e.index), [0, 1], "above everything else");
+            compare(events[0].when, "All day");
+            verify(events[1].when.indexOf("–") > 0, "a range of times: " + events[1].when);
+            verify(Qt.colorEqual(events[1].color, "#3584e4"), "in its calendar's colour");
+            verify(indexOf("ev-neighbour") > 1, "tasks follow");
+
+            // The keyboard passes over events: they can't be selected.
+            focusList();
+            keyClick(Qt.Key_Down);
+            verify(list.selectedTaskId !== "", "Down selects a task");
+            verify(list.selectedTaskId.indexOf("event:") !== 0, "not an event");
+        }
+
+        function test_upcoming_lists_events_under_their_days() {
+            showEvents();
+            controller.selectView("upcoming");
+            tryVerify(() => eventRows().length === 3, 2000, "the coming days' events are listed");
+            const events = eventRows();
+            compare(events.map(e => e.title), ["Dentist", "Conference", "Conference"]);
+            // A two-day event is listed on both days; days with nothing but
+            // events get headings of their own.
+            compare(events.map(e => e.day), [isoDay(2), isoDay(4), isoDay(5)]);
+            for (const e of events) {
+                const item = list.itemAtIndex(e.index) || (list.positionViewAtIndex(e.index, ListView.Contain), list.itemAtIndex(e.index));
+                compare(item.section, "date:" + e.day, e.title + " sits under its day");
+            }
+            verify(events[0].when.indexOf("–") > 0);
+            compare(events[1].when, "All day");
+            // Today's events aren't in Upcoming.
+            verify(!events.some(e => e.title === "Team standup"));
+        }
+
+        function test_preferences_choose_which_calendars_show() {
+            showEvents();
+            controller.selectView("today");
+            tryVerify(() => eventRows().length === 2, 2000);
+            const dialog = findChild(view, "preferencesDialog");
+            focusList();
+            keySequence("Ctrl+,");
+            tryVerify(() => dialog.opened, 1000, "Ctrl+, opens Preferences");
+            try {
+                const home = findChild(dialog.contentItem, "calendarBox-home");
+                const work = findChild(dialog.contentItem, "calendarBox-work");
+                verify(home && work, "each calendar is listed");
+                // The same boxes throughout: choosing one doesn't rebuild the
+                // list it is in.
+                compare(home.text, "Home");
+                verify(home.checked && work.checked, "every calendar shows at first");
+                compare(findChild(dialog.contentItem, "calendarProblem").visible, false);
+
+                mouseClick(home);
+                tryVerify(() => !home.checked, 1000);
+                tryVerify(() => eventRows().length === 1, 2000, "Home's event is hidden");
+                compare(eventRows()[0].title, "Team standup");
+
+                // Turning events off hides them all, and the calendars can't
+                // be chosen until they are back on.
+                const showBox = findChild(dialog.contentItem, "showEventsBox");
+                mouseClick(showBox);
+                tryCompare(controller, "showEvents", false);
+                tryVerify(() => eventRows().length === 0, 2000, "no events at all");
+                verify(!work.enabled);
+
+                mouseClick(showBox);
+                tryCompare(controller, "showEvents", true);
+                tryVerify(() => eventRows().length === 1, 2000, "Home stays hidden");
+                mouseClick(home);
+                tryVerify(() => eventRows().length === 2, 2000, "Home is back");
+                compare(findChild(dialog.contentItem, "calendarBox-home"), home);
+            } finally {
+                controller.showCalendar("home", true);
+                keyClick(Qt.Key_Escape);
+                tryVerify(() => !dialog.visible, 2000);
+            }
+        }
+
+        function test_events_say_when_they_happen_on_each_day() {
+            const day = "2026-11-21T00:00:00";
+            compare(view.describeEventTime(day, "2026-11-21T00:00:00", "2026-11-22T00:00:00", true), "All day");
+            const t = h => new Date(2026, 10, 21, h, 0).toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
+            compare(view.describeEventTime(day, "2026-11-21T09:00:00", "2026-11-21T10:00:00", false),
+                    t(9) + " – " + t(10));
+            compare(view.describeEventTime(day, "2026-11-20T22:00:00", "2026-11-21T06:00:00", false),
+                    "Until " + t(6), "started the day before");
+            compare(view.describeEventTime(day, "2026-11-21T22:00:00", "2026-11-22T02:00:00", false),
+                    "From " + t(22), "goes on into the next day");
+            compare(view.describeEventTime(day, "2026-11-20T22:00:00", "2026-11-22T02:00:00", false),
+                    "All day", "covers the whole day");
+            compare(view.describeEventTime(day, "2026-11-20T22:00:00", "2026-11-22T00:00:00", false),
+                    "All day", "ends at the day's end");
+            compare(view.describeEventTime(day, "2026-11-21T09:00:00", "2026-11-21T09:00:00", false),
+                    t(9), "no length");
+        }
+
+        function test_events_hide_when_the_list_is_narrowed_to_a_tag() {
+            const row = addToToday("ev-tagged");
+            const tag = controller.createTag("ev-tag", "");
+            controller.addTag("task", row.taskId, tag);
+            showEvents();
+            controller.selectView("today");
+            tryVerify(() => eventRows().length === 2, 2000);
+            view.tagFilter = tag;
+            tryVerify(() => eventRows().length === 0, 2000, "events have no tags");
+            waitForRow("ev-tagged");
+            view.tagFilter = "";
+            tryVerify(() => eventRows().length === 2, 2000);
+        }
+
         // ---- Reminders (#60) -------------------------------------------------
 
-        // Open the popover from the open row's Reminder pill: the keyboard
-        // starts in the reminder field.
+        // Open the popover from the open row's When pill and click into its
+        // reminder field.
         function openReminder(row) {
             expandRow(row);
-            mouseClick(findChild(row, "schedule-reminder"));
+            mouseClick(findChild(row, "schedule-date"));
             const popup = findChild(view, "whenPopup");
-            tryVerify(() => popup.opened, 1000, "the Reminder pill opens the popover");
+            tryVerify(() => popup.opened, 1000, "the When pill opens the popover");
             waitForRendering(popup.contentItem);
             const field = findChild(popup.contentItem, "reminderInput");
+            mouseClick(field);
             tryVerify(() => field.activeFocus, 1000, "ready for a typed time");
             return popup;
         }
@@ -3399,7 +3549,8 @@ Item {
             keyClick(Qt.Key_Return);
             tryVerify(() => !popup.visible, 1000);
             tryCompare(row, "reminder", "21:30");
-            compare(findChild(row, "schedule-reminder").label, view.describeTime("21:30"));
+            compare(findChild(row, "schedule-date").label, "Today, " + view.describeTime("21:30"),
+                    "the When pill says the time");
 
             // Closed, the row shows a bell and the time.
             clickRowBody(row);
@@ -3422,6 +3573,7 @@ Item {
             tryVerify(() => !popup.visible, 1000);
             tryCompare(row, "reminder", "");
             verify(!findChild(row, "reminderBadge").visible);
+            compare(findChild(row, "schedule-date").label, "Today");
         }
 
         function test_a_time_that_isnt_one_keeps_the_popover_open() {

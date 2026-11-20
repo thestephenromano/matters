@@ -93,11 +93,23 @@ Above any list, a tag bar offers the tags its tasks have, their own and those of
 * **This Evening Section:**
   * Separated by the iconic moon header (`🌙 This Evening`).
   * Dedicated to tasks deferred to personal/evening hours to prevent daytime cognitive clutter.
+* Today's calendar events are listed above everything else (see *Calendar events* below).
 
 ### 3. Upcoming
 * Chronological future horizon.
 * Groups scheduled tasks by date (e.g., *Tomorrow*, *Thursday, Nov 19*, *Next Week*).
 * Focuses exclusively on future `When` dates.
+* Each of the next 14 days lists its calendar events at its head, and a day with events but no tasks gets its own heading.
+
+### Calendar events
+Calendar events are context for planning, never tasks (#62). Matters reads them from Evolution Data Server, which holds the desktop's calendars, including GNOME Online Accounts. It never stores them in its database and never changes them.
+
+* **Where they show:** today's events above Today's tasks; Upcoming lists them on each day from tomorrow through 14 days ahead. An event spanning days is listed on each, and one ending at midnight isn't listed on the next day. Each day lists all-day events, and ones continuing from the day before, first, then the rest by start time. Each row shows its calendar's colour, when it happens on that day ("All day", "9:00 AM – 10:00 AM", "Until 6:00 AM", "From 10:00 PM") and its title. Events can't be selected, ticked or dragged, and a list narrowed to a tag hides them.
+* **Choosing them:** Preferences turns events on or off and shows or hides each calendar. A calendar added later is shown.
+* **Freshness:** Matters reads the calendars when it starts, then every minute and when the day changes, on a worker thread. A change appears within a minute.
+* **Without a calendar service:** if Evolution Data Server isn't installed or can't be reached, Matters works unchanged, and Preferences says why there are no events. `libecal` is loaded when Matters starts rather than linked, so Matters builds and runs without it.
+
+The rules are in `matters_core::calendar` (`Event::days`, `events_by_day`, `merge_events`); the source is `matters_ui::eds`.
 
 ### 4. Anytime
 * All active, actionable tasks ready to be worked on immediately:
@@ -151,10 +163,10 @@ That is the default. **Preferences** (`Ctrl + ,`) chooses when completed tasks m
 
 Until then the Logbook doesn't list them, and the badges count open tasks only. Choosing a policy logs what is finished so far, so nothing comes back into its list. A project's own list and an area's always show their finished tasks. The rule is `matters_core::Settings::logged_until`, applied by `QueryEngine::logged_until`.
 
-Preferences are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
+Preferences also choose which calendar events Today and Upcoming show (see *Calendar events*). They are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
 
 ### Reminders
-A task can remind at a time of day on its start date (#60). The When popover's reminder field takes a typed time (`9`, `9:30`, `21:30`, `9am`, `2:30 pm`, `noon`, `midnight`); anything else is refused, never guessed. The open task's **Reminder** pill opens the popover with the keyboard in that field, and **Clear** removes the reminder. A task with no date, or deferred to Someday, is scheduled for Today when given a reminder. Rows show a bell and the time.
+A task can remind at a time of day on its start date (#60). The When popover's reminder field takes a typed time (`9`, `9:30`, `21:30`, `9am`, `2:30 pm`, `noon`, `midnight`); anything else is refused, never guessed. **Clear** removes the reminder. The open task's When pill says the time ("Today, 9:30 PM"), and closed rows show a bell and the time. A task with no date, or deferred to Someday, is scheduled for Today when given a reminder.
 
 * **When it is due:** at that local time on the task's start date, in the system's time zone. A time the clocks skip is due just after the gap; a time that happens twice is due the first time. Moving the task to another day moves its reminder; completing, canceling or trashing it, or moving it to Someday or to no date, cancels it.
 * **How it is shown:** as a desktop notification (the freedesktop notification service), with **Open**, which shows the task in its list, and **Complete**. More than three due at once are one notification.
@@ -352,7 +364,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 ### Post-MVP (v0.2+)
 - [ ] System-wide floating Quick Capture daemon via Wayland Layer Shell / KGlobalAccel.
 - [ ] Recurrence engine (Daily, Weekly, Monthly, after completion).
-- [ ] Calendar overlay in Upcoming via Evolution Data Server (EDS) / CalDAV.
+- [x] Calendar events in Today and Upcoming via Evolution Data Server (EDS) (#62).
 - [ ] KRunner plugin (`Alt+Space` quick task entry).
 - [ ] Post-quantum end-to-end encrypted sync with an independently usable client/service and managed or self-hosted deployment; peer-to-peer transport remains a future option. See [sync design and evaluation gates](SYNC_DESIGN.md).
 - [ ] Import from Things 3 JSON export.

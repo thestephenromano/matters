@@ -38,6 +38,7 @@ fn rows(db: &Database, view: &View, day: Date) -> Vec<String> {
             ListRow::Task(t) => t.id,
             ListRow::Project(p) => format!("<{}>", p.id),
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
+            ListRow::Event(e) => format!("({})", e.key()),
         })
         .collect()
 }

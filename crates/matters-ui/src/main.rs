@@ -1,4 +1,5 @@
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
+use matters_core::calendar::{CalendarSource, FakeCalendarSource};
 use matters_core::{Database, SettingsFile};
 
 fn main() {
@@ -26,6 +27,13 @@ fn main() {
             matters_ui::install_settings(None, Some(format!("Your settings can't be kept: {err}")))
         }
     }
+    // Calendar events (#62), read on a worker thread. Without Evolution
+    // Data Server there are none, and Preferences says why.
+    let calendars: Box<dyn CalendarSource> = match matters_ui::eds::EdsSource::load() {
+        Ok(source) => Box::new(source),
+        Err(reason) => Box::new(FakeCalendarSource::unavailable(reason.0)),
+    };
+    matters_ui::install_calendar_source(calendars, true);
     // Reminders (#60) as desktop notifications.
     matters_ui::install_notifier(Box::new(matters_ui::notify::DesktopNotifier));
     matters_ui::init_qml();

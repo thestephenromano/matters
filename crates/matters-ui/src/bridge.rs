@@ -4,7 +4,8 @@
 //!   After any change it bumps `revision`, which tells views to reload.
 //! * `TaskListModel` is the task list for one view. It reconciles rows by
 //!   task id so delegates (and their expansion, focus and edit state) survive
-//!   reloads; see [`matters_core::list_diff`].
+//!   reloads; see [`matters_core::list_diff`]. Today and Upcoming list
+//!   calendar events among the tasks (#62, [`crate::calendar`]).
 //! * `ChecklistModel` is the checklist of one open task, reconciled the same
 //!   way by item id.
 //!
@@ -27,6 +28,9 @@ use matters_core::{
 };
 use uuid::Uuid;
 
+use matters_core::calendar::{
+    event_days, event_section_key, events_by_day, merge_events, Calendar, DayEvent,
+};
 use matters_core::list_diff::{reconcile, ListSink};
 
 #[cxx_qt::bridge]
@@ -108,6 +112,16 @@ pub mod qobject {
         /// When finished tasks move to the Logbook (#67), as a
         /// `LogPolicy` key; chosen with `choose_log_policy`.
         #[qproperty(QString, log_policy)]
+        /// The user's calendars (#62), as JSON `[{id, name, color}]`.
+        #[qproperty(QString, calendars_json)]
+        /// The calendars chosen not to be shown, as a JSON array of ids.
+        /// Apart from the calendars, so choosing one doesn't rebuild the
+        /// list it is chosen in.
+        #[qproperty(QString, hidden_calendars_json)]
+        /// Why no calendar events can be shown, or empty.
+        #[qproperty(QString, calendar_problem)]
+        /// Whether Today and Upcoming show calendar events.
+        #[qproperty(bool, show_events)]
         type AppController = super::AppControllerRust;
 
         /// Choose when finished tasks move to the Logbook (a `LogPolicy`
@@ -119,6 +133,18 @@ pub mod qobject {
         /// Logbook (#67).
         #[qinvokable]
         fn log_completed(self: Pin<&mut AppController>);
+        /// Read the calendars again (#62): at start, then every minute
+        /// (`check_date`). In the app the read happens on a worker thread
+        /// and the lists reload when it changed something.
+        #[qinvokable]
+        fn refresh_calendars(self: Pin<&mut AppController>);
+        /// Show calendar events in Today and Upcoming, or not, and keep the
+        /// choice.
+        #[qinvokable]
+        fn choose_show_events(self: Pin<&mut AppController>, shown: bool);
+        /// Show or hide the events of calendar `id`, and keep the choice.
+        #[qinvokable]
+        fn show_calendar(self: Pin<&mut AppController>, id: &QString, shown: bool);
 
         #[qinvokable]
         fn select_view(self: Pin<&mut AppController>, view: &QString);
@@ -676,7 +702,8 @@ pub mod qobject {
         fn row_count(self: &ChecklistModel, parent: &QModelIndex) -> i32;
     }
 
-    // Reminder notifications report back from their own threads.
+    // Calendar reads (#62) and reminder notifications (#60) finish on
+    // other threads and are handed back here.
     impl cxx_qt::Threading for AppController {}
 }
 
@@ -767,6 +794,15 @@ fn logging() -> (Option<i64>, bool) {
     )
 }
 
+/// A calendar as the Preferences list it (#62).
+#[derive(serde::Serialize)]
+struct CalendarEntry {
+    id: String,
+    name: String,
+    /// `#rrggbb`, or empty.
+    color: String,
+}
+
 fn to_json<T: serde::Serialize>(value: &T) -> QString {
     QString::from(
         serde_json::to_string(value)
@@ -809,6 +845,10 @@ pub struct AppControllerRust {
     error_message: QString,
     revision: i32,
     log_policy: QString,
+    calendars_json: QString,
+    hidden_calendars_json: QString,
+    calendar_problem: QString,
+    show_events: bool,
     visit: i32,
     reorderable: bool,
     accepts_new_tasks: bool,
@@ -833,6 +873,16 @@ pub struct AppControllerRust {
 impl Default for AppControllerRust {
     fn default() -> Self {
         let view = View::Today;
+        // One lock: a guard taken inside the struct expression would live
+        // to its end, and a second `settings()` there would wait on it.
+        let (log_policy, show_events, hidden) = {
+            let state = settings();
+            (
+                state.settings.logbook.policy.key(),
+                state.settings.calendar.show_events,
+                to_json(&state.settings.calendar.hidden),
+            )
+        };
         Self {
             current_view: QString::from(view.key()),
             current_title: QString::from(view.title()),
@@ -866,7 +916,11 @@ impl Default for AppControllerRust {
             reorderable: view.is_reorderable(),
             accepts_new_tasks: view.accepts_new_tasks(),
             reduce_motion: crate::motion::prefers_reduced_motion(),
-            log_policy: QString::from(settings().settings.logbook.policy.key()),
+            log_policy: QString::from(log_policy),
+            calendars_json: QString::from("[]"),
+            hidden_calendars_json: hidden,
+            calendar_problem: QString::default(),
+            show_events,
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -906,6 +960,69 @@ impl qobject::AppController {
             self.as_mut()
                 .report(format!("Your settings couldn't be saved: {err}"));
         }
+        self.changed();
+    }
+
+    pub fn refresh_calendars(self: Pin<&mut Self>) {
+        if crate::calendar::in_background() {
+            let thread = self.qt_thread();
+            crate::calendar::start_worker(move || {
+                // Gone only when the app is quitting.
+                let _ = thread.queue(|controller| controller.calendars_changed());
+            });
+            crate::calendar::request_refresh();
+        } else if crate::calendar::request_refresh() {
+            self.calendars_changed();
+        }
+    }
+
+    pub fn choose_show_events(mut self: Pin<&mut Self>, shown: bool) {
+        let saved = {
+            let mut state = settings();
+            state.settings.calendar.show_events = shown;
+            state.save()
+        };
+        self.as_mut().set_show_events(shown);
+        if let Err(err) = saved {
+            self.as_mut()
+                .report(format!("Your settings couldn't be saved: {err}"));
+        }
+        self.calendars_changed();
+    }
+
+    pub fn show_calendar(mut self: Pin<&mut Self>, id: &QString, shown: bool) {
+        let (saved, hidden) = {
+            let mut state = settings();
+            state.settings.calendar.set_shown(&String::from(id), shown);
+            (state.save(), to_json(&state.settings.calendar.hidden))
+        };
+        self.as_mut().set_hidden_calendars_json(hidden);
+        if let Err(err) = saved {
+            self.as_mut()
+                .report(format!("Your settings couldn't be saved: {err}"));
+        }
+        self.calendars_changed();
+    }
+
+    /// Show what the calendars hold now, and reload the lists.
+    fn calendars_changed(mut self: Pin<&mut Self>) {
+        let read = crate::calendar::snapshot();
+        let calendars: Vec<CalendarEntry> = read
+            .calendars
+            .iter()
+            .map(|c| CalendarEntry {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                color: c.color.clone().unwrap_or_default(),
+            })
+            .collect();
+        let listed = to_json(&calendars);
+        // Unchanged, it is left alone: Preferences lists it.
+        if listed != self.calendars_json {
+            self.as_mut().set_calendars_json(listed);
+        }
+        self.as_mut()
+            .set_calendar_problem(QString::from(read.problem.as_deref().unwrap_or_default()));
         self.changed();
     }
 
@@ -1687,10 +1804,11 @@ impl qobject::AppController {
         self.set_error_message(QString::default());
     }
 
-    pub fn check_date(self: Pin<&mut Self>) {
+    pub fn check_date(mut self: Pin<&mut Self>) {
         if self.day.day() != local_today() {
-            self.changed();
+            self.as_mut().changed();
         }
+        self.refresh_calendars();
     }
 
     // ---- internals ----------------------------------------------------------
@@ -2287,7 +2405,8 @@ enum Role {
     Section,
     /// Whether the task is deferred to Someday.
     Someday,
-    /// `task`, or `heading` for a heading with no tasks to list (#22).
+    /// `task`; `heading` for a heading with no tasks to list (#22);
+    /// `project`; or `event` (#62).
     Kind,
     /// The heading a task is under, or an empty heading's own id.
     HeadingId,
@@ -2300,10 +2419,19 @@ enum Role {
     Tags,
     /// The time an open, dated task reminds at, `HH:MM`, or empty (#60).
     Reminder,
+    /// An event's local start and end, `YYYY-MM-DDTHH:MM:SS` (#62); the
+    /// end is exclusive. Its day is `startDate`.
+    EventStart,
+    EventEnd,
+    /// Whether an event lasts whole days.
+    AllDay,
+    /// An event's calendar: its colour (`#rrggbb`, or empty) and name.
+    CalendarColor,
+    CalendarName,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 17] = [
+    const ALL: [(Role, &'static str); 22] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -2321,6 +2449,11 @@ impl Role {
         (Role::Status, "status"),
         (Role::Tags, "tags"),
         (Role::Reminder, "reminder"),
+        (Role::EventStart, "eventStart"),
+        (Role::EventEnd, "eventEnd"),
+        (Role::AllDay, "allDay"),
+        (Role::CalendarColor, "calendarColor"),
+        (Role::CalendarName, "calendarName"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -2338,13 +2471,39 @@ fn row_key(row: &ListRow) -> String {
         ListRow::Task(task) => task.id.clone(),
         ListRow::EmptyHeading(heading) => format!("heading:{}", heading.id),
         ListRow::Project(project) => format!("project:{}", project.id),
+        ListRow::Event(listed) => listed.key(),
     }
+}
+
+/// `rows` of `view` with the calendar events it lists (#62): those of the
+/// calendars shown, from the latest read. Also the calendars of the events
+/// listed, by id.
+fn with_events(view: &View, rows: Vec<ListRow>) -> (Vec<ListRow>, HashMap<String, Calendar>) {
+    let today = local_today();
+    let Some((from, until)) = event_days(view, today) else {
+        return (rows, HashMap::new());
+    };
+    let read = crate::calendar::snapshot();
+    let events: Vec<_> = {
+        let state = settings();
+        read.events
+            .into_iter()
+            .filter(|e| state.settings.calendar.shows(&e.calendar_id))
+            .collect()
+    };
+    let calendars = read
+        .calendars
+        .into_iter()
+        .map(|c| (c.id.clone(), c))
+        .collect();
+    let rows = merge_events(view, rows, events_by_day(&events, from, until), today);
+    (rows, calendars)
 }
 
 fn row_task(row: &ListRow) -> Option<&Task> {
     match row {
         ListRow::Task(task) => Some(task),
-        ListRow::EmptyHeading(_) | ListRow::Project(_) => None,
+        ListRow::EmptyHeading(_) | ListRow::Project(_) | ListRow::Event(_) => None,
     }
 }
 
@@ -2358,6 +2517,8 @@ pub struct TaskListModelRust {
     progress: HashMap<String, ChecklistProgress>,
     /// The tags given to each listed task that has any (#57).
     tags: HashMap<String, Vec<TagChip>>,
+    /// The calendars of the listed events, by id (#62).
+    calendars: HashMap<String, Calendar>,
     db: Database,
     /// Keeps tasks ticked during this visit in place (see `matters_core::Visit`).
     visit: Visit,
@@ -2376,6 +2537,7 @@ impl Default for TaskListModelRust {
             error_message: QString::default(),
             present_tags_json: QString::from("[]"),
             rows: Vec::new(),
+            calendars: HashMap::new(),
             db: database(),
             visit: Visit::new(),
             loading: false,
@@ -2453,10 +2615,11 @@ impl qobject::TaskListModel {
                         .collect();
                     let present = tag_entries(&engine.tags_present(&tasks)?);
                     let rows = engine.list_rows(&view, tasks, local_today())?;
-                    let rows = if tag.is_empty() {
-                        rows
+                    // Events have no tags: a list narrowed to one has none.
+                    let (rows, calendars) = if tag.is_empty() {
+                        with_events(&view, rows)
                     } else {
-                        engine.filter_rows(rows, tag)?
+                        (engine.filter_rows(rows, tag)?, HashMap::new())
                     };
                     for row in &rows {
                         let key = match row {
@@ -2464,17 +2627,19 @@ impl qobject::TaskListModel {
                                 matters_core::heading_section_key(&h.id, &h.title)
                             }
                             ListRow::Project(p) => matters_core::project_section_key(&view, p),
+                            ListRow::Event(e) => event_section_key(&view, e),
                             ListRow::Task(_) => continue,
                         };
                         sections.insert(row_key(row), key);
                     }
-                    Ok((rows, sections, progress, tags, present))
+                    Ok((rows, sections, progress, tags, present, calendars))
                 })
         };
         match target {
-            Ok((rows, sections, progress, tags, present)) => {
+            Ok((rows, sections, progress, tags, present, calendars)) => {
                 self.as_mut().set_present_tags_json(to_json(&present));
                 let this = self.as_mut().rust_mut().get_mut();
+                this.calendars = calendars;
                 let old_sections = std::mem::replace(&mut this.sections, sections);
                 let old_progress = std::mem::replace(&mut this.progress, progress);
                 let old_tags = std::mem::replace(&mut this.tags, tags);
@@ -2546,7 +2711,7 @@ impl qobject::TaskListModel {
         let heading = match usize::try_from(row).ok().and_then(|r| self.rows.get(r)) {
             Some(ListRow::Task(task)) => task.heading_id.as_deref(),
             Some(ListRow::EmptyHeading(heading)) => Some(heading.id.as_str()),
-            Some(ListRow::Project(_)) | None => None,
+            Some(ListRow::Project(_) | ListRow::Event(_)) | None => None,
         };
         QString::from(heading.unwrap_or_default())
     }
@@ -2568,6 +2733,7 @@ impl qobject::TaskListModel {
             ListRow::Task(task) => task,
             ListRow::EmptyHeading(heading) => return self.heading_data(row, heading, role),
             ListRow::Project(project) => return self.project_data(row, project, role),
+            ListRow::Event(listed) => return self.event_data(row, listed, role),
         };
         match role {
             Role::Kind => QVariant::from(&QString::from("task")),
@@ -2620,6 +2786,49 @@ impl qobject::TaskListModel {
                     .unwrap_or_default()
                     .as_str(),
             )),
+            Role::EventStart | Role::EventEnd | Role::CalendarColor | Role::CalendarName => {
+                QVariant::from(&QString::default())
+            }
+            Role::AllDay => QVariant::from(&false),
+        }
+    }
+
+    /// A calendar event's row (#62): its kind, key (as `taskId`), title,
+    /// day (as `startDate`), times, calendar and section; the task roles
+    /// are empty.
+    fn event_data(&self, row: &ListRow, listed: &DayEvent, role: Role) -> QVariant {
+        let event = &listed.event;
+        let calendar = self.calendars.get(&event.calendar_id);
+        let text = |s: &str| QVariant::from(&QString::from(s));
+        match role {
+            Role::Kind => text("event"),
+            Role::TaskId => text(&listed.key()),
+            Role::Title => text(&event.title),
+            Role::StartDate => text(&listed.day.to_string()),
+            Role::EventStart => text(&event.start.to_string()),
+            Role::EventEnd => text(&event.end.to_string()),
+            Role::AllDay => QVariant::from(&event.all_day),
+            Role::CalendarColor => text(
+                calendar
+                    .and_then(|c| c.color.as_deref())
+                    .unwrap_or_default(),
+            ),
+            Role::CalendarName => text(calendar.map(|c| c.name.as_str()).unwrap_or_default()),
+            Role::Section => text(
+                self.sections
+                    .get(&row_key(row))
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            ),
+            Role::Done | Role::Evening | Role::Someday => QVariant::from(&false),
+            Role::ChecklistDone | Role::ChecklistTotal => QVariant::from(&0_i32),
+            Role::Notes
+            | Role::HeadingId
+            | Role::Deadline
+            | Role::DeadlineStatus
+            | Role::Status
+            | Role::Reminder => QVariant::from(&QString::default()),
+            Role::Tags => text("[]"),
         }
     }
 
@@ -2649,7 +2858,14 @@ impl qobject::TaskListModel {
                     .unwrap_or_default(),
             )),
             Role::ChecklistDone | Role::ChecklistTotal => QVariant::from(&0_i32),
-            Role::Notes | Role::HeadingId | Role::Reminder => QVariant::from(&QString::default()),
+            Role::Notes
+            | Role::HeadingId
+            | Role::Reminder
+            | Role::EventStart
+            | Role::EventEnd
+            | Role::CalendarColor
+            | Role::CalendarName => QVariant::from(&QString::default()),
+            Role::AllDay => QVariant::from(&false),
             Role::Tags => QVariant::from(&QString::from("[]")),
         }
     }
@@ -2675,7 +2891,12 @@ impl qobject::TaskListModel {
             | Role::Deadline
             | Role::DeadlineStatus
             | Role::Status
-            | Role::Reminder => QVariant::from(&QString::default()),
+            | Role::Reminder
+            | Role::EventStart
+            | Role::EventEnd
+            | Role::CalendarColor
+            | Role::CalendarName => QVariant::from(&QString::default()),
+            Role::AllDay => QVariant::from(&false),
             Role::Tags => QVariant::from(&QString::from("[]")),
         }
     }

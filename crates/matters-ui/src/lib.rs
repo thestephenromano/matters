@@ -4,6 +4,8 @@
 //! this library holds everything else so tests can link against it.
 
 pub mod bridge;
+pub mod calendar;
+pub mod eds;
 mod motion;
 pub mod notify;
 #[cfg(test)]
@@ -11,6 +13,7 @@ mod qml_lint;
 pub mod reminders;
 
 pub use bridge::{install_database, install_settings};
+pub use calendar::install_calendar_source;
 pub use reminders::install_notifier;
 
 /// The Qt Quick Controls style Matters uses unless `QT_QUICK_CONTROLS_STYLE`
