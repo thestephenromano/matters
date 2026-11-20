@@ -2568,6 +2568,7 @@ Item {
             waitForNoRow("mw-2");
             verify(indexOf("mw-3") >= 0, "only the selected");
             undoNoticeSays("2 tasks scheduled");
+            tryVerify(() => !popup.visible, 2000, "the popover has closed");
             keySequence(StandardKey.Undo);
             waitForRow("mw-1");
             waitForRow("mw-2");
@@ -2579,6 +2580,7 @@ Item {
             const again = openWhen();
             typeText("tomorrow");
             keyClick(Qt.Key_Return);
+            tryVerify(() => !again.visible, 2000);
             waitForNoRow("mw-1");
             waitForNoRow("mw-2");
             controller.selectView("upcoming");
@@ -2629,6 +2631,29 @@ Item {
             tryVerify(() => rowFor("mg-1").tagList.length === 0 && rowFor("mg-2").tagList.length === 0, 1000);
         }
 
+        function test_the_task_menu_acts_on_the_selection() {
+            addSeveral(["mx-1", "mx-2", "mx-3"]);
+            keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            const menu = openMenuOn(rowFor("mx-2"));
+            compare(selectedTitles(), ["mx-1", "mx-2"], "a right click in the selection keeps it");
+            compare(findChild(menu.contentItem, "menuCancel").text, "Cancel 2 Tasks");
+            verify(!findChild(menu.contentItem, "menuConvert").enabled, "one task becomes one project");
+            chooseInMenu(menu, "menuCancel");
+            tryCompare(rowFor("mx-1"), "status", "canceled");
+            tryCompare(rowFor("mx-2"), "status", "canceled");
+            compare(rowFor("mx-3").status, "open");
+            undoNoticeSays("2 tasks canceled");
+            keySequence(StandardKey.Undo);
+            tryCompare(rowFor("mx-1"), "status", "open");
+            tryCompare(rowFor("mx-2"), "status", "open");
+
+            // A right click outside the selection selects that task alone.
+            const other = openMenuOn(rowFor("mx-3"));
+            compare(selectedTitles(), ["mx-3"]);
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !other.visible, 2000);
+        }
+
         function test_the_selection_survives_a_refresh_and_clears_on_navigation() {
             addSeveral(["mr-1", "mr-2"]);
             keyClick(Qt.Key_Down, Qt.ShiftModifier);
@@ -2643,9 +2668,18 @@ Item {
 
         function test_dragging_a_selection_to_the_sidebar_moves_all_of_it() {
             controller.createArea("ms-drag-area");
-            controller.selectView("today");
-            addSeveral(["mv-d1", "mv-d2", "mv-d3"]);
+            // Inbox tasks: filed in an area, they leave the Inbox.
+            controller.selectView("inbox");
+            for (const t of ["mv-d1", "mv-d2", "mv-d3"])
+                view.captureTask(t);
+            waitForRow("mv-d3");
+            settle();
+            list.positionViewAtIndex(indexOf("mv-d1"), ListView.Contain);
+            settle();
+            view.selectOnly(rowFor("mv-d1").taskId);
+            list.forceActiveFocus();
             keyClick(Qt.Key_Down, Qt.ShiftModifier);
+            compare(selectedTitles(), ["mv-d1", "mv-d2"]);
             const target = centre(shownArea("ms-drag-area"));
             dragGripToPoint(findChild(rowFor("mv-d1"), "dragGrip"), target);
             waitForNoRow("mv-d1");
@@ -2887,7 +2921,12 @@ Item {
             tryVerify(() => (row = logbookProject("fin-proj")) !== null, 2000, "listed in the Logbook");
             compare(findChild(row, "projectRowLabel").text, "Completed project");
             verify(indexOf("fin-1") < 0 && indexOf("fin-2") < 0);
-            mouseClick(row);
+            // In view and done arriving (the Logbook is long by now, and
+            // rows slide in with motion on) before it is clicked.
+            settle();
+            list.positionViewAtIndex(row.index, ListView.Contain);
+            settle();
+            clickWhenShown(row);
             tryCompare(controller, "currentProjectId", id);
 
             // Reopening puts back what completing closed; fin-1 was done before.

@@ -43,19 +43,25 @@ Item {
     // ---- Task actions (#65) ------------------------------------------------
 
     // Cancel the open task `id`, or reopen it if it is finished.
+    // With several selected (#64), every selected task: cancelled if task
+    // `id` is open, reopened if it is finished.
     function cancelOrReopen(id: string) {
         const row = taskModel.rowOf(id);
         if (row < 0)
             return;
+        const ids = targetsOf(id);
         if (taskModel.statusAt(row) === "open")
-            controller.cancelTask(id);
+            actOn(ids.filter(t => taskModel.statusAt(taskModel.rowOf(t)) === "open"), t => controller.cancelTask(t), "%n tasks canceled");
         else
-            controller.toggleTask(id);
+            actOn(ids.filter(t => taskModel.statusAt(taskModel.rowOf(t)) !== "open"), t => controller.toggleTask(t), "%n tasks reopened");
     }
 
-    // Copy task `id` below itself and select the copy.
+    // Copy task `id` below itself and select the copy; with several
+    // selected, copy each (#64).
     function duplicateTask(id: string) {
-        const copy = controller.duplicateTask(id);
+        let copy = "";
+        for (const original of targetsOf(id))
+            copy = controller.duplicateTask(original) || copy;
         if (copy !== "") {
             pendingRevealId = copy;
             Qt.callLater(root.reloadTasks);
@@ -74,6 +80,7 @@ Item {
             return;
         taskListView.selectedTaskId = id;
         taskMenu.taskId = id;
+        taskMenu.taskCount = targetsOf(id).length;
         taskMenu.open_ = taskModel.statusAt(taskModel.rowOf(id)) === "open";
         taskMenu.parent = item;
         taskMenu.popup(item, pos);
@@ -85,11 +92,13 @@ Item {
         property string taskId: ""
         // Whether the task is open (not done or canceled).
         property bool open_: true
+        // How many tasks the menu acts on: the selection it is in (#64).
+        property int taskCount: 1
         onClosed: taskListView.forceActiveFocus()
 
         MenuItem {
             objectName: "menuCancel"
-            text: taskMenu.open_ ? "Cancel Task" : "Reopen Task"
+            text: (taskMenu.open_ ? "Cancel " : "Reopen ") + (taskMenu.taskCount > 1 ? taskMenu.taskCount + " Tasks" : "Task")
             onTriggered: root.cancelOrReopen(taskMenu.taskId)
         }
         MenuItem {
@@ -100,14 +109,15 @@ Item {
         MenuItem {
             objectName: "menuConvert"
             text: "Convert to Project"
-            enabled: taskMenu.open_
+            // One task becomes one project.
+            enabled: taskMenu.open_ && taskMenu.taskCount === 1
             onTriggered: controller.convertTaskToProject(taskMenu.taskId)
         }
         MenuSeparator {}
         MenuItem {
             objectName: "menuTrash"
             text: "Move to Trash"
-            onTriggered: controller.trashTask(taskMenu.taskId)
+            onTriggered: root.trashTasks(root.targetsOf(taskMenu.taskId))
         }
     }
 
@@ -4241,6 +4251,8 @@ Item {
         id: movePopup
         objectName: "movePopup"
         property string taskId: ""
+        // The tasks being moved: the selection the task is in (#64).
+        property var taskIds: []
         property var destinations: []
         readonly property var shown: {
             const text = moveFilter.text.trim().toLowerCase();
