@@ -22,7 +22,8 @@ use cxx_qt_lib::{
 use matters_core::{
     local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
     DeadlineStatus, DeletedHeading, Heading, Home, ListRow, LogPolicy, Outcome, Project,
-    QueryEngine, Schedule, Settings, SettingsFile, Status, Tag, Tagged, Task, View, Visit,
+    QueryEngine, Schedule, Settings, SettingsFile, Status, Tag, Tagged, Task, TaskSnapshot, View,
+    Visit,
 };
 use uuid::Uuid;
 
@@ -400,6 +401,15 @@ pub mod qobject {
         fn delete_checklist_item(self: Pin<&mut AppController>, item_id: &QString);
         #[qinvokable]
         fn restore_checklist_item(self: Pin<&mut AppController>);
+        /// Remember tasks `ids_json` (a JSON array of ids) as they are, before
+        /// an action on all of them (#64); returns how many were remembered.
+        /// Replaces what was remembered before.
+        #[qinvokable]
+        fn remember_tasks(self: Pin<&mut AppController>, ids_json: &QString) -> i32;
+        /// Undo the action on the tasks last remembered: put each back as it
+        /// was (`matters_core::TaskSnapshot`). Once only.
+        #[qinvokable]
+        fn restore_remembered_tasks(self: Pin<&mut AppController>);
         /// Move a heading, with its tasks, to another project (#169).
         #[qinvokable]
         fn move_heading_to_project(
@@ -782,6 +792,8 @@ pub struct AppControllerRust {
     deleted_heading: Option<DeletedHeading>,
     /// The last checklist item deleted, for Undo (`restore_checklist_item`).
     deleted_checklist_item: Option<ChecklistItem>,
+    /// The tasks as they were before the last action on several (#64).
+    remembered: Option<TaskSnapshot>,
 }
 
 impl Default for AppControllerRust {
@@ -826,6 +838,7 @@ impl Default for AppControllerRust {
             search_query: String::new(),
             deleted_heading: None,
             deleted_checklist_item: None,
+            remembered: None,
             db: database(),
         }
     }
@@ -1639,6 +1652,35 @@ impl qobject::AppController {
         let result = self
             .db
             .set_checklist_item_done(&String::from(item_id), done);
+        self.finish(result);
+    }
+
+    pub fn remember_tasks(mut self: Pin<&mut Self>, ids_json: &QString) -> i32 {
+        let ids: Vec<String> = match serde_json::from_str(&String::from(ids_json)) {
+            Ok(ids) => ids,
+            Err(err) => {
+                self.report(format!("not a list of task ids: {err}"));
+                return 0;
+            }
+        };
+        match TaskSnapshot::take(&self.db, &ids) {
+            Ok(snapshot) => {
+                let count = i32::try_from(snapshot.len()).unwrap_or(i32::MAX);
+                self.as_mut().rust_mut().remembered = Some(snapshot);
+                count
+            }
+            Err(err) => {
+                self.report(err.to_string());
+                0
+            }
+        }
+    }
+
+    pub fn restore_remembered_tasks(mut self: Pin<&mut Self>) {
+        let Some(snapshot) = self.as_mut().rust_mut().remembered.take() else {
+            return;
+        };
+        let result = snapshot.restore(&self.db, local_today());
         self.finish(result);
     }
 
