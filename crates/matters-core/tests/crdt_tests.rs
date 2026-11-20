@@ -914,3 +914,57 @@ fn the_smaller_uuid_keeps_a_shared_tag_name_whatever_the_order() {
         (id(140), "same")
     );
 }
+
+#[test]
+fn re_creating_a_removed_heading_or_item_restores_it() {
+    let (mut a, _) = pair();
+    a.apply(
+        &[
+            Command::SetRemoved {
+                id: id(ITEM),
+                removed: true,
+            },
+            Command::SetRemoved {
+                id: id(HEADING),
+                removed: true,
+            },
+        ],
+        20,
+    )
+    .unwrap();
+    assert!(a.project().unwrap().checklist_items.is_empty());
+    a.apply(
+        &[
+            create(ITEM, Kind::ChecklistItem, Some(TASK), "Spade again"),
+            create(HEADING, Kind::Heading, Some(PROJECT), "Spring again"),
+        ],
+        30,
+    )
+    .unwrap();
+    let s = a.project().unwrap();
+    assert_eq!(s.checklist_items[0].title, "Spade again");
+    assert_eq!(s.checklist_items[0].updated_at, 30);
+    assert_eq!(s.headings[0].title, "Spring again");
+    assert_eq!(task(&s, TASK).heading_id, Some(id(HEADING)));
+    for refused in [
+        create(TASK, Kind::Task, None, "a live task"),
+        create(ITEM, Kind::ChecklistItem, Some(TASK), "live again"),
+    ] {
+        assert!(
+            a.apply(std::slice::from_ref(&refused), 40).is_err(),
+            "{refused:?}"
+        );
+    }
+    let mut b = Document::import(&a.snapshot().unwrap(), 3).unwrap();
+    b.apply(
+        &[Command::SetRemoved {
+            id: id(ITEM),
+            removed: true,
+        }],
+        50,
+    )
+    .unwrap();
+    assert!(b
+        .apply(&[create(ITEM, Kind::Task, None, "another kind")], 60)
+        .is_err());
+}
