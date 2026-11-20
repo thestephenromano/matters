@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use super::schema::{
     MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7,
-    MIGRATION_V8, SCHEMA_V1,
+    MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -31,6 +31,9 @@ pub(crate) const PROJECT_COLUMNS: &str =
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
+    /// The sync engine's document while sync is on (`super::sync`). Locked
+    /// after `conn`, never before it.
+    engine: Arc<Mutex<Option<crate::crdt::Document>>>,
 }
 
 impl Database {
@@ -55,11 +58,7 @@ impl Database {
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let db = Self {
-            conn: Arc::new(Mutex::new(conn)),
-        };
-        db.init_schema()?;
-        Ok(db)
+        Self::with_connection(conn)
     }
 
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -73,11 +72,28 @@ impl Database {
                 "file-backed storage requires WAL journal mode; SQLite selected {mode}"
             )));
         }
+        Self::with_connection(conn)
+    }
+
+    fn with_connection(conn: Connection) -> Result<Self> {
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
+            engine: Arc::new(Mutex::new(None)),
         };
         db.init_schema()?;
+        let engine = super::sync::load_engine(&db.conn.lock().unwrap())?;
+        *db.engine.lock().unwrap() = engine;
         Ok(db)
+    }
+
+    /// The connection and the engine, locked in that order.
+    pub(crate) fn with_engine<T>(
+        &self,
+        f: impl FnOnce(&mut Connection, &mut Option<crate::crdt::Document>) -> Result<T>,
+    ) -> Result<T> {
+        let mut conn = self.conn.lock().unwrap();
+        let mut engine = self.engine.lock().unwrap();
+        f(&mut conn, &mut engine)
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -101,6 +117,7 @@ impl Database {
             (6, MIGRATION_V6),
             (7, MIGRATION_V7),
             (8, MIGRATION_V8),
+            (9, MIGRATION_V9),
         ] {
             if version < target {
                 let tx = conn.transaction()?;
@@ -153,7 +170,8 @@ impl Database {
     /// Run one `UPDATE … WHERE id = ?` that sets `assignments` (with
     /// `updated_at`), or `NotFound` when there is no such row. `values`
     /// fill the assignments' placeholders, `?1` onwards; the id and the
-    /// time take the next two.
+    /// time take the next two. With sync on, `commands` gives the engine
+    /// commands for the change, from the updated row and the time.
     fn update_fields(
         &self,
         table: &str,
@@ -161,25 +179,49 @@ impl Database {
         id: &str,
         assignments: &str,
         values: &[&dyn rusqlite::ToSql],
+        commands: impl FnOnce(&rusqlite::Transaction<'_>, i64) -> Result<Vec<crate::crdt::Command>>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        let n = values.len();
-        let sql = format!(
-            "UPDATE {table} SET {assignments}, updated_at = ?{} WHERE id = ?{}",
-            n + 2,
-            n + 1
-        );
-        let mut all: Vec<&dyn rusqlite::ToSql> = values.to_vec();
-        all.push(&id);
-        all.push(&now);
-        if conn.execute(&sql, all.as_slice())? == 0 {
-            return Err(MattersError::NotFound {
-                entity,
-                id: id.to_string(),
-            });
-        }
-        Ok(())
+        self.write(
+            now,
+            |conn| {
+                let n = values.len();
+                let sql = format!(
+                    "UPDATE {table} SET {assignments}, updated_at = ?{} WHERE id = ?{}",
+                    n + 2,
+                    n + 1
+                );
+                let mut all: Vec<&dyn rusqlite::ToSql> = values.to_vec();
+                all.push(&id);
+                all.push(&now);
+                if conn.execute(&sql, all.as_slice())? == 0 {
+                    return Err(MattersError::NotFound {
+                        entity,
+                        id: id.to_string(),
+                    });
+                }
+                Ok(())
+            },
+            |tx, ()| commands(tx, now),
+        )
+    }
+
+    /// Run one `UPDATE` that may match no row (an already trashed item,
+    /// say). With sync on, `commands` describes the change only when a row
+    /// changed.
+    fn update_if(
+        &self,
+        sql: &str,
+        args: &[&dyn rusqlite::ToSql],
+        at: i64,
+        commands: impl FnOnce() -> Vec<crate::crdt::Command>,
+    ) -> Result<()> {
+        self.write(
+            at,
+            |conn| Ok(conn.execute(sql, args)? > 0),
+            |_, changed| Ok(if *changed { commands() } else { Vec::new() }),
+        )
+        .map(|_| ())
     }
 
     // =========================================================================
@@ -204,20 +246,25 @@ impl Database {
     }
 
     pub fn create_area(&self, area: &Area) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO areas (id, title, sort_order, created_at, updated_at, trashed_at)
+        self.write(
+            area.updated_at,
+            |conn| {
+                conn.execute(
+                    "INSERT INTO areas (id, title, sort_order, created_at, updated_at, trashed_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                area.id,
-                area.title,
-                area.sort_order,
-                area.created_at,
-                area.updated_at,
-                area.trashed_at
-            ],
-        )?;
-        Ok(())
+                    params![
+                        area.id,
+                        area.title,
+                        area.sort_order,
+                        area.created_at,
+                        area.updated_at,
+                        area.trashed_at
+                    ],
+                )?;
+                Ok(())
+            },
+            |tx, ()| super::sync::create_area(tx, area),
+        )
     }
 
     pub fn get_area(&self, id: &str) -> Result<Option<Area>> {
@@ -372,34 +419,39 @@ impl Database {
     }
 
     pub fn create_project(&self, project: &Project) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let start_date = project.start_date.map(|d| d.to_string());
-        let deadline = project.deadline.map(|d| d.to_string());
-        let is_someday = if project.is_someday { 1 } else { 0 };
+        self.write(
+            project.updated_at,
+            |conn| {
+                let start_date = project.start_date.map(|d| d.to_string());
+                let deadline = project.deadline.map(|d| d.to_string());
+                let is_someday = if project.is_someday { 1 } else { 0 };
 
-        conn.execute(
-            "INSERT INTO projects (
+                conn.execute(
+                    "INSERT INTO projects (
                 id, area_id, title, notes, start_date, time_of_day, is_someday,
                 deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![
-                project.id,
-                project.area_id,
-                project.title,
-                project.notes,
-                start_date,
-                project.time_of_day,
-                is_someday,
-                deadline,
-                project.status.as_str(),
-                project.completed_at,
-                project.sort_order,
-                project.created_at,
-                project.updated_at,
-                project.trashed_at,
-            ],
-        )?;
-        Ok(())
+                    params![
+                        project.id,
+                        project.area_id,
+                        project.title,
+                        project.notes,
+                        start_date,
+                        project.time_of_day,
+                        is_someday,
+                        deadline,
+                        project.status.as_str(),
+                        project.completed_at,
+                        project.sort_order,
+                        project.created_at,
+                        project.updated_at,
+                        project.trashed_at,
+                    ],
+                )?;
+                Ok(())
+            },
+            |tx, ()| super::sync::create_project(tx, project),
+        )
     }
 
     pub fn get_project(&self, id: &str) -> Result<Option<Project>> {
@@ -531,7 +583,19 @@ impl Database {
 
     /// Replace a project's notes.
     pub fn set_project_notes(&self, id: &str, notes: &str) -> Result<()> {
-        self.update_fields("projects", "project", id, "notes = ?1", &[&notes])
+        self.update_fields(
+            "projects",
+            "project",
+            id,
+            "notes = ?1",
+            &[&notes],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::SetNotes {
+                    id: id.into(),
+                    notes: notes.into(),
+                }])
+            },
+        )
     }
 
     /// Set a project's When ([`Project::apply_schedule`]): start date,
@@ -548,6 +612,14 @@ impl Database {
                 &time_of_day,
                 &is_someday,
             ],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::SetSchedule {
+                    id: id.into(),
+                    start_date,
+                    evening: time_of_day.is_some(),
+                    someday: is_someday,
+                }])
+            },
         )
     }
 
@@ -559,6 +631,12 @@ impl Database {
             id,
             "deadline = ?1",
             &[&deadline.map(|d| d.to_string())],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::SetDeadline {
+                    id: id.into(),
+                    deadline,
+                }])
+            },
         )
     }
 
@@ -592,8 +670,10 @@ impl Database {
     // =========================================================================
 
     pub fn create_heading(&self, heading: &Heading) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        self.write(
+            heading.updated_at,
+            |conn| {
+                conn.execute(
             "INSERT INTO headings (id, project_id, title, sort_order, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
@@ -605,7 +685,10 @@ impl Database {
                 heading.updated_at,
             ],
         )?;
-        Ok(())
+                Ok(())
+            },
+            |tx, ()| super::sync::create_heading(tx, heading),
+        )
     }
 
     /// Add `heading` at the end of its project's headings. Its title is
@@ -770,39 +853,44 @@ impl Database {
     /// valid: at most one of an area or a project, and a heading only of
     /// its own project ([`Home::of`]); nothing is stored otherwise.
     pub fn create_task(&self, task: &Task) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        Self::check_home(&conn, task)?;
-        let start_date = task.start_date.map(|d| d.to_string());
-        let deadline = task.deadline.map(|d| d.to_string());
-        let is_someday = if task.is_someday { 1 } else { 0 };
+        self.write(
+            task.updated_at,
+            |conn| {
+                Self::check_home(conn, task)?;
+                let start_date = task.start_date.map(|d| d.to_string());
+                let deadline = task.deadline.map(|d| d.to_string());
+                let is_someday = if task.is_someday { 1 } else { 0 };
 
-        conn.execute(
-            "INSERT INTO tasks (
+                conn.execute(
+                    "INSERT INTO tasks (
                 id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order,
                 created_at, updated_at, trashed_at, today_order
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-            params![
-                task.id,
-                task.area_id,
-                task.project_id,
-                task.heading_id,
-                task.title,
-                task.notes,
-                start_date,
-                task.time_of_day,
-                is_someday,
-                deadline,
-                task.status.as_str(),
-                task.completed_at,
-                task.sort_order,
-                task.created_at,
-                task.updated_at,
-                task.trashed_at,
-                task.today_order,
-            ],
-        )?;
-        Ok(())
+                    params![
+                        task.id,
+                        task.area_id,
+                        task.project_id,
+                        task.heading_id,
+                        task.title,
+                        task.notes,
+                        start_date,
+                        task.time_of_day,
+                        is_someday,
+                        deadline,
+                        task.status.as_str(),
+                        task.completed_at,
+                        task.sort_order,
+                        task.created_at,
+                        task.updated_at,
+                        task.trashed_at,
+                        task.today_order,
+                    ],
+                )?;
+                Ok(())
+            },
+            |tx, ()| super::sync::create_task(tx, task),
+        )
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
@@ -820,7 +908,12 @@ impl Database {
     /// the ordering operations (`crate::ordering`), [`Self::trash_task`] /
     /// [`Self::restore_task`] and [`Self::set_task_home`].
     pub fn set_task_notes(&self, id: &str, notes: &str) -> Result<()> {
-        self.update_fields("tasks", "task", id, "notes = ?1", &[&notes])
+        self.update_fields("tasks", "task", id, "notes = ?1", &[&notes], |_, _| {
+            Ok(vec![crate::crdt::Command::SetNotes {
+                id: id.into(),
+                notes: notes.into(),
+            }])
+        })
     }
 
     /// Set a task's When ([`Task::apply_schedule`]): start date, evening
@@ -837,6 +930,14 @@ impl Database {
                 &time_of_day,
                 &is_someday,
             ],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::SetSchedule {
+                    id: id.into(),
+                    start_date,
+                    evening: time_of_day.is_some(),
+                    someday: is_someday,
+                }])
+            },
         )
     }
 
@@ -851,6 +952,7 @@ impl Database {
             "time_of_day = CASE WHEN ?1 THEN 'evening' END,
              start_date = CASE WHEN ?1 THEN COALESCE(start_date, ?2) ELSE start_date END",
             &[&evening, &today.to_string()],
+            |tx, _| super::sync::task_schedule(tx, id),
         )
     }
 
@@ -862,6 +964,12 @@ impl Database {
             id,
             "deadline = ?1",
             &[&deadline.map(|d| d.to_string())],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::SetDeadline {
+                    id: id.into(),
+                    deadline,
+                }])
+            },
         )
     }
 
@@ -871,19 +979,12 @@ impl Database {
         let Some(title) = Task::clean_title(title) else {
             return Err(MattersError::Validation("a task needs a title".into()));
         };
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let changed = conn.execute(
-            "UPDATE tasks SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            params![title, now, id],
-        )?;
-        if changed == 0 {
-            return Err(MattersError::NotFound {
-                entity: "task",
-                id: id.to_string(),
-            });
-        }
-        Ok(())
+        self.update_fields("tasks", "task", id, "title = ?1", &[&title], |_, _| {
+            Ok(vec![crate::crdt::Command::Rename {
+                id: id.into(),
+                title: title.clone(),
+            }])
+        })
     }
 
     /// File a task in `home` (the Move popover, SPEC §4), at the end of
@@ -900,48 +1001,60 @@ impl Database {
     /// This is the only way a task changes home. (`crate::ordering::move_task`
     /// moves a task up or down within a list.)
     pub fn set_task_home(&self, id: &str, home: &Home) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let mut task = tx
-                .query_row(
-                    &format!(
-                        "SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND {}",
-                        trash::LIVE_TASK
-                    ),
-                    params![id],
-                    Self::map_task_row,
-                )
-                .optional()?
-                .ok_or_else(|| MattersError::NotFound {
-                    entity: "task",
-                    id: id.to_string(),
-                })?;
-            match home {
-                Home::Inbox => {}
-                Home::Area(area) => {
-                    Self::check_live(&tx, "areas", trash::LIVE_AREA, "area", area)?;
-                }
-                Home::Project { project, heading } => {
-                    Self::check_live(&tx, "projects", trash::LIVE_PROJECT, "project", project)?;
-                    if let Some(heading) = heading {
-                        Self::check_heading(&tx, project, heading)?;
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                let mut task = tx
+                    .query_row(
+                        &format!(
+                            "SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND {}",
+                            trash::LIVE_TASK
+                        ),
+                        params![id],
+                        Self::map_task_row,
+                    )
+                    .optional()?
+                    .ok_or_else(|| MattersError::NotFound {
+                        entity: "task",
+                        id: id.to_string(),
+                    })?;
+                match home {
+                    Home::Inbox => {}
+                    Home::Area(area) => {
+                        Self::check_live(tx, "areas", trash::LIVE_AREA, "area", area)?;
+                    }
+                    Home::Project { project, heading } => {
+                        Self::check_live(tx, "projects", trash::LIVE_PROJECT, "project", project)?;
+                        if let Some(heading) = heading {
+                            Self::check_heading(tx, project, heading)?;
+                        }
                     }
                 }
-            }
-            if Home::of(&task).ok().as_ref() == Some(home) {
-                return Ok(());
-            }
-            home.apply(&mut task);
-            let now = crate::clock::now_millis();
-            tx.execute(
-                "UPDATE tasks SET area_id = ?1, project_id = ?2, heading_id = ?3, updated_at = ?4,
-                    sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks)
-                 WHERE id = ?5",
-                params![task.area_id, task.project_id, task.heading_id, now, id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+                if Home::of(&task).ok().as_ref() == Some(home) {
+                    return Ok(None);
+                }
+                home.apply(&mut task);
+                tx.execute(
+                    "UPDATE tasks SET area_id = ?1, project_id = ?2, heading_id = ?3, updated_at = ?4,
+                        sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks)
+                     WHERE id = ?5",
+                    params![task.area_id, task.project_id, task.heading_id, now, id],
+                )?;
+                Ok(Some(task))
+            },
+            |_, moved| {
+                Ok(moved
+                    .iter()
+                    .map(|task| crate::crdt::Command::Move {
+                        id: task.id.clone(),
+                        parent: super::sync::task_parent(task),
+                        at: crate::crdt::Anchor::Last,
+                    })
+                    .collect())
+            },
+        )
+        .map(|_| ())
     }
 
     /// Refuse a new task whose ids name no valid home: both an area and a
@@ -1005,14 +1118,21 @@ impl Database {
     }
 
     pub fn complete_task(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1,
                 closed_by_project = 0 WHERE id = ?2",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetStatus {
+                    id: id.into(),
+                    status: Status::Completed,
+                    completed_at: Some(now),
+                    closed_by_project: false,
+                }]
+            },
+        )
     }
 
     /// Cancel a task: it is finished without being done, and goes to the
@@ -1024,42 +1144,60 @@ impl Database {
             id,
             "status = 'canceled', completed_at = ?1, closed_by_project = 0",
             &[&crate::clock::now_millis()],
+            |tx, _| super::sync::task_status(tx, id),
         )
     }
 
     pub fn uncomplete_task(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?1,
                 closed_by_project = 0 WHERE id = ?2",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetStatus {
+                    id: id.into(),
+                    status: Status::Open,
+                    completed_at: None,
+                    closed_by_project: false,
+                }]
+            },
+        )
     }
 
     /// Move a task to the Trash. It keeps its status and place, and leaves
     /// every view except the Trash until it is put back. Trashing a task that
     /// is already in the Trash leaves its original trash time.
     pub fn trash_task(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE tasks SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetTrashed {
+                    id: id.into(),
+                    trashed_at: Some(now),
+                }]
+            },
+        )
     }
 
     /// Put a trashed task back where it was.
     pub fn restore_task(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE tasks SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetTrashed {
+                    id: id.into(),
+                    trashed_at: None,
+                }]
+            },
+        )
     }
 
     /// Permanently delete everything in the Trash: trashed tasks, trashed
@@ -1093,20 +1231,27 @@ impl Database {
     // =========================================================================
 
     pub fn create_checklist_item(&self, item: &ChecklistItem) -> Result<()> {
-        self.with_conn_mut(|conn| insert_checklist_item(conn, item))
+        self.write(
+            item.updated_at,
+            |conn| insert_checklist_item(conn, item),
+            |tx, ()| super::sync::create_checklist_item(tx, item),
+        )
     }
 
     /// Add `item` at the end of its task's checklist. Its title is cleaned
     /// like a task's ([`Task::clean_title`]); a blank one is refused.
     pub fn add_checklist_item(&self, item: &mut ChecklistItem) -> Result<()> {
         item.title = checklist_title(&item.title)?;
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            item.sort_order = checklist_end_key(&tx, &item.task_id)?;
-            insert_checklist_item(&tx, item)?;
-            tx.commit()?;
-            Ok(())
-        })
+        self.write(
+            item.updated_at,
+            |tx| {
+                item.sort_order = checklist_end_key(tx, &item.task_id)?;
+                insert_checklist_item(tx, item)?;
+                Ok(item.clone())
+            },
+            super::sync::create_checklist_item,
+        )
+        .map(|_| ())
     }
 
     pub fn get_checklist_item(&self, id: &str) -> Result<Option<ChecklistItem>> {

@@ -229,6 +229,20 @@ impl Document {
         Ok(document)
     }
 
+    /// A document rebuilt from stored updates, in order, editing as
+    /// `peer`.
+    pub fn from_updates<'a>(
+        updates: impl IntoIterator<Item = &'a [u8]>,
+        peer: u64,
+    ) -> Result<Self> {
+        let mut document = Self::new(peer)?;
+        for bytes in updates {
+            document.doc.import(bytes).map_err(engine)?;
+        }
+        document.reindex()?;
+        Ok(document)
+    }
+
     /// Import updates or a snapshot from another replica, then rebuild the
     /// index.
     pub fn merge(&mut self, bytes: &[u8]) -> Result<()> {
@@ -271,6 +285,11 @@ impl Document {
             }
         }
         Ok(())
+    }
+
+    /// The engine actor this document's edits carry.
+    pub fn peer(&self) -> u64 {
+        self.doc.peer_id()
     }
 
     /// The version this document has seen.
