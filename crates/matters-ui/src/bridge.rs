@@ -164,8 +164,21 @@ pub mod qobject {
             title: &QString,
             below_id: &QString,
         ) -> QString;
+        /// Tick an open task done; reopen a completed or canceled one.
         #[qinvokable]
         fn toggle_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Cancel a task: finished without being done (#65). A canceled
+        /// task is reopened by `toggle_task`.
+        #[qinvokable]
+        fn cancel_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Copy a task just below itself, open, with its details and
+        /// checklist (#65); returns the copy's id, or an empty string.
+        #[qinvokable]
+        fn duplicate_task(self: Pin<&mut AppController>, task_id: &QString) -> QString;
+        /// Turn an open task into a project of its checklist and open the
+        /// project (#65); returns its id, or an empty string.
+        #[qinvokable]
+        fn convert_task_to_project(self: Pin<&mut AppController>, task_id: &QString) -> QString;
         /// Move a task to the Trash (recoverable until the Trash is emptied).
         #[qinvokable]
         fn trash_task(self: Pin<&mut AppController>, task_id: &QString);
@@ -503,6 +516,10 @@ pub mod qobject {
         /// Whether the task at `row` is scheduled for This Evening.
         #[qinvokable]
         fn evening_at(self: &TaskListModel, row: i32) -> bool;
+        /// The status of the task at `row` (`open`, `completed` or
+        /// `canceled`), or an empty string when out of range.
+        #[qinvokable]
+        fn status_at(self: &TaskListModel, row: i32) -> QString;
         /// The heading the row at `row` is under (a task) or is (an empty
         /// heading's row), or an empty string.
         #[qinvokable]
@@ -1188,8 +1205,8 @@ impl qobject::AppController {
         let id = String::from(task_id);
         let db = &self.db;
         let result = db.get_task(&id).and_then(|task| match task {
-            Some(task) if task.status == Status::Completed => db.uncomplete_task(&id),
-            Some(_) => db.complete_task(&id),
+            Some(task) if task.status == Status::Open => db.complete_task(&id),
+            Some(_) => db.uncomplete_task(&id),
             None => Ok(()),
         });
         self.finish(result);
@@ -1198,6 +1215,37 @@ impl qobject::AppController {
     pub fn trash_task(self: Pin<&mut Self>, task_id: &QString) {
         let result = self.db.trash_task(&String::from(task_id));
         self.finish(result);
+    }
+
+    pub fn cancel_task(self: Pin<&mut Self>, task_id: &QString) {
+        let result = self.db.cancel_task(&String::from(task_id));
+        self.finish(result);
+    }
+
+    pub fn duplicate_task(self: Pin<&mut Self>, task_id: &QString) -> QString {
+        match self.db.duplicate_task(&String::from(task_id)) {
+            Ok(copy) => {
+                self.finish(Ok(()));
+                QString::from(copy.as_str())
+            }
+            Err(err) => {
+                self.finish(Err(err));
+                QString::default()
+            }
+        }
+    }
+
+    pub fn convert_task_to_project(self: Pin<&mut Self>, task_id: &QString) -> QString {
+        match self.db.convert_task_to_project(&String::from(task_id)) {
+            Ok(project) => {
+                self.set_view(View::Project(project.clone()));
+                QString::from(project.as_str())
+            }
+            Err(err) => {
+                self.finish(Err(err));
+                QString::default()
+            }
+        }
     }
 
     pub fn restore_task(self: Pin<&mut Self>, task_id: &QString) {
@@ -2367,6 +2415,11 @@ impl qobject::TaskListModel {
 
     pub fn evening_at(&self, row: i32) -> bool {
         self.task_at(row).is_some_and(Task::is_evening)
+    }
+
+    pub fn status_at(&self, row: i32) -> QString {
+        self.task_at(row)
+            .map_or_else(QString::default, |task| QString::from(task.status.as_str()))
     }
 
     pub fn heading_at(&self, row: i32) -> QString {

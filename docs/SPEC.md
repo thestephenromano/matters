@@ -56,6 +56,8 @@ Area (e.g. Work, Personal, Finances)
 4. **Task (To-Do):**
    * The atomic unit of work.
    * Contains: Title, Notes (markdown-formatted), Checklist, Tags, `When`, `Deadline`, `Status`.
+   * A task is open, completed or canceled. A canceled task is finished without being done: it leaves Today, Upcoming, Anytime and Someday and goes to the Logbook like a completed one; its project and area still list it, and it counts as finished in its project's progress. It is shown struck through with a cross instead of a tick. Ticking its box, or **Reopen Task**, opens it again.
+   * A task's menu (a right click, or `Menu` / `Shift + F10` on the selected task) cancels or reopens it, duplicates it, converts it to a project, or moves it to the Trash. A **duplicate** is an open copy just below the original, with its notes, When, deadline, tags and checklist (unticked), and is selected. **Convert to Project** makes an open task a project with its title, notes, When, deadline and tags, in the task's area or its project's area; each checklist item becomes one of the project's tasks, done if it was ticked, and the project opens.
    * Notes are written as Markdown (CommonMark with GitHub's extensions) and shown formatted until clicked; a click edits the source with the caret where it was. Links, and bare web addresses, open with the desktop's handler: web and mail links at once, any other kind of link only after asking. A closed task's row shows a mark when it has notes.
    * Tags are given to tasks, projects and areas from a tag field that suggests existing tags as you type, and are shown on a closed task's row. A task also matches the tags of its project and area. Tags can be nested; matching a tag matches the tags under it. The Tags window (the tag button in the sidebar) renames, nests and deletes them; deleting a tag never deletes what had it.
    * Can reside in:
@@ -172,6 +174,9 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Backspace` | Empty checklist item | Deletes the item and goes to the one above; the Undo notice brings it back |
 | `Ctrl + K` or `/` | Anywhere | Opens **Quick Find**: the lists (Inbox, Today and the other fixed views), areas, projects, tags and open tasks whose names contain what is typed, in that order. `Up`/`Down` pick one and `Enter` opens it (the first, unless another is picked): a list, area or project opens; a tag opens Anytime narrowed to it; a task opens the list that holds it, with the task open |
 | Typing a character other than `/` | Task list | Opens Quick Find searching for what is typed, so any list is a few keystrokes away. Keys typed into a title, notes, checklist or tag field stay there |
+| `Ctrl + Alt + K` | Selected task | Cancels it, or reopens it if it is finished |
+| `Ctrl + Shift + D` | Selected task | Duplicates it below itself and selects the copy |
+| `Menu` or `Shift + F10` | Selected task | Opens the task's menu: cancel or reopen, duplicate, convert to project, move to Trash |
 | `Ctrl + N` | Anywhere | Creates a new task in the current view |
 | `Ctrl + ,` | Anywhere | Opens **Preferences** on the current choice; `Tab` and `Space` choose another, and each takes effect at once |
 | `Ctrl + Shift + L` | Anywhere, when finished tasks wait to be logged | **Log Completed**: the finished tasks still in their lists move to the Logbook |

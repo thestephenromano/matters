@@ -231,13 +231,14 @@ const PROJECT_SOMEDAY_WHERE: &str = "status = 'open' AND is_someday = 1";
 /// The sidebar's order for projects listed beside tasks.
 const PROJECT_ROW_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
 
-/// PROJECT: a project's live tasks, done or not (the same set its progress
-/// ring counts). `?1` is the project id.
-const PROJECT_WHERE: &str = "project_id = ?1 AND status IN ('open', 'completed')";
+/// PROJECT: a project's live tasks, open or finished (completed or
+/// canceled, #65): the same set its progress ring counts. `?1` is the
+/// project id.
+const PROJECT_WHERE: &str = "project_id = ?1";
 
-/// AREA: the tasks filed directly in an area, done or not; its projects'
-/// tasks belong to the projects. `?1` is the area id.
-const AREA_WHERE: &str = "area_id = ?1 AND project_id IS NULL AND status IN ('open', 'completed')";
+/// AREA: the tasks filed directly in an area, open or finished; its
+/// projects' tasks belong to the projects. `?1` is the area id.
+const AREA_WHERE: &str = "area_id = ?1 AND project_id IS NULL";
 
 /// Stable order for manually sorted lists; `id` breaks exact ties.
 const MANUAL_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
@@ -834,13 +835,14 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// PROJECT PROGRESS:
-    /// Calculates the completion ratio for the project's circular progress ring.
+    /// The project's finished tasks (completed or canceled) out of all its
+    /// live tasks, for its progress ring.
     pub fn project_progress(&self, project_id: &str) -> Result<ProjectProgress> {
         self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT
-                    COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
-                    COUNT(CASE WHEN status IN ('open', 'completed') THEN 1 END) as total
+                    COUNT(CASE WHEN status IN ('completed', 'canceled') THEN 1 END) as completed,
+                    COUNT(*) as total
                  FROM tasks
                  WHERE project_id = ?1 AND trashed_at IS NULL",
             )?;

@@ -31,7 +31,7 @@ Item {
             for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
                                 "emptyTrashDialog", "quickFindDialog", "movePopup",
                                 "finishProjectDialog", "tagsDialog", "preferencesDialog",
-                                "openLinkDialog"]) {
+                                "openLinkDialog", "taskMenu"]) {
                 const popup = findChild(view, name);
                 if (popup)
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
@@ -605,6 +605,123 @@ Item {
             const to2 = mid.mapToItem(view, mid.width / 2, mid.height - 6);
             dragGripTo(findChild(nowTop, "dragGrip"), to2);
             tryVerify(() => titlesInOrder() === "d3,d2,d1", 2000, "d2 moved below d3: " + titlesInOrder());
+        }
+
+        // ---- Cancel, duplicate and convert (#65) -------------------------------
+
+        // Right-click task `row` and wait for its menu.
+        function openMenuOn(row) {
+            const menu = findChild(view, "taskMenu");
+            tryVerify(() => !menu.visible, 2000, "the last menu has closed");
+            // In view, so the click reaches it.
+            list.positionViewAtIndex(indexOf(row.title), ListView.Contain);
+            settle();
+            mouseClick(row, row.width / 2, 16, Qt.RightButton);
+            tryVerify(() => menu.opened, 1000, "a right click opens the task's menu");
+            return menu;
+        }
+
+        function chooseInMenu(menu, name) {
+            const item = findChild(menu.contentItem, name) || findChild(menu, name);
+            verify(item, name + " is in the menu");
+            mouseClick(item);
+            tryVerify(() => !menu.visible, 2000);
+        }
+
+        function statusOf(title) {
+            return list.model.statusAt(indexOf(title));
+        }
+
+        function test_a_task_is_canceled_and_reopened() {
+            const row = addToToday("act-cancel");
+            const menu = openMenuOn(row);
+            compare(list.selectedTaskId, row.taskId, "the menu's task is selected");
+            chooseInMenu(menu, "menuCancel");
+            tryCompare(row, "status", "canceled");
+            verify(!row.done, "canceled is not done");
+            verify(findChild(row, "canceledMark").visible, "shown with a cross");
+            verify(row.finished);
+
+            // Like a completed task: it stays until leaving, then it's in
+            // the Logbook.
+            controller.selectView("inbox");
+            controller.selectView("today");
+            waitForNoRow("act-cancel");
+            controller.selectView("logbook");
+            waitForRow("act-cancel");
+
+            // Ctrl+Alt+K reopens it (and cancels an open one).
+            list.selectedTaskId = rowFor("act-cancel").taskId;
+            list.forceActiveFocus();
+            keySequence("Ctrl+Alt+K");
+            tryCompare(rowFor("act-cancel"), "status", "open");
+            keySequence("Ctrl+Alt+K");
+            tryCompare(rowFor("act-cancel"), "status", "canceled");
+            keySequence("Ctrl+Alt+K");
+            controller.selectView("today");
+            waitForRow("act-cancel");
+
+            // The checkbox reopens a canceled task too.
+            const again = rowFor("act-cancel");
+            controller.cancelTask(again.taskId);
+            tryCompare(again, "status", "canceled");
+            mouseClick(findChild(again, "checkCircle"));
+            tryCompare(again, "status", "open");
+        }
+
+        function test_a_task_is_duplicated_below_itself_and_selected() {
+            addToToday("act-dup-a");
+            const row = addToToday("act-dup");
+            addToToday("act-dup-b");
+            list.selectedTaskId = row.taskId;
+            list.forceActiveFocus();
+            const before = list.count;
+            keySequence("Ctrl+Shift+D");
+            tryCompare(list, "count", before + 1);
+            const at = indexOf("act-dup");
+            compare(list.model.titleAt(at + 1), "act-dup", "the copy is just below");
+            verify(list.selectedTaskId !== row.taskId, "the copy is selected");
+            compare(list.model.idAt(at + 1), list.selectedTaskId);
+
+            // From the menu too.
+            const menu = openMenuOn(rowFor("act-dup-b"));
+            chooseInMenu(menu, "menuDuplicate");
+            tryVerify(() => list.model.titleAt(indexOf("act-dup-b") + 1) === "act-dup-b");
+        }
+
+        function test_a_task_is_converted_into_a_project_of_its_checklist() {
+            const row = addToToday("act-convert");
+            verify(controller.addChecklistItem(row.taskId, "conv-step-1", "") !== "");
+            verify(controller.addChecklistItem(row.taskId, "conv-step-2", "") !== "");
+            const menu = openMenuOn(rowFor("act-convert"));
+            chooseInMenu(menu, "menuConvert");
+            tryCompare(controller, "currentView", "project");
+            compare(controller.currentTitle, "act-convert", "the project opens");
+            waitForRow("conv-step-1");
+            waitForRow("conv-step-2");
+            verify(indexOf("conv-step-1") < indexOf("conv-step-2"), "in checklist order");
+            verify(JSON.parse(controller.projectsJson).some(p => p.title === "act-convert"), "in the sidebar");
+            controller.selectView("today");
+            waitForNoRow("act-convert");
+        }
+
+        function test_the_menu_opens_from_the_keyboard_and_not_in_the_trash() {
+            const row = addToToday("act-keys");
+            list.selectedTaskId = row.taskId;
+            list.forceActiveFocus();
+            const menu = findChild(view, "taskMenu");
+            keySequence("Shift+F10");
+            tryVerify(() => menu.opened, 1000, "Shift+F10 opens the menu");
+            compare(menu.taskId, row.taskId);
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !menu.visible, 2000);
+
+            controller.trashTask(row.taskId);
+            controller.selectView("trash");
+            const trashed = waitForRow("act-keys");
+            mouseClick(trashed, trashed.width / 2, 16, Qt.RightButton);
+            wait(100);
+            verify(!menu.visible, "trashed tasks have no menu");
         }
 
         // ---- Markdown notes (#63) ---------------------------------------------
@@ -2792,7 +2909,9 @@ Item {
             clickWhenShown(findChild(dialog, "cancelOpenTasks"));
             tryCompare(controller, "currentProjectStatus", "canceled");
             compare(findChild(view, "projectStatusLabel").text, "Canceled");
-            waitForNoRow("cx-1"); // a project lists its canceled tasks nowhere
+            // The project lists its canceled task, finished like a completed
+            // one (#65).
+            tryCompare(waitForRow("cx-1"), "status", "canceled");
             controller.selectView("logbook");
             let row = null;
             tryVerify(() => (row = logbookProject("cancel-proj")) !== null, 2000);
