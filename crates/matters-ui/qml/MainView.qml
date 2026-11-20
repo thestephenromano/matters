@@ -2625,6 +2625,10 @@ Item {
                                                         text = taskRow.title;
                                                 }
                                                 onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
+                                                // Hidden (the task closed), it gives up the focus: the
+                                                // row is a focus scope and would hand the keys back to
+                                                // it, unseen, the next time the list takes the focus.
+                                                onVisibleChanged: if (!visible) focus = false
                                                 // Enter goes on to the notes.
                                                 Keys.onReturnPressed: notesInput.forceActiveFocus()
                                                 Keys.onEnterPressed: notesInput.forceActiveFocus()
@@ -2842,6 +2846,9 @@ Item {
                                                 font.pixelSize: 14
                                                 color: root.colTextPrimary
                                                 clip: true
+                                                // Hidden, it gives up the focus (as the
+                                                // title and notes do).
+                                                onVisibleChanged: if (!visible) focus = false
 
                                                 Text {
                                                     anchors.fill: parent
@@ -2888,6 +2895,10 @@ Item {
                                                 objectName: "notesInput"
                                                 // Editing a task's notes selects that task.
                                                 onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
+                                                // Hidden (the task closed), it gives up the focus: the
+                                                // row is a focus scope and would hand the keys back to
+                                                // it, unseen, the next time the list takes the focus.
+                                                onVisibleChanged: if (!visible) focus = false
                                                 Layout.fillWidth: true
                                                 // Grows with what is written.
                                                 Layout.preferredHeight: Math.max(44, contentHeight + topPadding + bottomPadding)

@@ -1631,6 +1631,31 @@ Item {
             tryCompare(view, "tagFilter", "");
         }
 
+        // A closed task's editors give up the focus: the list, taking it
+        // back, must not hand typed keys to an editor no one can see.
+        function test_keys_typed_after_a_task_closes_never_reach_its_editors() {
+            const dialog = findChild(view, "quickFindDialog");
+            for (const editor of ["notesInput", "titleInput"]) {
+                const row = addToToday("tq-closed-" + editor);
+                expandRow(row);
+                const input = findChild(row, editor);
+                mouseClick(input);
+                verify(input.activeFocus);
+                const before = input.text;
+
+                // Closed some other way than Escape, as by opening another.
+                list.expandedTaskId = "";
+                tryVerify(() => !input.visible, 1000);
+                focusList();
+                verify(!input.activeFocus, editor + " gave up the focus");
+                keyClick("q");
+                tryVerify(() => dialog.opened, 1000, "the key went to the list");
+                compare(input.text, before, editor + " is unchanged");
+                keyClick(Qt.Key_Escape);
+                tryVerify(() => !dialog.visible, 2000);
+            }
+        }
+
         function test_typing_in_editors_never_opens_quick_find() {
             const dialog = findChild(view, "quickFindDialog");
             const row = addToToday("tq-editors");
