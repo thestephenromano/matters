@@ -373,3 +373,119 @@ fn each_open_edits_as_a_new_engine_actor() {
     assert_ne!(second, third);
     assert_eq!(Database::open_in_memory().unwrap().engine_peer(), None);
 }
+
+#[test]
+fn area_project_heading_and_checklist_writes_keep_the_engine_equal() {
+    use matters_core::Outcome;
+    let db = synced();
+    db.add_area(&mut Area::new(id(1), "Home", 0.0)).unwrap();
+    db.add_area(&mut Area::new(id(2), "Work", 0.0)).unwrap();
+    db.add_project(&mut Project::new(id(3), "Garden", 0.0))
+        .unwrap();
+    db.add_heading(&mut Heading::new(id(4), id(3), "Spring", 0.0))
+        .unwrap();
+    for (n, heading) in [
+        (10, Some(id(4))),
+        (11, Some(id(4))),
+        (12, None),
+        (13, Some(id(4))),
+    ] {
+        let mut task = Task::new(id(n), format!("task {n}"), 0.0);
+        Home::Project {
+            project: id(3),
+            heading,
+        }
+        .apply(&mut task);
+        db.add_task(&mut task).unwrap();
+    }
+    db.add_checklist_item(&mut ChecklistItem::new(id(20), id(10), "rake", 0.0))
+        .unwrap();
+    db.add_checklist_item(&mut ChecklistItem::new(id(21), id(10), "hoe", 0.0))
+        .unwrap();
+    check(&db);
+
+    db.rename_area(&id(1), "House").unwrap();
+    db.rename_project(&id(3), "Yard").unwrap();
+    db.rename_heading(&id(4), "Summer").unwrap();
+    db.set_project_area(&id(3), Some(&id(1))).unwrap();
+    db.set_project_area(&id(3), Some(&id(1))).unwrap(); // already there
+    db.rename_checklist_item(&id(20), "big rake").unwrap();
+    db.set_checklist_item_done(&id(21), true).unwrap();
+    check(&db);
+
+    db.complete_task(&id(11)).unwrap();
+    db.finish_project(&id(3), Outcome::Completed, Outcome::Canceled)
+        .unwrap();
+    check(&db);
+    let s = db.engine_snapshot().unwrap().unwrap();
+    assert!(s.closed_by_project.contains(&id(10)));
+    assert!(!s.closed_by_project.contains(&id(11)), "finished before");
+    db.reopen_project(&id(3)).unwrap();
+    check(&db);
+    assert!(db
+        .engine_snapshot()
+        .unwrap()
+        .unwrap()
+        .closed_by_project
+        .is_empty());
+
+    let deleted = db.delete_heading(&id(4)).unwrap();
+    check(&db);
+    db.restore_heading(&deleted).unwrap();
+    check(&db);
+
+    let item = db.get_checklist_item(&id(20)).unwrap().unwrap();
+    db.delete_checklist_item(&id(20)).unwrap();
+    db.delete_checklist_item(&id(20)).unwrap(); // already gone
+    check(&db);
+    db.create_checklist_item(&item).unwrap(); // Undo
+    check(&db);
+
+    db.trash_project(&id(3)).unwrap();
+    db.trash_area(&id(2)).unwrap();
+    check(&db);
+    db.restore_project(&id(3)).unwrap();
+    db.restore_area(&id(2)).unwrap();
+    db.set_project_area(&id(3), None).unwrap();
+    check(&db);
+}
+
+#[test]
+fn only_a_deleted_heading_or_checklist_item_can_be_created_again() {
+    let db = synced();
+    db.add_project(&mut Project::new(id(1), "p", 0.0)).unwrap();
+    let mut task = Task::new(id(2), "t", 0.0);
+    task.project_id = Some(id(1));
+    db.add_task(&mut task).unwrap();
+    let item = ChecklistItem::new(id(3), id(2), "i", 0.0);
+    db.create_checklist_item(&item).unwrap();
+    // A live item: the row insert itself is refused.
+    assert!(db.create_checklist_item(&item).is_err());
+    check(&db);
+}
+
+#[test]
+fn undoing_a_heading_deletion_leaves_tasks_that_moved_away() {
+    let db = synced();
+    db.add_project(&mut Project::new(id(1), "p", 0.0)).unwrap();
+    db.add_heading(&mut Heading::new(id(2), id(1), "h", 0.0))
+        .unwrap();
+    for n in [10, 11] {
+        let mut task = Task::new(id(n), format!("t{n}"), 0.0);
+        Home::Project {
+            project: id(1),
+            heading: Some(id(2)),
+        }
+        .apply(&mut task);
+        db.add_task(&mut task).unwrap();
+    }
+    let deleted = db.delete_heading(&id(2)).unwrap();
+    db.set_task_home(&id(11), &Home::Inbox).unwrap();
+    // A later millisecond, so a stray edit of the moved task would show in
+    // its updated_at.
+    let moved = matters_core::clock::now_millis();
+    while matters_core::clock::now_millis() == moved {}
+    db.restore_heading(&deleted).unwrap();
+    check(&db);
+    assert_eq!(db.get_task(&id(11)).unwrap().unwrap().project_id, None);
+}

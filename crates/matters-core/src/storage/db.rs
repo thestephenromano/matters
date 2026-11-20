@@ -305,19 +305,12 @@ impl Database {
         let Some(title) = Task::clean_title(title) else {
             return Err(MattersError::Validation("an area needs a name".into()));
         };
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let changed = conn.execute(
-            "UPDATE areas SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            params![title, now, id],
-        )?;
-        if changed == 0 {
-            return Err(MattersError::NotFound {
-                entity: "area",
-                id: id.to_string(),
-            });
-        }
-        Ok(())
+        self.update_fields("areas", "area", id, "title = ?1", &[&title], |_, _| {
+            Ok(vec![crate::crdt::Command::Rename {
+                id: id.into(),
+                title: title.clone(),
+            }])
+        })
     }
 
     /// Rename a project. The name is cleaned like a task title
@@ -326,19 +319,19 @@ impl Database {
         let Some(title) = Task::clean_title(title) else {
             return Err(MattersError::Validation("a project needs a name".into()));
         };
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let changed = conn.execute(
-            "UPDATE projects SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            params![title, now, id],
-        )?;
-        if changed == 0 {
-            return Err(MattersError::NotFound {
-                entity: "project",
-                id: id.to_string(),
-            });
-        }
-        Ok(())
+        self.update_fields(
+            "projects",
+            "project",
+            id,
+            "title = ?1",
+            &[&title],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::Rename {
+                    id: id.into(),
+                    title: title.clone(),
+                }])
+            },
+        )
     }
 
     /// File a project in an area, or take it out of one (`None`), at the
@@ -347,65 +340,88 @@ impl Database {
     /// in the Trash is put back only with Put Back. This is the only way a
     /// project changes area; filing it where it already is changes nothing.
     pub fn set_project_area(&self, project_id: &str, area_id: Option<&str>) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            if let Some(area_id) = area_id {
-                Self::check_live(&tx, "areas", trash::LIVE_AREA, "area", area_id)?;
-            }
-            let current: Option<Option<String>> = tx
-                .query_row(
-                    &format!(
-                        "SELECT area_id FROM projects WHERE id = ?1 AND {}",
-                        trash::LIVE_PROJECT
-                    ),
-                    params![project_id],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let Some(current) = current else {
-                return Err(MattersError::NotFound {
-                    entity: "project",
-                    id: project_id.to_string(),
-                });
-            };
-            if current.as_deref() == area_id {
-                return Ok(());
-            }
-            let now = crate::clock::now_millis();
-            tx.execute(
-                "UPDATE projects SET area_id = ?1, updated_at = ?2,
-                    sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM projects)
-                 WHERE id = ?3",
-                params![area_id, now, project_id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                if let Some(area_id) = area_id {
+                    Self::check_live(tx, "areas", trash::LIVE_AREA, "area", area_id)?;
+                }
+                let current: Option<Option<String>> = tx
+                    .query_row(
+                        &format!(
+                            "SELECT area_id FROM projects WHERE id = ?1 AND {}",
+                            trash::LIVE_PROJECT
+                        ),
+                        params![project_id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let Some(current) = current else {
+                    return Err(MattersError::NotFound {
+                        entity: "project",
+                        id: project_id.to_string(),
+                    });
+                };
+                if current.as_deref() == area_id {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "UPDATE projects SET area_id = ?1, updated_at = ?2,
+                        sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM projects)
+                     WHERE id = ?3",
+                    params![area_id, now, project_id],
+                )?;
+                Ok(true)
+            },
+            |_, moved| {
+                Ok(if *moved {
+                    vec![crate::crdt::Command::Move {
+                        id: project_id.into(),
+                        parent: area_id.map(str::to_string),
+                        at: crate::crdt::Anchor::Last,
+                    }]
+                } else {
+                    Vec::new()
+                })
+            },
+        )
+        .map(|_| ())
     }
 
     /// Move an area to the Trash, taking its projects and tasks with it: they
     /// leave every view, and the Trash lists the area in their place. Its
     /// contents keep their own state, so Put Back restores them as they were.
     pub fn trash_area(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE areas SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetTrashed {
+                    id: id.into(),
+                    trashed_at: Some(now),
+                }]
+            },
+        )
     }
 
     /// Put a trashed area back with its projects and tasks. Anything trashed
     /// on its own before the area stays in the Trash.
     pub fn restore_area(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE areas SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetTrashed {
+                    id: id.into(),
+                    trashed_at: None,
+                }]
+            },
+        )
     }
 
     // =========================================================================
@@ -494,52 +510,68 @@ impl Database {
     /// The project must be open and not in the Trash, itself or through its
     /// area.
     pub fn finish_project(&self, id: &str, outcome: Outcome, open_tasks: Outcome) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            if Self::live_project_status(&tx, id)? != Status::Open {
-                return Err(MattersError::Validation(format!(
-                    "project '{id}' is already finished"
-                )));
-            }
-            let now = crate::clock::now_millis();
-            tx.execute(
-                "UPDATE projects SET status = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
-                params![Status::from(outcome).as_str(), now, id],
-            )?;
-            tx.execute(
-                "UPDATE tasks SET status = ?1, completed_at = ?2, updated_at = ?2, closed_by_project = 1
-                 WHERE project_id = ?3 AND status = 'open' AND trashed_at IS NULL",
-                params![Status::from(open_tasks).as_str(), now, id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                if Self::live_project_status(tx, id)? != Status::Open {
+                    return Err(MattersError::Validation(format!(
+                        "project '{id}' is already finished"
+                    )));
+                }
+                let closing = super::sync::task_ids(
+                    tx,
+                    "SELECT id FROM tasks WHERE project_id = ?1 AND status = 'open' AND trashed_at IS NULL",
+                    id,
+                )?;
+                tx.execute(
+                    "UPDATE projects SET status = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                    params![Status::from(outcome).as_str(), now, id],
+                )?;
+                tx.execute(
+                    "UPDATE tasks SET status = ?1, completed_at = ?2, updated_at = ?2, closed_by_project = 1
+                     WHERE project_id = ?3 AND status = 'open' AND trashed_at IS NULL",
+                    params![Status::from(open_tasks).as_str(), now, id],
+                )?;
+                Ok(closing)
+            },
+            |tx, closing| super::sync::project_and_tasks_status(tx, id, closing),
+        )
+        .map(|_| ())
     }
 
     /// Undo [`Self::finish_project`]: the project is open again, and so are
     /// the tasks finishing it closed, unless they were reopened or finished
     /// by hand since. The project must be finished and not in the Trash.
     pub fn reopen_project(&self, id: &str) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            if Self::live_project_status(&tx, id)? == Status::Open {
-                return Err(MattersError::Validation(format!(
-                    "project '{id}' is not finished"
-                )));
-            }
-            let now = crate::clock::now_millis();
-            tx.execute(
-                "UPDATE projects SET status = 'open', completed_at = NULL, updated_at = ?1 WHERE id = ?2",
-                params![now, id],
-            )?;
-            tx.execute(
-                "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?1, closed_by_project = 0
-                 WHERE project_id = ?2 AND closed_by_project = 1",
-                params![now, id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                if Self::live_project_status(tx, id)? == Status::Open {
+                    return Err(MattersError::Validation(format!(
+                        "project '{id}' is not finished"
+                    )));
+                }
+                let reopening = super::sync::task_ids(
+                    tx,
+                    "SELECT id FROM tasks WHERE project_id = ?1 AND closed_by_project = 1",
+                    id,
+                )?;
+                tx.execute(
+                    "UPDATE projects SET status = 'open', completed_at = NULL, updated_at = ?1 WHERE id = ?2",
+                    params![now, id],
+                )?;
+                tx.execute(
+                    "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?1, closed_by_project = 0
+                     WHERE project_id = ?2 AND closed_by_project = 1",
+                    params![now, id],
+                )?;
+                Ok(reopening)
+            },
+            |tx, reopening| super::sync::project_and_tasks_status(tx, id, reopening),
+        )
+        .map(|_| ())
     }
 
     /// The status of project `id`; `NotFound` when it doesn't exist or is in
@@ -644,25 +676,35 @@ impl Database {
     /// every view, and the Trash lists the project in their place. Tasks keep
     /// their own state, so Put Back restores the project as it was.
     pub fn trash_project(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE projects SET trashed_at = ?1, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NULL",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetTrashed {
+                    id: id.into(),
+                    trashed_at: Some(now),
+                }]
+            },
+        )
     }
 
     /// Put a trashed project back with its tasks. A task that was trashed on
     /// its own before the project stays in the Trash.
     pub fn restore_project(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
-        conn.execute(
+        self.update_if(
             "UPDATE projects SET trashed_at = NULL, updated_at = ?1 WHERE id = ?2 AND trashed_at IS NOT NULL",
-            params![now, id],
-        )?;
-        Ok(())
+            &[&now, &id],
+            now,
+            || {
+                vec![crate::crdt::Command::SetTrashed {
+                    id: id.into(),
+                    trashed_at: None,
+                }]
+            },
+        )
     }
 
     // =========================================================================
@@ -727,19 +769,19 @@ impl Database {
         let Some(title) = Task::clean_title(title) else {
             return Err(MattersError::Validation("a heading needs a title".into()));
         };
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let changed = conn.execute(
-            "UPDATE headings SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            params![title, now, id],
-        )?;
-        if changed == 0 {
-            return Err(MattersError::NotFound {
-                entity: "heading",
-                id: id.to_string(),
-            });
-        }
-        Ok(())
+        self.update_fields(
+            "headings",
+            "heading",
+            id,
+            "title = ?1",
+            &[&title],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::Rename {
+                    id: id.into(),
+                    title: title.clone(),
+                }])
+            },
+        )
     }
 
     /// A project's headings in their order. Tied keys (headings never
@@ -763,70 +805,89 @@ impl Database {
     /// the headings (decided on #22). Returns what [`Self::restore_heading`]
     /// needs to undo it.
     pub fn delete_heading(&self, id: &str) -> Result<DeletedHeading> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let heading = tx
-                .query_row(
-                    "SELECT id, project_id, title, sort_order, created_at, updated_at
-                     FROM headings WHERE id = ?1",
-                    params![id],
-                    Self::map_heading_row,
-                )
-                .optional()?
-                .ok_or_else(|| MattersError::NotFound {
-                    entity: "heading",
-                    id: id.to_string(),
-                })?;
-            let task_ids = {
-                let mut stmt =
-                    tx.prepare("SELECT id FROM tasks WHERE heading_id = ?1 ORDER BY id")?;
-                let ids = stmt
-                    .query_map(params![id], |r| r.get(0))?
-                    .collect::<rusqlite::Result<Vec<String>>>()?;
-                ids
-            };
-            // Tasks lose the heading through `ON DELETE SET NULL`; clearing
-            // it here too keeps that true without the pragma.
-            tx.execute(
-                "UPDATE tasks SET heading_id = NULL WHERE heading_id = ?1",
-                params![id],
-            )?;
-            tx.execute("DELETE FROM headings WHERE id = ?1", params![id])?;
-            tx.commit()?;
-            Ok(DeletedHeading { heading, task_ids })
-        })
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                let heading = tx
+                    .query_row(
+                        "SELECT id, project_id, title, sort_order, created_at, updated_at
+                         FROM headings WHERE id = ?1",
+                        params![id],
+                        Self::map_heading_row,
+                    )
+                    .optional()?
+                    .ok_or_else(|| MattersError::NotFound {
+                        entity: "heading",
+                        id: id.to_string(),
+                    })?;
+                let task_ids = super::sync::task_ids(
+                    tx,
+                    "SELECT id FROM tasks WHERE heading_id = ?1 ORDER BY id",
+                    id,
+                )?;
+                // Tasks lose the heading through `ON DELETE SET NULL`;
+                // clearing it here too keeps that true without the pragma.
+                tx.execute(
+                    "UPDATE tasks SET heading_id = NULL, updated_at = ?2 WHERE heading_id = ?1",
+                    params![id, now],
+                )?;
+                tx.execute("DELETE FROM headings WHERE id = ?1", params![id])?;
+                Ok(DeletedHeading { heading, task_ids })
+            },
+            |tx, deleted| {
+                let mut commands = vec![crate::crdt::Command::SetRemoved {
+                    id: id.into(),
+                    removed: true,
+                }];
+                commands.extend(super::sync::refile_in_order(tx, &deleted.task_ids)?);
+                Ok(commands)
+            },
+        )
     }
 
     /// Undo [`Self::delete_heading`]: the heading comes back, with the tasks
     /// that were under it and are still in its project without a heading.
     pub fn restore_heading(&self, deleted: &DeletedHeading) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let h = &deleted.heading;
-            tx.execute(
-                "INSERT INTO headings (id, project_id, title, sort_order, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    h.id,
-                    h.project_id,
-                    h.title,
-                    h.sort_order,
-                    h.created_at,
-                    h.updated_at
-                ],
-            )?;
-            {
+        let now = crate::clock::now_millis();
+        let h = &Heading {
+            updated_at: now,
+            ..deleted.heading.clone()
+        };
+        self.write(
+            now,
+            |tx| {
+                tx.execute(
+                    "INSERT INTO headings (id, project_id, title, sort_order, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        h.id,
+                        h.project_id,
+                        h.title,
+                        h.sort_order,
+                        h.created_at,
+                        h.updated_at
+                    ],
+                )?;
                 let mut stmt = tx.prepare(
-                    "UPDATE tasks SET heading_id = ?1
+                    "UPDATE tasks SET heading_id = ?1, updated_at = ?4
                      WHERE id = ?2 AND project_id = ?3 AND heading_id IS NULL",
                 )?;
+                let mut back = Vec::new();
                 for task in &deleted.task_ids {
-                    stmt.execute(params![h.id, task, h.project_id])?;
+                    if stmt.execute(params![h.id, task, h.project_id, now])? > 0 {
+                        back.push(task.clone());
+                    }
                 }
-            }
-            tx.commit()?;
-            Ok(())
-        })
+                Ok(back)
+            },
+            |tx, back| {
+                let mut commands = super::sync::create_heading(tx, h)?;
+                commands.extend(super::sync::refile_in_order(tx, back)?);
+                Ok(commands)
+            },
+        )
+        .map(|_| ())
     }
 
     // =========================================================================
@@ -1287,25 +1348,37 @@ impl Database {
     /// as for [`Self::add_checklist_item`].
     pub fn rename_checklist_item(&self, id: &str, title: &str) -> Result<()> {
         let title = checklist_title(title)?;
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let changed = conn.execute(
-            "UPDATE checklist_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            params![title, now, id],
-        )?;
-        checklist_item_found(changed, id)
+        self.update_fields(
+            "checklist_items",
+            "checklist item",
+            id,
+            "title = ?1",
+            &[&title],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::Rename {
+                    id: id.into(),
+                    title: title.clone(),
+                }])
+            },
+        )
     }
 
     /// Tick or untick a checklist item. Setting the state, rather than
     /// flipping it, means a click on a stale row can't undo what it shows.
     pub fn set_checklist_item_done(&self, id: &str, done: bool) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let changed = conn.execute(
-            "UPDATE checklist_items SET is_completed = ?1, updated_at = ?2 WHERE id = ?3",
-            params![done, now, id],
-        )?;
-        checklist_item_found(changed, id)
+        self.update_fields(
+            "checklist_items",
+            "checklist item",
+            id,
+            "is_completed = ?1",
+            &[&done],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::SetDone {
+                    id: id.into(),
+                    done,
+                }])
+            },
+        )
     }
 
     /// How many of each task's checklist items are done, for the tasks in
@@ -1344,10 +1417,20 @@ impl Database {
         Ok(progress)
     }
 
+    /// Delete a checklist item. Creating it again with the same id
+    /// ([`Self::create_checklist_item`]) is how Undo puts it back.
     pub fn delete_checklist_item(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM checklist_items WHERE id = ?1", params![id])?;
-        Ok(())
+        self.update_if(
+            "DELETE FROM checklist_items WHERE id = ?1",
+            &[&id],
+            crate::clock::now_millis(),
+            || {
+                vec![crate::crdt::Command::SetRemoved {
+                    id: id.into(),
+                    removed: true,
+                }]
+            },
+        )
     }
 
     // =========================================================================
@@ -1456,16 +1539,6 @@ impl Database {
 }
 
 /// `Ok` when an update found checklist item `id` (`changed` rows).
-fn checklist_item_found(changed: usize, id: &str) -> Result<()> {
-    if changed == 0 {
-        return Err(MattersError::NotFound {
-            entity: "checklist item",
-            id: id.to_string(),
-        });
-    }
-    Ok(())
-}
-
 /// Tasks per [`Database::checklist_progress`] query: well inside SQLite's
 /// bound-parameter limit.
 const PROGRESS_CHUNK: usize = 500;

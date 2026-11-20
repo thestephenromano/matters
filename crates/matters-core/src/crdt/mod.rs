@@ -371,7 +371,26 @@ impl Document {
                 created_at,
             } => {
                 check_uuid(id)?;
-                if self.entities.contains_key(id) || self.tags.contains_key(id) || self.purged(id) {
+                if let Some(&(node, existing)) = self.entities.get(id) {
+                    // Undoing a deletion re-creates the removed heading or
+                    // checklist item: the same entity comes back, put where
+                    // the undo puts it.
+                    let meta = self.meta(node)?;
+                    let removed = matches!(
+                        meta.get("removed"),
+                        Some(ValueOrContainer::Value(loro::LoroValue::Bool(true)))
+                    );
+                    if existing != *kind || !removed || self.purged(id) {
+                        return Err(invalid(format!("'{id}' already exists")));
+                    }
+                    let parent = self.parent(*kind, parent.as_deref())?;
+                    meta.insert("removed", false).map_err(engine)?;
+                    meta.insert("title", title.as_str()).map_err(engine)?;
+                    meta.insert("updated_at", at).map_err(engine)?;
+                    self.place(&home, node, parent, anchor, false)?;
+                    return Ok(());
+                }
+                if self.tags.contains_key(id) || self.purged(id) {
                     return Err(invalid(format!("'{id}' already exists")));
                 }
                 let parent = self.parent(*kind, parent.as_deref())?;

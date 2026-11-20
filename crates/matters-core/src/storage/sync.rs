@@ -368,3 +368,61 @@ pub(crate) fn task_status(tx: &Transaction<'_>, id: &str) -> Result<Vec<Command>
         closed_by_project: closed,
     }])
 }
+
+/// The IDs `sql` selects for `id`, its only parameter.
+pub(crate) fn task_ids(tx: &Transaction<'_>, sql: &str, id: &str) -> Result<Vec<String>> {
+    let mut stmt = tx.prepare(sql)?;
+    let ids = stmt
+        .query_map(params![id], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
+/// A project's status and those of `tasks`, as stored, as commands.
+pub(crate) fn project_and_tasks_status(
+    tx: &Transaction<'_>,
+    project: &str,
+    tasks: &[String],
+) -> Result<Vec<Command>> {
+    let (status, completed_at): (String, Option<i64>) = tx.query_row(
+        "SELECT status, completed_at FROM projects WHERE id = ?1",
+        params![project],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let mut commands = vec![Command::SetStatus {
+        id: project.into(),
+        status: Status::from_str_loose(&status),
+        completed_at,
+        closed_by_project: false,
+    }];
+    for task in tasks {
+        commands.extend(task_status(tx, task)?);
+    }
+    Ok(commands)
+}
+
+/// Move each of `tasks` to where its row now says it lives, in its list's
+/// order, so the engine's lists match the rows.
+pub(crate) fn refile_in_order(tx: &Transaction<'_>, tasks: &[String]) -> Result<Vec<Command>> {
+    let mut rows = Vec::new();
+    for id in tasks {
+        rows.push(tx.query_row(
+            &format!(
+                "SELECT {} FROM tasks WHERE id = ?1",
+                super::db::TASK_COLUMNS
+            ),
+            params![id],
+            Database::map_task_row,
+        )?);
+    }
+    rows.sort_by(|x, y| x.sort_order.total_cmp(&y.sort_order));
+    let mut commands = Vec::new();
+    for task in &rows {
+        commands.push(Command::Move {
+            id: task.id.clone(),
+            parent: task_parent(task),
+            at: after(previous_in_home(tx, task)?),
+        });
+    }
+    Ok(commands)
+}
