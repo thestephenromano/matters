@@ -11,6 +11,7 @@ fn main() {
                 "qml/MainView.qml",
                 "qml/Icon.qml",
                 "qml/ChecklistEditor.qml",
+                "qml/DatePill.qml",
             ]),
     )
     .file("src/bridge.rs")

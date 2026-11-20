@@ -62,6 +62,15 @@ pub mod qobject {
         #[qproperty(QString, current_project_status)]
         /// How many of the open project's tasks are still open.
         #[qproperty(i32, current_project_open_tasks)]
+        /// The open project's notes, When (ISO start date, This Evening,
+        /// Someday) and deadline (ISO date and `DeadlineStatus`), for its
+        /// header (#56); empty outside a project.
+        #[qproperty(QString, current_project_notes)]
+        #[qproperty(QString, current_project_start_date)]
+        #[qproperty(bool, current_project_evening)]
+        #[qproperty(bool, current_project_someday)]
+        #[qproperty(QString, current_project_deadline)]
+        #[qproperty(QString, current_project_deadline_status)]
         #[qproperty(i32, inbox_count)]
         #[qproperty(i32, today_count)]
         #[qproperty(i32, upcoming_count)]
@@ -189,6 +198,38 @@ pub mod qobject {
         /// Reopen a finished project, with the tasks finishing it closed.
         #[qinvokable]
         fn reopen_project(self: Pin<&mut AppController>, project_id: &QString);
+        /// The project counterparts of `schedule_task`,
+        /// `schedule_task_typed`, `set_task_deadline`,
+        /// `set_task_deadline_typed` and `update_task_notes` (#56): the When
+        /// popover and the header's notes edit a project with them.
+        #[qinvokable]
+        fn schedule_project(self: Pin<&mut AppController>, project_id: &QString, when: &QString);
+        #[qinvokable]
+        fn schedule_project_typed(
+            self: Pin<&mut AppController>,
+            project_id: &QString,
+            text: &QString,
+            month_first: bool,
+        ) -> bool;
+        #[qinvokable]
+        fn set_project_deadline(
+            self: Pin<&mut AppController>,
+            project_id: &QString,
+            date: &QString,
+        ) -> bool;
+        #[qinvokable]
+        fn set_project_deadline_typed(
+            self: Pin<&mut AppController>,
+            project_id: &QString,
+            text: &QString,
+            month_first: bool,
+        ) -> bool;
+        #[qinvokable]
+        fn update_project_notes(
+            self: Pin<&mut AppController>,
+            project_id: &QString,
+            notes: &QString,
+        );
         #[qinvokable]
         fn schedule_task(self: Pin<&mut AppController>, task_id: &QString, when: &QString);
         #[qinvokable]
@@ -525,6 +566,12 @@ pub struct AppControllerRust {
     current_project_progress: f64,
     current_project_status: QString,
     current_project_open_tasks: i32,
+    current_project_notes: QString,
+    current_project_start_date: QString,
+    current_project_evening: bool,
+    current_project_someday: bool,
+    current_project_deadline: QString,
+    current_project_deadline_status: QString,
     inbox_count: i32,
     today_count: i32,
     upcoming_count: i32,
@@ -563,6 +610,12 @@ impl Default for AppControllerRust {
             current_project_progress: 0.0,
             current_project_status: QString::default(),
             current_project_open_tasks: 0,
+            current_project_notes: QString::default(),
+            current_project_start_date: QString::default(),
+            current_project_evening: false,
+            current_project_someday: false,
+            current_project_deadline: QString::default(),
+            current_project_deadline_status: QString::default(),
             inbox_count: 0,
             today_count: 0,
             upcoming_count: 0,
@@ -1008,20 +1061,90 @@ impl qobject::AppController {
     }
 
     pub fn set_task_deadline(self: Pin<&mut Self>, task_id: &QString, date: &QString) -> bool {
-        let date = String::from(date);
-        let deadline = if date.is_empty() {
-            None
-        } else {
-            // An ISO date, read the same way as a When date.
-            match Schedule::parse(&date) {
-                Some(Schedule::Date(d)) => Some(d),
-                _ => return false,
-            }
+        let Some(deadline) = deadline_from_iso(&String::from(date)) else {
+            return false;
+        };
+        let deadline = match deadline {
+            Schedule::Date(d) => Some(d),
+            _ => None,
         };
         let result = self.edit_task(&String::from(task_id), |task| task.deadline = deadline);
         let ok = result.is_ok();
         self.finish(result);
         ok
+    }
+
+    pub fn schedule_project(self: Pin<&mut Self>, project_id: &QString, when: &QString) {
+        let Some(schedule) = Schedule::parse(&String::from(when)) else {
+            return self.report(format!("'{when}' is not a schedule"));
+        };
+        let today = self.day.day();
+        let result = self.edit_project(&String::from(project_id), |project| {
+            project.apply_schedule(&schedule, today)
+        });
+        self.finish(result);
+    }
+
+    pub fn schedule_project_typed(
+        self: Pin<&mut Self>,
+        project_id: &QString,
+        text: &QString,
+        month_first: bool,
+    ) -> bool {
+        let Some(schedule) = self.typed_when(text, month_first) else {
+            return false;
+        };
+        let today = self.day.day();
+        let result = self.edit_project(&String::from(project_id), |project| {
+            project.apply_schedule(&schedule, today)
+        });
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn set_project_deadline(
+        self: Pin<&mut Self>,
+        project_id: &QString,
+        date: &QString,
+    ) -> bool {
+        let Some(deadline) = deadline_from_iso(&String::from(date)) else {
+            return false;
+        };
+        let result = self.edit_project(&String::from(project_id), |project| {
+            project.deadline = match deadline {
+                Schedule::Date(d) => Some(d),
+                _ => None,
+            }
+        });
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn set_project_deadline_typed(
+        self: Pin<&mut Self>,
+        project_id: &QString,
+        text: &QString,
+        month_first: bool,
+    ) -> bool {
+        let order = Self::date_order(month_first);
+        let Some(date) = Schedule::parse_typed_deadline(&String::from(text), self.day.day(), order)
+        else {
+            return false;
+        };
+        let result = self.edit_project(&String::from(project_id), |project| {
+            project.deadline = Some(date)
+        });
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn update_project_notes(self: Pin<&mut Self>, project_id: &QString, notes: &QString) {
+        let notes = String::from(notes);
+        let result = self.edit_project(&String::from(project_id), |project| project.notes = notes);
+        self.finish(result);
     }
 
     pub fn rename_task(self: Pin<&mut Self>, task_id: &QString, title: &QString) -> bool {
@@ -1075,6 +1198,19 @@ impl qobject::AppController {
     }
 
     // ---- internals ----------------------------------------------------------
+
+    fn edit_project(&self, id: &str, edit: impl FnOnce(&mut Project)) -> matters_core::Result<()> {
+        match self.db.get_project(id)? {
+            Some(mut project) => {
+                edit(&mut project);
+                self.db.update_project(&project)
+            }
+            None => Err(matters_core::MattersError::NotFound {
+                entity: "project",
+                id: id.to_string(),
+            }),
+        }
+    }
 
     fn edit_task(&self, id: &str, edit: impl FnOnce(&mut Task)) -> matters_core::Result<()> {
         if let Some(mut task) = self.db.get_task(id)? {
@@ -1294,6 +1430,7 @@ impl qobject::AppController {
             progress,
             status,
             open_tasks,
+            details,
         ) = {
             let engine = QueryEngine::new(&self.db);
             let counts = engine.counts(self.day.day())?;
@@ -1303,12 +1440,14 @@ impl qobject::AppController {
             let trashed_areas = self.db.list_trashed_areas()?;
             let mut status = "";
             let mut open_tasks = 0;
+            let mut details = None;
             let (title, progress) = match &self.view {
                 View::Project(id) => {
                     let project = self.db.get_project(id)?;
                     let progress = engine.project_progress(id)?;
                     status = project.as_ref().map_or("", |p| p.status.as_str());
                     open_tasks = progress.total_tasks - progress.completed_tasks;
+                    details = project.clone();
                     (
                         project.map_or_else(|| "Project".into(), |p| p.title),
                         progress.ratio(),
@@ -1333,6 +1472,7 @@ impl qobject::AppController {
                 progress,
                 status,
                 open_tasks,
+                details,
             )
         };
 
@@ -1356,6 +1496,23 @@ impl qobject::AppController {
             .set_current_project_status(QString::from(status));
         self.as_mut()
             .set_current_project_open_tasks(count(open_tasks));
+        let project = details.unwrap_or_default();
+        let iso = |d: Option<String>| d.unwrap_or_default();
+        self.as_mut()
+            .set_current_project_notes(QString::from(project.notes.as_str()));
+        self.as_mut().set_current_project_start_date(QString::from(
+            iso(project.start_date.map(|d| d.to_string())).as_str(),
+        ));
+        self.as_mut()
+            .set_current_project_evening(project.time_of_day.as_deref() == Some("evening"));
+        self.as_mut()
+            .set_current_project_someday(project.is_someday);
+        self.as_mut().set_current_project_deadline(QString::from(
+            iso(project.deadline.map(|d| d.to_string())).as_str(),
+        ));
+        let deadline_status = deadline_key(project.deadline_status(self.day.day()));
+        self.as_mut()
+            .set_current_project_deadline_status(QString::from(deadline_status));
         Ok(())
     }
 
@@ -1402,6 +1559,19 @@ fn search_results(found: &matters_core::QuickFindResult) -> Vec<SearchResult<'_>
         title: &t.title,
     });
     areas.chain(projects).chain(tasks).collect()
+}
+
+/// A deadline as QML sets it: an ISO date, read the same way as a When
+/// date (`Schedule::Date`), or an empty string to clear it
+/// (`Schedule::None`). `None` when the text is neither.
+fn deadline_from_iso(text: &str) -> Option<Schedule> {
+    if text.is_empty() {
+        return Some(Schedule::None);
+    }
+    match Schedule::parse(text) {
+        Some(date @ Schedule::Date(_)) => Some(date),
+        _ => None,
+    }
 }
 
 /// How QML names a `DeadlineStatus`: none, set, today or overdue.

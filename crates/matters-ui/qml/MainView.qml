@@ -598,6 +598,15 @@ Item {
         taskListView.selectedTaskId = id;
         scrollToTask(id);
         whenPopup.taskId = id;
+        whenPopup.forProject = false;
+        whenPopup.mode = mode;
+        whenPopup.open();
+    }
+
+    // The same popover for the open project's When or deadline (#56).
+    function openProjectDatePopup(mode) {
+        whenPopup.taskId = controller.currentProjectId;
+        whenPopup.forProject = true;
         whenPopup.mode = mode;
         whenPopup.open();
     }
@@ -620,11 +629,7 @@ Item {
         today.setHours(0, 0, 0, 0);
         if (date < today)
             return;
-        const iso = Qt.formatDate(date, "yyyy-MM-dd");
-        if (whenPopup.mode === "deadline")
-            controller.setTaskDeadline(whenPopup.taskId, iso);
-        else
-            controller.scheduleTask(whenPopup.taskId, iso);
+        whenPopup.apply(Qt.formatDate(date, "yyyy-MM-dd"));
         whenPopup.close();
     }
 
@@ -1451,6 +1456,117 @@ Item {
                     }
                 }
 
+                // A project's When, deadline and notes (#56), under its title.
+                ColumnLayout {
+                    objectName: "projectDetails"
+                    visible: controller.currentView === "project"
+                    Layout.fillWidth: true
+                    // In line with the title, past the toggle and the pie.
+                    Layout.leftMargin: 78
+                    Layout.topMargin: -10
+                    spacing: 6
+
+                    RowLayout {
+                        spacing: 8
+
+                        DatePill {
+                            objectName: "projectWhen"
+                            label: root.describeWhenOf(controller.currentProjectStartDate,
+                                controller.currentProjectEvening, controller.currentProjectSomeday)
+                            hasValue: controller.currentProjectStartDate !== ""
+                                || controller.currentProjectEvening || controller.currentProjectSomeday
+                            iconName: "calendar"
+                            textPrimary: root.colTextPrimary
+                            textSecondary: root.colTextSecondary
+                            lineColor: root.colBorder
+                            hoverColor: root.colSidebarHover
+                            downColor: root.colSidebarActive
+                            ToolTip.visible: hovered
+                            ToolTip.text: "When the project starts"
+                            onClicked: root.openProjectDatePopup("when")
+                        }
+
+                        DatePill {
+                            objectName: "projectDeadline"
+                            label: controller.currentProjectDeadline === "" ? "Deadline"
+                                : root.describeDeadline(controller.currentProjectDeadline, controller.currentProjectDeadlineStatus)
+                            hasValue: controller.currentProjectDeadline !== ""
+                            iconName: "deadline"
+                            textPrimary: root.colTextPrimary
+                            textSecondary: root.colTextSecondary
+                            lineColor: root.colBorder
+                            hoverColor: root.colSidebarHover
+                            downColor: root.colSidebarActive
+                            ToolTip.visible: hovered
+                            ToolTip.text: "The project's deadline"
+                            onClicked: root.openProjectDatePopup("deadline")
+                        }
+                    }
+
+                    // Saves after a pause in typing and when editing ends,
+                    // like a task's notes.
+                    TextArea {
+                        id: projectNotes
+                        objectName: "projectNotes"
+                        // The project whose notes are in the editor, and what
+                        // was last loaded or saved for it.
+                        property string projectId: ""
+                        property string saved: ""
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.max(32, contentHeight + topPadding + bottomPadding)
+                        placeholderText: "Notes"
+                        font.pixelSize: 13
+                        color: root.colTextPrimary
+                        wrapMode: TextArea.Wrap
+                        leftPadding: 0
+                        background: null
+
+                        function save() {
+                            projectNotesTimer.stop();
+                            if (projectId !== "" && text !== saved) {
+                                saved = text;
+                                controller.updateProjectNotes(projectId, text);
+                            }
+                        }
+
+                        // Not a binding: while the user is typing, the stored
+                        // notes must not overwrite the editor.
+                        function load() {
+                            projectId = controller.currentProjectId;
+                            saved = controller.currentProjectNotes;
+                            text = saved;
+                        }
+                        Component.onCompleted: load()
+                        Connections {
+                            target: controller
+                            // The id changes before the controller has
+                            // switched projects: what was typed is saved to
+                            // the project it was typed for at once, and the
+                            // next project's notes are loaded once it is open.
+                            function onCurrentProjectIdChanged() {
+                                projectNotes.save();
+                                Qt.callLater(projectNotes.load);
+                            }
+                            function onCurrentProjectNotesChanged() {
+                                if (!projectNotes.activeFocus && projectNotes.projectId === controller.currentProjectId) {
+                                    projectNotes.saved = controller.currentProjectNotes;
+                                    projectNotes.text = projectNotes.saved;
+                                }
+                            }
+                        }
+
+                        onTextChanged: if (activeFocus) projectNotesTimer.restart()
+                        onEditingFinished: save()
+                        Keys.onEscapePressed: taskListView.forceActiveFocus()
+
+                        Timer {
+                            id: projectNotesTimer
+                            interval: 600
+                            onTriggered: projectNotes.save()
+                        }
+                    }
+                }
+
                 // Quick Task Input Bar (not in the Logbook or the Trash)
                 Rectangle {
                     objectName: "quickAddBar"
@@ -1881,24 +1997,30 @@ Item {
                                 }
                             }
 
-                            // A finished project in the Logbook stands for its
-                            // tasks (#55); clicking it opens the project.
+                            // A project listed as a row: finished, in the
+                            // Logbook, standing for its tasks (#55); due in
+                            // Today, starting in Upcoming, or deferred in Someday
+                            // (#56). Clicking it opens the project.
                             DelegateChoice {
                                 roleValue: "project"
                                 delegate: Rectangle {
                                     id: projectRow
-                                    objectName: "logbookProject"
+                                    objectName: "projectRow"
                                     required property string taskId
                                     required property string title
                                     required property bool done
+                                    required property string status
+                                    required property string deadline
+                                    required property string deadlineStatus
                                     required property int index
+                                    readonly property bool finished: status === "completed" || status === "canceled"
                                     readonly property real targetHeight: height
                                     width: taskListView.width
                                     height: 48
                                     radius: 8
                                     color: projectRowMouse.containsMouse ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
                                     Accessible.role: Accessible.ListItem
-                                    Accessible.name: (done ? "Completed project: " : "Canceled project: ") + title
+                                    Accessible.name: projectOutcome.text + ": " + title
 
                                     RowLayout {
                                         anchors.fill: parent
@@ -1907,15 +2029,16 @@ Item {
                                         anchors.rightMargin: 16
                                         spacing: 12
 
-                                        // A full pie when completed, a crossed
-                                        // ring when canceled.
+                                        // A ring for an open project, a full pie
+                                        // when completed, a crossed ring when
+                                        // canceled.
                                         Rectangle {
                                             Layout.preferredWidth: 20
                                             Layout.preferredHeight: 20
                                             radius: 10
                                             color: "transparent"
                                             border.width: 2
-                                            border.color: projectRow.done ? root.colAccent : root.colTextSecondary
+                                            border.color: projectRow.status === "canceled" ? root.colTextSecondary : root.colAccent
 
                                             Rectangle {
                                                 visible: projectRow.done
@@ -1926,7 +2049,7 @@ Item {
                                                 color: root.colAccent
                                             }
                                             Icon {
-                                                visible: !projectRow.done
+                                                visible: projectRow.status === "canceled"
                                                 anchors.centerIn: parent
                                                 name: "close"
                                                 size: 12
@@ -1937,15 +2060,24 @@ Item {
                                             text: projectRow.title
                                             font.pixelSize: 15
                                             font.weight: Font.DemiBold
-                                            color: root.colTextSecondary
+                                            color: projectRow.finished ? root.colTextSecondary : root.colTextPrimary
                                             elide: Text.ElideRight
                                             Layout.fillWidth: true
                                         }
+                                        // What the row is, or for a due project
+                                        // its deadline, in red like a task's.
                                         Text {
-                                            objectName: "logbookProjectOutcome"
-                                            text: projectRow.done ? "Completed project" : "Canceled project"
+                                            id: projectOutcome
+                                            objectName: "projectRowLabel"
+                                            readonly property bool urgent: !projectRow.finished
+                                                && (projectRow.deadlineStatus === "today" || projectRow.deadlineStatus === "overdue")
+                                            text: projectRow.status === "completed" ? "Completed project"
+                                                : projectRow.status === "canceled" ? "Canceled project"
+                                                : urgent ? root.describeDeadline(projectRow.deadline, projectRow.deadlineStatus)
+                                                : "Project"
                                             font.pixelSize: 12
-                                            color: root.colTextSecondary
+                                            font.weight: urgent ? Font.DemiBold : Font.Normal
+                                            color: urgent ? (root.isDark ? "#FFA8A8" : "#C92A2A") : root.colTextSecondary
                                         }
                                     }
 
@@ -2517,94 +2649,32 @@ Item {
                                                     onClicked: if (checklistLoader.editor) checklistLoader.editor.startAdding("")
                                                 }
 
-                                                ToolButton {
-                                                    id: whenControl
+                                                DatePill {
                                                     objectName: "schedule-date"
-                                                    focusPolicy: Qt.NoFocus
-                                                    font.pixelSize: 12
-                                                    property string label: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
-                                                    readonly property bool hasValue: taskRow.startDate !== "" || taskRow.evening || taskRow.someday
-                                                    Accessible.name: label
-                                                    Accessible.role: Accessible.ButtonMenu
-                                                    leftPadding: 10
-                                                    rightPadding: 8
-                                                    topPadding: 4
-                                                    bottomPadding: 4
-                                                    background: Rectangle {
-                                                        implicitHeight: 26
-                                                        radius: height / 2
-                                                        color: whenControl.down ? root.colSidebarActive
-                                                            : whenControl.hovered ? root.colSidebarHover : "transparent"
-                                                        border.width: 1
-                                                        border.color: root.colBorder
-                                                    }
-                                                    contentItem: RowLayout {
-                                                        spacing: 6
-                                                        Icon {
-                                                            name: "calendar"
-                                                            size: 14
-                                                            color: root.colTextSecondary
-                                                        }
-                                                        Text {
-                                                            objectName: "pillLabel"
-                                                            text: whenControl.label
-                                                            font: whenControl.font
-                                                            color: whenControl.hasValue ? root.colTextPrimary : root.colTextSecondary
-                                                        }
-                                                        Icon {
-                                                            objectName: "pillChevron"
-                                                            name: "chevron-down"
-                                                            size: 12
-                                                            color: root.colTextSecondary
-                                                        }
-                                                    }
+                                                    label: root.describeWhenOf(taskRow.startDate, taskRow.evening, taskRow.someday)
+                                                    hasValue: taskRow.startDate !== "" || taskRow.evening || taskRow.someday
+                                                    iconName: "calendar"
+                                                    textPrimary: root.colTextPrimary
+                                                    textSecondary: root.colTextSecondary
+                                                    lineColor: root.colBorder
+                                                    hoverColor: root.colSidebarHover
+                                                    downColor: root.colSidebarActive
                                                     ToolTip.visible: hovered
                                                     ToolTip.text: "Change when (Ctrl+S)"
                                                     onClicked: root.openWhenFor(taskRow.taskId)
                                                 }
 
-                                                ToolButton {
-                                                    id: deadlineControl
+                                                DatePill {
                                                     objectName: "schedule-deadline"
-                                                    focusPolicy: Qt.NoFocus
-                                                    font.pixelSize: 12
-                                                    property string label: taskRow.deadline === "" ? "Deadline"
+                                                    label: taskRow.deadline === "" ? "Deadline"
                                                         : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
-                                                    readonly property bool hasValue: taskRow.deadline !== ""
-                                                    Accessible.name: label
-                                                    Accessible.role: Accessible.ButtonMenu
-                                                    leftPadding: 10
-                                                    rightPadding: 8
-                                                    topPadding: 4
-                                                    bottomPadding: 4
-                                                    background: Rectangle {
-                                                        implicitHeight: 26
-                                                        radius: height / 2
-                                                        color: deadlineControl.down ? root.colSidebarActive
-                                                            : deadlineControl.hovered ? root.colSidebarHover : "transparent"
-                                                        border.width: 1
-                                                        border.color: root.colBorder
-                                                    }
-                                                    contentItem: RowLayout {
-                                                        spacing: 6
-                                                        Icon {
-                                                            name: "deadline"
-                                                            size: 14
-                                                            color: root.colTextSecondary
-                                                        }
-                                                        Text {
-                                                            objectName: "pillLabel"
-                                                            text: deadlineControl.label
-                                                            font: deadlineControl.font
-                                                            color: deadlineControl.hasValue ? root.colTextPrimary : root.colTextSecondary
-                                                        }
-                                                        Icon {
-                                                            objectName: "pillChevron"
-                                                            name: "chevron-down"
-                                                            size: 12
-                                                            color: root.colTextSecondary
-                                                        }
-                                                    }
+                                                    hasValue: taskRow.deadline !== ""
+                                                    iconName: "deadline"
+                                                    textPrimary: root.colTextPrimary
+                                                    textSecondary: root.colTextSecondary
+                                                    lineColor: root.colBorder
+                                                    hoverColor: root.colSidebarHover
+                                                    downColor: root.colSidebarActive
                                                     ToolTip.visible: hovered
                                                     ToolTip.text: "Change the deadline (Ctrl+D)"
                                                     onClicked: root.openDeadlineFor(taskRow.taskId)
@@ -3201,11 +3271,37 @@ Item {
     Popup {
         id: whenPopup
         objectName: "whenPopup"
+        // The task, or with `forProject` the project (#56), being dated.
         property string taskId: ""
-        // "when" sets the task's When; "deadline" its deadline.
+        property bool forProject: false
+        // "when" sets the When; "deadline" the deadline.
         property string mode: "when"
         // The day the calendar's keyboard cursor is on.
         property date cursor: new Date()
+
+        // Set the When (a `Schedule::parse` key or ISO date) or, in deadline
+        // mode, the deadline (an ISO date, or "" to clear it).
+        function apply(value) {
+            if (mode === "deadline") {
+                if (forProject)
+                    controller.setProjectDeadline(taskId, value);
+                else
+                    controller.setTaskDeadline(taskId, value);
+            } else if (forProject) {
+                controller.scheduleProject(taskId, value);
+            } else {
+                controller.scheduleTask(taskId, value);
+            }
+        }
+
+        // Typed text; false when it is refused.
+        function applyTyped(text) {
+            if (mode === "deadline")
+                return forProject ? controller.setProjectDeadlineTyped(taskId, text, root.monthFirst)
+                    : controller.setTaskDeadlineTyped(taskId, text, root.monthFirst);
+            return forProject ? controller.scheduleProjectTyped(taskId, text, root.monthFirst)
+                : controller.scheduleTaskTyped(taskId, text, root.monthFirst);
+        }
 
         x: (parent.width - width) / 2
         y: 120
@@ -3274,10 +3370,7 @@ Item {
                 // Enter applies what was typed; a refused text keeps the
                 // popover open.
                 onAccepted: {
-                    const applied = whenPopup.mode === "deadline"
-                        ? controller.setTaskDeadlineTyped(whenPopup.taskId, text, root.monthFirst)
-                        : controller.scheduleTaskTyped(whenPopup.taskId, text, root.monthFirst);
-                    if (applied)
+                    if (whenPopup.applyTyped(text))
                         whenPopup.close();
                 }
                 // Down moves into the calendar.
@@ -3318,9 +3411,9 @@ Item {
                         onClicked: {
                             if (whenPopup.mode === "deadline") {
                                 const today = Qt.formatDate(new Date(), "yyyy-MM-dd");
-                                controller.setTaskDeadline(whenPopup.taskId, modelData.when === "today" ? today : "");
+                                whenPopup.apply(modelData.when === "today" ? today : "");
                             } else {
-                                controller.scheduleTask(whenPopup.taskId, modelData.when);
+                                whenPopup.apply(modelData.when);
                             }
                             whenPopup.close();
                         }

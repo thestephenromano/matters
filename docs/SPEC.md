@@ -41,7 +41,8 @@ Area (e.g. Work, Personal, Finances)
 2. **Project:**
    * An objective with a definite outcome that can be completed.
    * Has an iconic **circular progress ring** displaying `completed / total` ratio.
-   * Can have a start date (`When`), `Deadline`, tags, and notes.
+   * Can have a start date (`When`), `Deadline`, tags, and notes. Notes, When and Deadline are edited under its title, with the same popover as a task's.
+   * A project that is Someday, or starts after today, holds its tasks back: they leave Today and Anytime until it starts (a Someday project's tasks leave Upcoming too), and the project is listed instead, in Someday or in Upcoming on the day it starts. Today lists a project whose deadline has come. A project's deadline is not copied onto its tasks.
    * Can reside inside an Area or at the top level.
    * Completed or canceled from its menu, or with **Complete Project** once every task is done. If tasks are still open, a dialog asks whether to complete or cancel them with the project, or keep it open: no task is closed silently.
    * A finished project leaves the sidebar, and its tasks leave Today, Upcoming, Anytime and Someday. The Logbook lists it as one row, which opens it.
@@ -97,7 +98,7 @@ The sidebar provides access to the foundational GTD buckets:
 
 ### 5. Someday
 * Incubator for long-term ideas, backlog items, or deferred projects.
-* Tasks and projects marked `When = Someday` are hidden from Today, Upcoming, and Anytime.
+* Tasks and projects marked `When = Someday` are hidden from Today, Upcoming, and Anytime, and so are the tasks of a Someday project. Someday lists such projects above its tasks.
 
 ### 6. Logbook
 * Archive of completed and canceled tasks and projects, grouped by completion date. A finished project is one row standing for its tasks.
