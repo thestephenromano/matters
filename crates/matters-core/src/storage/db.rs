@@ -7,7 +7,7 @@ use super::schema::{
 };
 use super::trash;
 use crate::domain::{
-    Area, ChecklistItem, ChecklistProgress, DeletedHeading, Heading, Project, Status, Task,
+    Area, ChecklistItem, ChecklistProgress, DeletedHeading, Heading, Home, Project, Status, Task,
 };
 use crate::error::{MattersError, Result};
 
@@ -250,33 +250,41 @@ impl Database {
         Ok(())
     }
 
-    /// File a project in an area, or take it out of one (`None`). The area
-    /// must exist and not be in the Trash.
+    /// File a project in an area, or take it out of one (`None`), at the
+    /// end of the area's projects. The area must exist and not be in the
+    /// Trash. Filing a project where it already is changes nothing.
     pub fn set_project_area(&self, project_id: &str, area_id: Option<&str>) -> Result<()> {
-        if let Some(area_id) = area_id {
-            match self.get_area(area_id)? {
-                Some(area) if !area.is_trashed() => {}
-                _ => {
-                    return Err(MattersError::NotFound {
-                        entity: "area",
-                        id: area_id.to_string(),
-                    })
-                }
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            if let Some(area_id) = area_id {
+                Self::check_live(&tx, "areas", trash::LIVE_AREA, "area", area_id)?;
             }
-        }
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let changed = conn.execute(
-            "UPDATE projects SET area_id = ?1, updated_at = ?2 WHERE id = ?3",
-            params![area_id, now, project_id],
-        )?;
-        if changed == 0 {
-            return Err(MattersError::NotFound {
-                entity: "project",
-                id: project_id.to_string(),
-            });
-        }
-        Ok(())
+            let current: Option<Option<String>> = tx
+                .query_row(
+                    "SELECT area_id FROM projects WHERE id = ?1",
+                    params![project_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(current) = current else {
+                return Err(MattersError::NotFound {
+                    entity: "project",
+                    id: project_id.to_string(),
+                });
+            };
+            if current.as_deref() == area_id {
+                return Ok(());
+            }
+            let now = crate::clock::now_millis();
+            tx.execute(
+                "UPDATE projects SET area_id = ?1, updated_at = ?2,
+                    sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM projects)
+                 WHERE id = ?3",
+                params![area_id, now, project_id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     /// Move an area to the Trash, taking its projects and tasks with it: they
@@ -619,8 +627,12 @@ impl Database {
         self.create_task(task)
     }
 
+    /// Store a new task as given, order keys included. Its home must be
+    /// valid: at most one of an area or a project, and a heading only of
+    /// its own project ([`Home::of`]); nothing is stored otherwise.
     pub fn create_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        Self::check_home(&conn, task)?;
         let start_date = task.start_date.map(|d| d.to_string());
         let deadline = task.deadline.map(|d| d.to_string());
         let is_someday = if task.is_someday { 1 } else { 0 };
@@ -665,8 +677,13 @@ impl Database {
     /// them: they change only through the ordering operations
     /// (`crate::ordering`) and [`Self::trash_task`] / [`Self::restore_task`],
     /// so saving a stale copy can't reorder, trash or resurrect a task.
+    ///
+    /// The task's home must be valid, as for [`Self::create_task`]; nothing
+    /// is written otherwise. [`Self::move_task`] is the way to file a task
+    /// somewhere else.
     pub fn update_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        Self::check_home(&conn, task)?;
         let now = crate::clock::now_millis();
         let start_date = task.start_date.map(|d| d.to_string());
         let deadline = task.deadline.map(|d| d.to_string());
@@ -716,6 +733,116 @@ impl Database {
             });
         }
         Ok(())
+    }
+
+    /// File a task in `home` (the Move popover, SPEC §4), at the end of
+    /// that list: under a heading, at the end of the heading's tasks. The
+    /// task keeps everything else: its schedule, deadline, notes and
+    /// checklist. So a scheduled task sent to the Inbox shows where its
+    /// schedule puts it, as the Inbox lists only unscheduled tasks.
+    ///
+    /// The task must not be in the Trash, and neither may the destination,
+    /// itself or through its area; a heading must belong to the project
+    /// named with it. Moving a task to where it already is changes nothing,
+    /// not even its place in the list.
+    pub fn move_task(&self, id: &str, home: &Home) -> Result<()> {
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let mut task = tx
+                .query_row(
+                    &format!(
+                        "SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND {}",
+                        trash::LIVE_TASK
+                    ),
+                    params![id],
+                    Self::map_task_row,
+                )
+                .optional()?
+                .ok_or_else(|| MattersError::NotFound {
+                    entity: "task",
+                    id: id.to_string(),
+                })?;
+            match home {
+                Home::Inbox => {}
+                Home::Area(area) => {
+                    Self::check_live(&tx, "areas", trash::LIVE_AREA, "area", area)?;
+                }
+                Home::Project { project, .. } => {
+                    Self::check_live(&tx, "projects", trash::LIVE_PROJECT, "project", project)?;
+                }
+            }
+            if Home::of(&task).ok().as_ref() == Some(home) {
+                return Ok(());
+            }
+            home.apply(&mut task);
+            Self::check_home(&tx, &task)?;
+            let now = crate::clock::now_millis();
+            tx.execute(
+                "UPDATE tasks SET area_id = ?1, project_id = ?2, heading_id = ?3, updated_at = ?4,
+                    sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks)
+                 WHERE id = ?5",
+                params![task.area_id, task.project_id, task.heading_id, now, id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Refuse a task whose ids name no valid home: both an area and a
+    /// project, a heading without a project ([`Home::of`]), or a heading of
+    /// another project. Every task write goes through this, so no path can
+    /// store a broken hierarchy.
+    fn check_home(conn: &Connection, task: &Task) -> Result<()> {
+        if let Home::Project {
+            project,
+            heading: Some(heading),
+        } = Home::of(task)?
+        {
+            let owner: Option<String> = conn
+                .query_row(
+                    "SELECT project_id FROM headings WHERE id = ?1",
+                    params![heading],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match owner {
+                None => {
+                    return Err(MattersError::NotFound {
+                        entity: "heading",
+                        id: heading,
+                    })
+                }
+                Some(owner) if owner != project => {
+                    return Err(MattersError::Validation(format!(
+                        "heading '{heading}' is not in project '{project}'"
+                    )))
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// `NotFound` unless `table` has a row `id` meeting `live`, one of the
+    /// [`trash`] conditions.
+    fn check_live(
+        conn: &Connection,
+        table: &str,
+        live: &str,
+        entity: &'static str,
+        id: &str,
+    ) -> Result<()> {
+        let found = conn
+            .query_row(
+                &format!("SELECT 1 FROM {table} WHERE id = ?1 AND {live}"),
+                params![id],
+                |_| Ok(()),
+            )
+            .optional()?;
+        found.ok_or_else(|| MattersError::NotFound {
+            entity,
+            id: id.to_string(),
+        })
     }
 
     pub fn complete_task(&self, id: &str) -> Result<()> {
