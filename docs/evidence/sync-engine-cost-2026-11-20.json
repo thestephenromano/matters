@@ -1,0 +1,119 @@
+{
+  "date": "2026-11-20",
+  "issue": 35,
+  "what": "Same-host cost of recording typed writes in the sync engine, against the unchanged write path (sync off)",
+  "source_commit": "9fcf1c53fbe9f99324514fc9f6cce2ffaf7488be",
+  "command": [
+    "cargo",
+    "run",
+    "--release",
+    "-p",
+    "matters-core",
+    "--example",
+    "sync_cost",
+    "--",
+    "target/sync-cost",
+    "1000",
+    "10000"
+  ],
+  "host": {
+    "name": "betelgeuse",
+    "cpu": "Intel(R) Core(TM) i9-10920X CPU @ 3.50GHz",
+    "logical_cpus": 23,
+    "memory_kb": 65529560,
+    "kernel": "Linux 7.3.4-200.fc44.x86_64",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "filesystem": "btrfs on /dev/nvme0n1p3 (/home)",
+    "sqlite": "bundled, WAL, synchronous=FULL as the app opens it",
+    "conditions": "shared development host with other sessions; no CPU pinning; one run"
+  },
+  "workload": "tasks created with add_task, each with 1 KiB notes; then 200 renames (rename_task), each a durable save; then the database is reopened",
+  "runs": [
+    {
+      "create_all_s": 1.6838845359999999,
+      "database_file_bytes": 1638400,
+      "journal_bytes": 0,
+      "journal_rows": 0,
+      "reopen_ms": 0.724891,
+      "save_ms": {
+        "p50": 0.889752,
+        "p95": 3.77069,
+        "p99": 6.019176,
+        "samples": 200
+      },
+      "sync": false,
+      "tasks": 1000
+    },
+    {
+      "create_all_s": 3.322453679,
+      "database_file_bytes": 3715072,
+      "journal_bytes": 1458511,
+      "journal_rows": 1200,
+      "reopen_ms": 87.51530000000001,
+      "save_ms": {
+        "p50": 0.986106,
+        "p95": 3.16134,
+        "p99": 4.958554,
+        "samples": 200
+      },
+      "sync": true,
+      "tasks": 1000
+    },
+    {
+      "create_all_s": 74.831282816,
+      "database_file_bytes": 14950400,
+      "journal_bytes": 0,
+      "journal_rows": 0,
+      "reopen_ms": 0.670416,
+      "save_ms": {
+        "p50": 4.244398,
+        "p95": 8.522289,
+        "p99": 10.491216,
+        "samples": 200
+      },
+      "sync": false,
+      "tasks": 10000
+    },
+    {
+      "create_all_s": 410.635989094,
+      "database_file_bytes": 35504128,
+      "journal_bytes": 14768809,
+      "journal_rows": 10200,
+      "reopen_ms": 605.45081,
+      "save_ms": {
+        "p50": 1.012836,
+        "p95": 3.75692,
+        "p99": 5.200824,
+        "samples": 200
+      },
+      "sync": true,
+      "tasks": 10000
+    }
+  ],
+  "budgets": {
+    "durable_save_p95_ms_at_10000": {
+      "budget": 100,
+      "measured_sync_on": 3.75692,
+      "met": true
+    },
+    "bootstrap_s_at_10000": {
+      "budget": 5,
+      "measured_reopen_sync_on_s": 0.60545081,
+      "met": true
+    },
+    "peak_rss": "not measured"
+  },
+  "findings": [
+    "Saves stay within the budget: p95 under 4 ms with sync on at both sizes, no worse than sync off on this host.",
+    "Reopen replays the whole journal: 87.5 ms at 1,000 tasks, 605.5 ms at 10,000. It grows with history until checkpoints (#40) bound it.",
+    "Creating tasks with sync on costs about 41 ms each at 10,000 tasks against 7.5 ms with sync off, growing with the task count: each create finds its predecessor by key, and tasks have no index on sort_order or today_order. Within the save budget, but a measured scaling cost to remove.",
+    "Journal: about 1.4 KB per created task with 1 KiB notes, and the database file roughly 2.4x the sync-off size at 10,000 tasks. Retention is unbounded until #40."
+  ],
+  "limits": [
+    "One run on one shared host; distributions are of 200 renames, not repeated runs.",
+    "No aarch64 run.",
+    "Peak RSS not measured.",
+    "Receiving updates and rebuilding rows were not measured here."
+  ],
+  "source_note": "Measured on a branch commit whose crates/matters-core/src is identical to main at 9fcf1c5 (git diff shows no source change); the branch commit was later rebased."
+}

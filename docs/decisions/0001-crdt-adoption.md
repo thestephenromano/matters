@@ -129,6 +129,14 @@ Status, finish time and the "closed by its project" mark share one register, and
 
 With sync on, every typed write records its engine commands in the transaction that changes the rows, and the engine is rebuilt from the journal if that transaction fails. Only schema migrations write outside `Database::write`. Ordering records each changed key as a placement after its predecessor among its siblings, and Today anchors within the task's section. Empty Trash records the exact set of entities it deletes, cascades included. Converting a task into a project purges the task and its checklist, so a concurrent edit to the old task elsewhere is dropped, as with Empty Trash.
 
+### Measured cost (#35, 2026-11-20)
+
+[The engine cost record](../evidence/sync-engine-cost-2026-11-20.json) compares sync on with the unchanged write path on `betelgeuse` (i9-10920X, NVMe/Btrfs, Fedora 44), at 1,000 and 10,000 tasks with 1 KiB notes:
+- **Saves meet the budget.** Durable save p95 is 3.16 and 3.76 ms with sync on, against 3.77 and 8.52 ms with sync off.
+- **Reopen meets the budget.** It replays the journal: 87.5 ms and 605.5 ms, against the 5 s bootstrap budget.
+- **Creating a task costs more and grows.** About 41 ms per task at 10,000 tasks, against 7.5 ms with sync off, growing with the task count because predecessors are found by unindexed key lookups. That is a scaling cost to remove before a pilot.
+- **Not measured:** peak RSS, and receiving or rebuilding at these sizes.
+
 ## Migration and evaluation gates
 
 One device imports a backed-up SQL database into a new genesis lineage, preserving UUIDs, timestamps, views and existing ordering. Resolve contradictory legacy parent references through a report and explicit choice before conversion. Other devices bootstrap from this lineage; they do not independently convert matching SQL rows. Later independent collections require an explicit import/deduplication workflow. Clone/restore preserves queued edits but assigns a fresh engine writer incarnation before new edits.
