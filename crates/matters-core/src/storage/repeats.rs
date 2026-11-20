@@ -156,6 +156,26 @@ impl Database {
         Ok(created)
     }
 
+    /// The repeating series' future occurrences from `from` up to `until`
+    /// (exclusive), for Upcoming to preview (#61): of each live series
+    /// whose project, if any, is open.
+    pub fn repeat_previews(&self, from: Date, until: Date) -> Result<Vec<crate::repeat::Preview>> {
+        let heads: Vec<Task> = self.with_conn(|conn| {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {TASK_COLUMNS} FROM tasks
+                 WHERE repeat_rule IS NOT NULL AND {LIVE_TASK}
+                   AND (project_id IS NULL OR project_id IN
+                        (SELECT id FROM projects WHERE status = 'open'))"
+            ))?;
+            let rows = stmt.query_map([], Database::map_task_row)?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })?;
+        Ok(heads
+            .iter()
+            .flat_map(|head| crate::repeat::Preview::of(head, from, until))
+            .collect())
+    }
+
     /// Complete task `id` on local day `today`. If it is the newest
     /// occurrence of a series that repeats after completion, the next
     /// occurrence is created in the same change.

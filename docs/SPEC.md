@@ -174,6 +174,21 @@ A task can remind at a time of day on its start date (#60). The When popover's r
 
 The rules are `matters_core::reminders`; the notifications, `matters_ui::reminders` and `matters_ui::notify`.
 
+### Repeating tasks
+A task can repeat (#61). The When popover says how it repeats, and **Repeat…** opens the Repeat dialog:
+
+* **How often:** every N days; weeks, on the days chosen; months, on the task's day of the month, on its weekday of the month (the third Saturday), on the last such weekday, or on the month's last day; or years, on the task's date.
+* **Counted from:** on a schedule from the task's date, or a set time after each occurrence is completed.
+* **Ends:** never, on a day (typed, as for a deadline), or after a number of times. A repeating task can also be **Paused**.
+
+On a schedule, the dates are those on or after the start that match. A month without the day (the 31st, a fifth Monday, 29 February) is skipped, as iCalendar (RFC 5545) has it. After completion, the next date is the day it was completed plus the interval; a month or a year after the 31st or 29 February falls on the month's last day.
+
+* **The series:** the newest occurrence carries the rule; rows that carry one show a repeat mark. When the next date comes (on a schedule) or the newest occurrence is completed (after completion), the next occurrence is created as a copy: title, notes, place, This Evening, reminder, tags, the checklist unticked, and the deadline as far from its date as before. The rule passes to it. After days away only the latest date due is created, not one per missed day. Editing the series means editing its newest occurrence, which can also change, pause or end the rule. A task with no date, or deferred to Someday, is scheduled for Today when it starts repeating.
+* **Never twice:** an occurrence's id comes from its series and date, and it is created only if missing, in the same change as the completion or the catch-up. A crash, a second check or a second device never makes a second one.
+* **Upcoming** previews the coming occurrences of each series on a schedule over its next 14 days, quieter than tasks, without creating them. Occurrences are ordinary tasks: done, they go to the Logbook like any other. A series waits while its newest occurrence is in the Trash or its project is finished, and stops when that occurrence is deleted.
+
+Matters checks for occurrences due when it starts and every minute. The rules are `matters_core::repeat` (checked against python-dateutil's RFC 5545 dates); the rows, `matters_core::storage::repeats`.
+
 ---
 
 ## 4. Interaction Design & Keyboard Ergonomics
@@ -363,7 +378,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 
 ### Post-MVP (v0.2+)
 - [ ] System-wide floating Quick Capture daemon via Wayland Layer Shell / KGlobalAccel.
-- [ ] Recurrence engine (Daily, Weekly, Monthly, after completion).
+- [x] Recurrence engine (Daily, Weekly, Monthly, Yearly, after completion) (#61).
 - [x] Calendar events in Today and Upcoming via Evolution Data Server (EDS) (#62).
 - [ ] KRunner plugin (`Alt+Space` quick task entry).
 - [ ] Post-quantum end-to-end encrypted sync with an independently usable client/service and managed or self-hosted deployment; peer-to-peer transport remains a future option. See [sync design and evaluation gates](SYNC_DESIGN.md).

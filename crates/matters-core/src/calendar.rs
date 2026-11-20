@@ -243,6 +243,7 @@ fn row_date(row: &ListRow) -> Option<Date> {
         ListRow::Task(task) => task.start_date,
         ListRow::Project(project) => project.start_date,
         ListRow::Event(listed) => Some(listed.day),
+        ListRow::Preview(preview) => Some(preview.day),
         ListRow::EmptyHeading(_) => None,
     }
 }

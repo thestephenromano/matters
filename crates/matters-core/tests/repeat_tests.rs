@@ -441,3 +441,132 @@ fn two_devices_derive_the_same_occurrence() {
         b.advance_repeats(day(3)).unwrap()
     );
 }
+
+fn task_count(db: &Database) -> i64 {
+    db.with_raw_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))?))
+        .unwrap()
+}
+
+fn preview_days(db: &Database, from: Date, until: Date) -> Vec<(Date, String)> {
+    db.repeat_previews(from, until)
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.day, p.task.title))
+        .collect()
+}
+
+#[test]
+fn upcoming_previews_future_occurrences_without_creating_them() {
+    let db = Database::open_in_memory().unwrap();
+    let daily = task_on(&db, 1, Some(day(21)));
+    db.set_task_repeat(&daily, Some(rule(Frequency::Daily)), day(21))
+        .unwrap();
+    let before = task_count(&db);
+    assert_eq!(
+        preview_days(&db, day(22), day(25)),
+        [
+            (day(22), "task 1".to_string()),
+            (day(23), "task 1".to_string()),
+            (day(24), "task 1".to_string())
+        ],
+        "from the day after its own, up to the window's end"
+    );
+    assert_eq!(task_count(&db), before, "nothing created");
+    // The window can start later than the series.
+    assert_eq!(preview_days(&db, day(24), day(25)).len(), 1);
+    // Or include the task's own day, which it holds already.
+    assert_eq!(
+        preview_days(&db, day(21), day(23)),
+        [(day(22), "task 1".to_string())]
+    );
+
+    // As many as are left.
+    let twice = task_on(&db, 2, Some(day(21)));
+    let rule2 = RepeatRule {
+        left: Some(2),
+        ..rule(Frequency::Daily)
+    };
+    db.set_task_repeat(&twice, Some(rule2), day(21)).unwrap();
+    let of_two: Vec<Date> = preview_days(&db, day(22), day(30))
+        .into_iter()
+        .filter(|(_, title)| title == "task 2")
+        .map(|(d, _)| d)
+        .collect();
+    assert_eq!(of_two, [day(22), day(23)]);
+}
+
+#[test]
+fn paused_after_completion_and_trashed_series_have_no_preview() {
+    let db = Database::open_in_memory().unwrap();
+    let paused = task_on(&db, 1, Some(day(21)));
+    db.set_task_repeat(
+        &paused,
+        Some(RepeatRule {
+            paused: true,
+            ..rule(Frequency::Daily)
+        }),
+        day(21),
+    )
+    .unwrap();
+    let after = task_on(&db, 2, Some(day(21)));
+    db.set_task_repeat(
+        &after,
+        Some(RepeatRule {
+            after_completion: true,
+            ..rule(Frequency::Daily)
+        }),
+        day(21),
+    )
+    .unwrap();
+    let trashed = task_on(&db, 3, Some(day(21)));
+    db.set_task_repeat(&trashed, Some(rule(Frequency::Daily)), day(21))
+        .unwrap();
+    db.trash_task(&trashed).unwrap();
+    assert!(preview_days(&db, day(22), day(30)).is_empty());
+}
+
+#[test]
+fn previews_sit_at_the_end_of_their_day() {
+    use matters_core::repeat::{merge_previews, Preview};
+    use matters_core::ListRow;
+    let dated = |n: u128, title: &str, on: Date| {
+        let mut t = Task::new(id(n), title, 0.0);
+        t.start_date = Some(on);
+        t
+    };
+    let rows = vec![
+        ListRow::Task(dated(1, "a", day(22))),
+        ListRow::Task(dated(2, "b", day(24))),
+    ];
+    let preview = |n: u128, title: &str, on: Date| Preview {
+        day: on,
+        task: dated(n, title, day(21)),
+    };
+    let previews = vec![
+        preview(13, "z", day(25)),
+        preview(12, "y", day(23)),
+        preview(11, "x", day(22)),
+        preview(10, "w", day(22)),
+    ];
+    let merged: Vec<String> = merge_previews(rows, previews)
+        .iter()
+        .map(|row| match row {
+            ListRow::Task(t) => t.title.clone(),
+            ListRow::Preview(p) => format!("~{} {}", p.task.title, p.day),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(
+        merged,
+        [
+            "a",
+            "~w 2026-11-22",
+            "~x 2026-11-22",
+            "~y 2026-11-23",
+            "b",
+            "~z 2026-11-25"
+        ]
+    );
+    let p = preview(11, "x", day(22));
+    assert_eq!(p.key(), format!("repeat:{}:2026-11-22", id(11)));
+}

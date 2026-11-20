@@ -229,6 +229,72 @@ impl RepeatRule {
         (!self.until.is_some_and(|until| next > until)).then_some(next)
     }
 
+    /// The rule in words, as the When popover and a row's tooltip say it:
+    /// "Every 2 weeks on Mon, Thu", "Every month on the last Friday",
+    /// "Every 3 days after completion, until 1 Dec 2026".
+    pub fn describe(&self) -> String {
+        let unit = match self.frequency {
+            Frequency::Daily => "day",
+            Frequency::Weekly { .. } => "week",
+            Frequency::MonthlyOnDay { .. } | Frequency::MonthlyOnWeekday { .. } => "month",
+            Frequency::Yearly { .. } => "year",
+        };
+        let mut text = if self.every == 1 {
+            format!("Every {unit}")
+        } else {
+            format!("Every {} {unit}s", self.every)
+        };
+        if self.after_completion {
+            text.push_str(" after completion");
+        } else {
+            match &self.frequency {
+                Frequency::Daily => {}
+                Frequency::Weekly { days } => {
+                    let mut days = days.clone();
+                    days.sort();
+                    days.dedup();
+                    let names: Vec<&str> = days
+                        .iter()
+                        .filter_map(|d| weekday(*d))
+                        .map(short_day)
+                        .collect();
+                    text.push_str(&format!(" on {}", names.join(", ")));
+                }
+                Frequency::MonthlyOnDay { day: -1 } => text.push_str(" on the last day"),
+                Frequency::MonthlyOnDay { day } => {
+                    text.push_str(&format!(" on the {}", ordinal(i32::from(*day))));
+                }
+                Frequency::MonthlyOnWeekday { nth, weekday: w } => {
+                    let which = if *nth == -1 {
+                        "last".to_string()
+                    } else {
+                        ordinal(i32::from(*nth))
+                    };
+                    let day = weekday(*w).map(long_day).unwrap_or("day");
+                    text.push_str(&format!(" on the {which} {day}"));
+                }
+                Frequency::Yearly { month, day } => {
+                    if let Ok(date) = Date::new(2000, *month, *day) {
+                        text.push_str(&format!(" on {}", date.strftime("%-d %b")));
+                    }
+                }
+            }
+        }
+        if let Some(until) = self.until {
+            text.push_str(&format!(", until {}", until.strftime("%-d %b %Y")));
+        }
+        match self.left {
+            Some(0) => text.push_str(", ending with this one"),
+            Some(1) => text.push_str(", once more"),
+            Some(n) => text.push_str(&format!(", {n} more times")),
+            None => {}
+        }
+        if self.paused {
+            text.push_str(" (paused)");
+        }
+        text
+    }
+
     /// The rule the next occurrence carries: one fewer left, or `None` when
     /// none are left (the series ends with the current one).
     pub fn passed_on(&self) -> Option<RepeatRule> {
@@ -242,6 +308,117 @@ impl RepeatRule {
             ..self.clone()
         })
     }
+}
+
+fn short_day(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Monday => "Mon",
+        Weekday::Tuesday => "Tue",
+        Weekday::Wednesday => "Wed",
+        Weekday::Thursday => "Thu",
+        Weekday::Friday => "Fri",
+        Weekday::Saturday => "Sat",
+        Weekday::Sunday => "Sun",
+    }
+}
+
+fn long_day(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Monday => "Monday",
+        Weekday::Tuesday => "Tuesday",
+        Weekday::Wednesday => "Wednesday",
+        Weekday::Thursday => "Thursday",
+        Weekday::Friday => "Friday",
+        Weekday::Saturday => "Saturday",
+        Weekday::Sunday => "Sunday",
+    }
+}
+
+/// 1st, 2nd, 3rd, 4th, 11th, 21st, 22nd...
+fn ordinal(n: i32) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+/// A future occurrence of a repeating task, as Upcoming previews it: the
+/// day, and the newest occurrence it will be a copy of.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Preview {
+    pub day: Date,
+    pub task: crate::domain::Task,
+}
+
+impl Preview {
+    /// Unique among a list's rows.
+    pub fn key(&self) -> String {
+        format!("repeat:{}:{}", self.task.id, self.day)
+    }
+
+    /// The days from `from` up to `until` (exclusive) on which `task`'s
+    /// series will have an occurrence it hasn't yet: fixed-schedule, not
+    /// paused, after the task's own date, as many as are left.
+    pub fn of(task: &crate::domain::Task, from: Date, until: Date) -> Vec<Preview> {
+        let Some(rule) = task
+            .repeat
+            .as_ref()
+            .filter(|r| !r.after_completion && !r.paused)
+        else {
+            return Vec::new();
+        };
+        let Some(after) = task.occurrence.or(task.start_date) else {
+            return Vec::new();
+        };
+        let left = rule.left.map_or(usize::MAX, |n| n as usize);
+        rule.dates()
+            .skip_while(|d| *d <= after)
+            .take(left)
+            .take_while(|d| *d < until)
+            .filter(|d| *d >= from)
+            .map(|day| Preview {
+                day,
+                task: task.clone(),
+            })
+            .collect()
+    }
+}
+
+/// Upcoming's `rows` with `previews` among them: each at the end of its
+/// day, after that day's events, projects and tasks; a day with nothing
+/// else gets its own place in date order. Previews of one day are ordered
+/// by title, then task.
+pub fn merge_previews(
+    rows: Vec<crate::query::ListRow>,
+    mut previews: Vec<Preview>,
+) -> Vec<crate::query::ListRow> {
+    use crate::query::ListRow;
+    previews.sort_by(|a, b| {
+        (a.day, &a.task.title, &a.task.id).cmp(&(b.day, &b.task.title, &b.task.id))
+    });
+    let mut previews = previews.into_iter().peekable();
+    let mut merged = Vec::with_capacity(rows.len());
+    for row in rows {
+        let date = match &row {
+            ListRow::Task(task) => task.start_date,
+            ListRow::Project(project) => project.start_date,
+            ListRow::Event(listed) => Some(listed.day),
+            ListRow::Preview(preview) => Some(preview.day),
+            ListRow::EmptyHeading(_) => None,
+        };
+        if let Some(date) = date {
+            while let Some(preview) = previews.next_if(|p| p.day < date) {
+                merged.push(ListRow::Preview(preview));
+            }
+        }
+        merged.push(row);
+    }
+    merged.extend(previews.map(ListRow::Preview));
+    merged
 }
 
 /// A rule as stored in `tasks.repeat_rule`.
