@@ -344,7 +344,7 @@ fn the_logbook_lists_a_finished_project_as_one_row_among_the_tasks() {
     let engine = QueryEngine::new(&db);
     let tasks = engine.tasks_in(&View::Logbook, today()).unwrap();
     let rows: Vec<String> = engine
-        .list_rows(&View::Logbook, tasks)
+        .list_rows(&View::Logbook, tasks, today())
         .unwrap()
         .into_iter()
         .map(|row| match row {
@@ -385,7 +385,7 @@ fn a_task_finished_at_the_same_moment_as_a_project_comes_first() {
 
     let engine = QueryEngine::new(&db);
     let tasks = engine.tasks_in(&View::Logbook, today()).unwrap();
-    let rows = engine.list_rows(&View::Logbook, tasks).unwrap();
+    let rows = engine.list_rows(&View::Logbook, tasks, today()).unwrap();
     assert!(
         matches!(rows.as_slice(), [ListRow::Task(t), ListRow::Project(p)] if t.id == "t" && p.id == "p"),
         "{rows:?}"
@@ -413,7 +413,7 @@ fn a_task_reopened_during_a_logbook_visit_keeps_its_place_among_projects() {
     tasks[1].status = Status::Open;
 
     let rows: Vec<String> = engine
-        .list_rows(&View::Logbook, tasks)
+        .list_rows(&View::Logbook, tasks, today())
         .unwrap()
         .into_iter()
         .map(|row| match row {
