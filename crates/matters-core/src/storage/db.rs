@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::schema::{
-    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7, SCHEMA_V1,
+    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7,
+    MIGRATION_V8, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -98,6 +99,7 @@ impl Database {
             (5, MIGRATION_V5),
             (6, MIGRATION_V6),
             (7, MIGRATION_V7),
+            (8, MIGRATION_V8),
         ] {
             if version < target {
                 let tx = conn.transaction()?;
