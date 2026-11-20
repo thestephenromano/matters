@@ -115,6 +115,16 @@ Before the engine is wired in, every write in `matters-core` goes through a type
 - `Database::with_conn` sets `PRAGMA query_only` for its duration, so SQLite refuses any write through it. Writes use the crate-private `with_conn_mut`. The audit found one write on the read path (`remove_tag_from`), which now uses the write path. Tests that must stage states the operations never produce use `with_raw_conn`, which exists only with the `test-support` feature.
 - The public write surface is the `Database` operations for areas, projects, headings, tasks, checklist items and tags, plus `crate::ordering`. Each is one intent with its own validation, so the engine adapter maps operations to commands one for one.
 
+### Application document model (#35, 2026-11-20)
+
+`matters_core::crdt` implements this ADR's representation for the application's current domain. It is not yet wired into `Database`, and tags follow in the next slice. Three rules differ from the prototype, because the application gained behavior after this ADR was written:
+
+- **Deleting a heading or checklist item can be undone.** The app offers Undo for both, so deletion is a `removed` register, not a tombstone. A removed heading's tasks project into its project with no heading, which C11 required. Undo brings the heading back with every task still under it, and with concurrent edits kept. Only Empty Trash writes permanent tombstones.
+- **Tags nest, and their names are unique ignoring case** (next slice). Tags live in a second ordered tree. Deleting a tag tombstones it, and its children project under the nearest surviving ancestor, as `delete_tag` does. Concurrent tags whose names differ only in case merge into the one with the smallest UUID. Their assignments move to it, and the merge is listed as a repair. This replaces C12's case-sensitive grouping.
+- **Projects, areas and tasks take tags.** An assignment is a boolean register per (item, tag).
+
+Status, finish time and the "closed by its project" mark share one register, and an open item never carries a finish time or the mark. Every command stamps the entity's `updated_at`. Order keys in the projected rows are ranks, so only their relative order is meaningful.
+
 ## Migration and evaluation gates
 
 One device imports a backed-up SQL database into a new genesis lineage, preserving UUIDs, timestamps, views and existing ordering. Resolve contradictory legacy parent references through a report and explicit choice before conversion. Other devices bootstrap from this lineage; they do not independently convert matching SQL rows. Later independent collections require an explicit import/deduplication workflow. Clone/restore preserves queued edits but assigns a fresh engine writer incarnation before new edits.
