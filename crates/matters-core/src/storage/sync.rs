@@ -13,6 +13,18 @@ use crate::crdt::{Anchor, Command, Document, Kind};
 use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
 use crate::error::{MattersError, Result};
 
+/// Test seam for crash tests: with the `test-support` feature, a process
+/// whose `MATTERS_CRASH_AT` names this point exits on the spot, as a crash
+/// would, without unwinding or committing.
+fn crash_point(point: &str) {
+    #[cfg(feature = "test-support")]
+    if std::env::var("MATTERS_CRASH_AT").as_deref() == Ok(point) {
+        std::process::exit(86);
+    }
+    #[cfg(not(feature = "test-support"))]
+    let _ = point;
+}
+
 /// A fresh engine actor for each open, so a copied database never reuses
 /// another copy's operation IDs (ADR 0001, C15).
 fn fresh_peer() -> u64 {
@@ -112,12 +124,14 @@ impl Database {
                         params![doc.updates_since(&before)?],
                     )?;
                 }
+                crash_point("before-commit");
                 Ok::<_, MattersError>(tx.commit()?)
             })();
             if let Err(error) = committed {
                 *engine = load_engine(conn)?;
                 return Err(error);
             }
+            crash_point("after-commit");
             Ok(value)
         })
     }
@@ -661,12 +675,14 @@ impl Database {
                 )?;
                 doc.merge(bytes)?;
                 rebuild_rows(&tx, &doc.project()?)?;
+                crash_point("before-commit");
                 Ok::<_, MattersError>(tx.commit()?)
             })();
             if let Err(error) = applied {
                 *engine = load_engine(conn)?;
                 return Err(error);
             }
+            crash_point("after-commit");
             Ok(())
         })
     }
