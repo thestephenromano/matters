@@ -668,3 +668,26 @@ fn the_version_moves_with_each_commit_and_agrees_after_sync() {
     sync(&mut a, &mut b);
     assert_eq!(a.version(), b.version());
 }
+
+#[test]
+fn c19_today_skips_references_that_no_longer_name_a_task() {
+    // Same UUID: a project on A (peer 1, the smaller tree ID, keeps it) and
+    // a task on B, whose creation added the UUID to Today.
+    let (mut a, mut b) = pair();
+    a.apply(&[create(61, Kind::Project, None, "project")], 20)
+        .unwrap();
+    b.apply(&[create(61, Kind::Task, None, "task")], 20)
+        .unwrap();
+    let s = converged(&mut a, &mut b);
+    assert!(s.projects.iter().any(|p| p.id == id(61)));
+    assert!(s.repairs.contains(&format!("today-non-task:{}", id(61))));
+    let copy = s.tasks.iter().find(|t| t.title == "task").unwrap();
+    assert_ne!(copy.id, id(61));
+
+    // Same UUID, both tasks: Today lists it once.
+    let (mut a, mut b) = pair();
+    a.apply(&[create(62, Kind::Task, None, "one")], 20).unwrap();
+    b.apply(&[create(62, Kind::Task, None, "two")], 20).unwrap();
+    let s = converged(&mut a, &mut b);
+    assert!(s.repairs.contains(&format!("today-duplicate:{}", id(62))));
+}
