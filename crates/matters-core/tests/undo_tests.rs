@@ -183,6 +183,23 @@ fn undo_takes_off_only_the_tags_the_action_gave() {
         .map(|t| t.id)
         .collect();
     assert_eq!(t3, ["old", "new"], "t3 had `new` already");
+
+    // A tag taken off comes back.
+    let snapshot = take(&db, &["t3"]);
+    db.remove_tag_from(Tagged::Task("t3"), "old").unwrap();
+    snapshot.restore(&db, today()).unwrap();
+    assert_restored(&db, &before[1..2]);
+}
+
+#[test]
+fn a_snapshot_counts_the_tasks_it_remembers() {
+    let db = fixture();
+    let none = take(&db, &[]);
+    assert!(none.is_empty());
+    assert_eq!(none.len(), 0);
+    let some = take(&db, &["t1", "t2"]);
+    assert!(!some.is_empty());
+    assert_eq!(some.len(), 2);
 }
 
 #[test]
@@ -209,6 +226,22 @@ fn undo_puts_a_task_back_in_the_trash() {
     db.restore_task("t2").unwrap();
     snapshot.restore(&db, today()).unwrap();
     assert_restored(&db, &before);
+}
+
+#[test]
+fn a_task_left_in_the_trash_is_not_touched() {
+    let db = fixture();
+    db.trash_task("t2").unwrap();
+    let before = db.get_task("t2").unwrap().unwrap();
+    let snapshot = take(&db, &["t2"]);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    snapshot.restore(&db, today()).unwrap();
+    let after = db.get_task("t2").unwrap().unwrap();
+    assert_eq!(
+        (after.trashed_at, after.updated_at),
+        (before.trashed_at, before.updated_at),
+        "not taken out and put back"
+    );
 }
 
 #[test]
