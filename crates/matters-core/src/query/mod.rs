@@ -1,5 +1,5 @@
 use jiff::civil::Date;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::domain::{Area, Heading, Project, ProjectProgress, Task, View};
@@ -124,6 +124,29 @@ macro_rules! not_in_someday_project {
     () => {
         "(project_id IS NULL OR project_id NOT IN (SELECT id FROM projects
             WHERE status = 'open' AND is_someday = 1))"
+    };
+}
+
+/// The task (the row of `tasks` being tested) has the tag `?2` (#57): through
+/// its own tags, its project's, or its area's (filed in the area directly
+/// or through its project), and matching a tag matches the tags nested
+/// under it, at any depth. The one definition of tag matching; the tag
+/// filter (#58) joins it to the view rules.
+macro_rules! has_tag {
+    () => {
+        "EXISTS (
+            WITH RECURSIVE wanted(id) AS (
+                SELECT ?2
+                UNION SELECT t.id FROM tags t JOIN wanted ON t.parent_id = wanted.id
+            )
+            SELECT 1 FROM wanted WHERE wanted.id IN (
+                SELECT tag_id FROM task_tags WHERE task_id = tasks.id
+                UNION SELECT tag_id FROM project_tags WHERE project_id = tasks.project_id
+                UNION SELECT tag_id FROM area_tags WHERE area_id = tasks.area_id
+                UNION SELECT tag_id FROM area_tags WHERE area_id =
+                    (SELECT area_id FROM projects WHERE id = tasks.project_id)
+            )
+        )"
     };
 }
 
@@ -623,6 +646,18 @@ impl<'a> QueryEngine<'a> {
         }
         rows.extend(projects.map(ListRow::Project));
         Ok(rows)
+    }
+
+    /// Whether task `task_id` has tag `tag_id`, by its own tags or those of
+    /// its project and area, the tag's descendants included (`has_tag!`).
+    pub fn task_has_tag(&self, task_id: &str, tag_id: &str) -> Result<bool> {
+        let sql = format!("SELECT {} FROM tasks WHERE id = ?1", has_tag!());
+        self.db.with_conn(|conn| {
+            Ok(conn
+                .query_row(&sql, params![task_id, tag_id], |r| r.get::<_, bool>(0))
+                .optional()?
+                .unwrap_or(false))
+        })
     }
 
     /// PROJECT PROGRESS:

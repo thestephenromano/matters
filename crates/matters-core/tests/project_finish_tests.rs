@@ -485,7 +485,7 @@ fn a_v6_database_is_migrated_with_no_task_marked() {
                 )
             })
             .unwrap();
-        assert_eq!(version, 7);
+        assert!(version >= 7, "v7 applied (later migrations may follow)");
     }
     // Reopening a project finished before the mark existed reopens only it.
     let db = Database::open(&path).unwrap();

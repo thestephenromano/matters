@@ -133,3 +133,30 @@ CREATE INDEX IF NOT EXISTS idx_checklist_items_task ON checklist_items(task_id, 
 pub const MIGRATION_V7: &str = r#"
 ALTER TABLE tasks ADD COLUMN closed_by_project INTEGER NOT NULL DEFAULT 0;
 "#;
+
+/// v8: tags (#57). A tag can be nested under another (`parent_id`; deleting
+/// the parent lifts its children, as `Database::delete_tag` does), names
+/// are unique ignoring case, and projects and areas take tags too. Added
+/// columns rather than a rebuild: rebuilding `tags` would cascade into
+/// `task_tags`.
+pub const MIGRATION_V8: &str = r#"
+ALTER TABLE tags ADD COLUMN parent_id TEXT REFERENCES tags(id) ON DELETE SET NULL;
+ALTER TABLE tags ADD COLUMN sort_order REAL NOT NULL DEFAULT 0;
+ALTER TABLE tags ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tags ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_nocase ON tags(name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_tags_parent ON tags(parent_id);
+CREATE INDEX IF NOT EXISTS idx_task_tags_tag ON task_tags(tag_id);
+CREATE TABLE IF NOT EXISTS project_tags (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (project_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_tags_tag ON project_tags(tag_id);
+CREATE TABLE IF NOT EXISTS area_tags (
+    area_id TEXT NOT NULL REFERENCES areas(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (area_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_area_tags_tag ON area_tags(tag_id);
+"#;
