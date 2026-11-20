@@ -23,6 +23,7 @@ REQUIRED = {
     "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md",
     "experiments/sync-prototype/REVIEW_WRITER_LIFECYCLE.md",
     "experiments/sync-prototype/REVIEW_ATOMIC_SENDER.md",
+    "experiments/sync-prototype/REVIEW_BIDIRECTIONAL.md",
     "experiments/sync-prototype/tests/convergence.rs",
     "experiments/sync-prototype/src/lib.rs",
     "experiments/sync-prototype/src/model.rs",
