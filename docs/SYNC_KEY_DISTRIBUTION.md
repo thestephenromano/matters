@@ -108,3 +108,7 @@ The [review record](../experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md) ma
 ## Signed writer handoff
 
 The [writer lifecycle extension](SYNC_WRITER_LIFECYCLE.md) adds a distinct `writer_handoff` kind and signature context, preserving existing `writer_start` bytes. Its independent populated/null closing-head vectors extend the structural oracle. The durable inbox admits roots and handoffs, replays control verdicts and gates retired history by exact signed prefixes. The strict in-memory first-record helper remains active-writer-only. Membership, epoch rotation, enrollment and key storage remain separate gates.
+
+## Production code
+
+[`matters-sync`'s authority module](../crates/matters-sync/src/authority.rs) carries this contract into production for [#37](https://github.com/thestephenromano/matters/issues/37): the same message codec, authority rules, envelope transcripts, key commitment and budgets, on the content-record keys and codec of the same crate. [Its tests](../crates/matters-sync/tests/authority_tests.rs) check the independent golden fixtures above in place. The first-record Loro import gate stays prototype test support; chain position and engine admission belong to the durable receiver.
