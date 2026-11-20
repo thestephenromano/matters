@@ -425,7 +425,7 @@ fn receiving_an_update_keeps_what_this_device_showed() {
         .unwrap();
     assert_eq!(
         kept,
-        [call.clone()],
+        std::slice::from_ref(&call),
         "the deleted task's record went with it"
     );
 }
