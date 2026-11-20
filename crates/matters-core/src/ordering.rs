@@ -492,15 +492,13 @@ pub fn place_project_in_area(
                 parent: area.map(str::to_string),
                 at: crate::crdt::Anchor::Last,
             }];
-            let mut moved = changed(&changes);
-            if !moved.iter().any(|m| m == id) {
-                moved.push(id.to_string());
-            }
+            // The project's own key is among the changes: it lands after
+            // its new predecessor in the area.
             commands.extend(crate::storage::sync::reorder(
                 tx,
                 "projects",
                 "sort_order",
-                &moved,
+                &changed(&changes),
             )?);
             Ok(commands)
         },

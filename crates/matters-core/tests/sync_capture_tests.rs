@@ -654,3 +654,40 @@ fn restoring_a_tasks_order_keys_restores_its_place() {
     check(&db);
     check_today(&db);
 }
+
+#[test]
+fn reordering_looks_only_at_true_siblings() {
+    use matters_core::{ordering, View};
+    let db = synced();
+    db.add_project(&mut Project::new(id(1), "p", 0.0)).unwrap();
+    db.add_project(&mut Project::new(id(2), "q", 0.0)).unwrap();
+    // Today mixes home lists: t11 is in a project, t10 and t12 in the
+    // Inbox. t10 moved between t11 and t12 has t11 before it in Today but
+    // nothing before it in the Inbox.
+    for n in 10..13 {
+        let mut task = View::Today
+            .new_task(id(n), &format!("t{n}"), today())
+            .unwrap();
+        if n == 11 {
+            task.project_id = Some(id(1));
+        }
+        db.add_task(&mut task).unwrap();
+        check_today(&db);
+    }
+    ordering::place_task(&db, &View::Today, today(), &id(10), Some(&id(11))).unwrap();
+    check_today(&db);
+    // A heading or checklist item of another parent sits between a moved
+    // one's new key and its true predecessor's.
+    for (n, project, key) in [(20, 1, 1.0), (21, 1, 2.5), (22, 2, 1.0), (23, 2, 2.0)] {
+        db.create_heading(&Heading::new(id(n), id(project), format!("h{n}"), key))
+            .unwrap();
+    }
+    ordering::place_heading(&db, &id(22), Some(&id(23))).unwrap();
+    check(&db);
+    for (n, task, key) in [(30, 10, 1.0), (31, 10, 2.5), (32, 12, 1.0), (33, 12, 2.0)] {
+        db.create_checklist_item(&ChecklistItem::new(id(n), id(task), format!("c{n}"), key))
+            .unwrap();
+    }
+    ordering::place_checklist_item(&db, &id(32), Some(&id(33))).unwrap();
+    check(&db);
+}
