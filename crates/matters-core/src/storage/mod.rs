@@ -1,6 +1,6 @@
 pub mod db;
 pub mod schema;
-mod sync;
+pub(crate) mod sync;
 mod tags;
 mod task_actions;
 pub(crate) mod trash;

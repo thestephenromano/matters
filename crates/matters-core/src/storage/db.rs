@@ -991,14 +991,7 @@ impl Database {
                 &time_of_day,
                 &is_someday,
             ],
-            |_, _| {
-                Ok(vec![crate::crdt::Command::SetSchedule {
-                    id: id.into(),
-                    start_date,
-                    evening: time_of_day.is_some(),
-                    someday: is_someday,
-                }])
-            },
+            |tx, _| super::sync::rescheduled(tx, id),
         )
     }
 
@@ -1013,7 +1006,7 @@ impl Database {
             "time_of_day = CASE WHEN ?1 THEN 'evening' END,
              start_date = CASE WHEN ?1 THEN COALESCE(start_date, ?2) ELSE start_date END",
             &[&evening, &today.to_string()],
-            |tx, _| super::sync::task_schedule(tx, id),
+            |tx, _| super::sync::rescheduled(tx, id),
         )
     }
 

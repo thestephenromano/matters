@@ -300,20 +300,22 @@ pub fn move_heading_to_project(db: &Database, id: &str, project_id: &str) -> Res
         .list_headings_for_project(project_id)?
         .last()
         .map_or(1.0, |h| h.sort_order + 1.0);
-    db.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
-        let now = crate::clock::now_millis();
-        tx.execute(
-            "UPDATE headings SET project_id = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
-            params![project_id, key, now, id],
-        )?;
-        tx.execute(
-            "UPDATE tasks SET project_id = ?1, updated_at = ?2 WHERE heading_id = ?3",
-            params![project_id, now, id],
-        )?;
-        tx.commit()?;
-        Ok(())
-    })
+    let now = crate::clock::now_millis();
+    db.write(
+        now,
+        |tx| {
+            tx.execute(
+                "UPDATE headings SET project_id = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
+                params![project_id, key, now, id],
+            )?;
+            tx.execute(
+                "UPDATE tasks SET project_id = ?1, updated_at = ?2 WHERE heading_id = ?3",
+                params![project_id, now, id],
+            )?;
+            Ok(())
+        },
+        |tx, ()| crate::storage::sync::moved_heading(tx, id),
+    )
 }
 
 /// The headings of heading `id`'s project, in order, with their keys.
@@ -374,14 +376,25 @@ pub fn restore_task_order(
     sort_order: f64,
     today_order: f64,
 ) -> Result<()> {
-    db.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
-        let id = id.to_string();
-        update_keys(&tx, "tasks", "sort_order", &[(id.clone(), sort_order)])?;
-        update_keys(&tx, "tasks", "today_order", &[(id, today_order)])?;
-        tx.commit()?;
-        Ok(())
-    })
+    let id = id.to_string();
+    db.write(
+        crate::clock::now_millis(),
+        |tx| {
+            update_keys(tx, "tasks", "sort_order", &[(id.clone(), sort_order)])?;
+            update_keys(tx, "tasks", "today_order", &[(id.clone(), today_order)])
+        },
+        |tx, ()| {
+            let ids = std::slice::from_ref(&id);
+            let mut commands = crate::storage::sync::reorder(tx, "tasks", "sort_order", ids)?;
+            commands.extend(crate::storage::sync::reorder(
+                tx,
+                "tasks",
+                "today_order",
+                ids,
+            )?);
+            Ok(commands)
+        },
+    )
 }
 
 /// Put a Today task in the daytime section or This Evening, right after
@@ -463,17 +476,33 @@ pub fn place_project_in_area(
     list.push((id.to_string(), project.sort_order));
     check_member(&list, id, after)?;
     let changes = place(&list, id, after);
-    db.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
-        let now = crate::clock::now_millis();
-        tx.execute(
-            "UPDATE projects SET area_id = ?1, updated_at = ?2 WHERE id = ?3",
-            params![area, now, id],
-        )?;
-        update_keys(&tx, "projects", "sort_order", &changes)?;
-        tx.commit()?;
-        Ok(())
-    })
+    let now = crate::clock::now_millis();
+    db.write(
+        now,
+        |tx| {
+            tx.execute(
+                "UPDATE projects SET area_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![area, now, id],
+            )?;
+            update_keys(tx, "projects", "sort_order", &changes)
+        },
+        |tx, ()| {
+            let mut commands = vec![crate::crdt::Command::Move {
+                id: id.to_string(),
+                parent: area.map(str::to_string),
+                at: crate::crdt::Anchor::Last,
+            }];
+            // The project's own key is among the changes: it lands after
+            // its new predecessor in the area.
+            commands.extend(crate::storage::sync::reorder(
+                tx,
+                "projects",
+                "sort_order",
+                &changed(&changes),
+            )?);
+            Ok(commands)
+        },
+    )
 }
 
 /// Move an area in the sidebar so it follows `after` (or comes first).
@@ -520,31 +549,44 @@ pub fn add_checklist_item_below(
     below: &str,
 ) -> Result<()> {
     item.title = checklist_title(&item.title)?;
-    db.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
-        let mut list = checklist_keys(&tx, &item.task_id)?;
-        if !list.iter().any(|(i, _)| i == below) {
-            return Err(invalid(format!(
-                "'{below}' is not in the checklist of task '{}'",
-                item.task_id
-            )));
-        }
-        let end = checklist_end_key(&tx, &item.task_id)?;
-        list.push((item.id.clone(), end));
-        let mut changes = place(&list, &item.id, Some(below));
-        item.sort_order = end;
-        changes.retain(|(id, key)| {
-            let own = *id == item.id;
-            if own {
-                item.sort_order = *key;
+    let at = item.updated_at;
+    db.write(
+        at,
+        |tx| {
+            let mut list = checklist_keys(tx, &item.task_id)?;
+            if !list.iter().any(|(i, _)| i == below) {
+                return Err(invalid(format!(
+                    "'{below}' is not in the checklist of task '{}'",
+                    item.task_id
+                )));
             }
-            !own
-        });
-        insert_checklist_item(&tx, item)?;
-        update_keys(&tx, "checklist_items", "sort_order", &changes)?;
-        tx.commit()?;
-        Ok(())
-    })
+            let end = checklist_end_key(tx, &item.task_id)?;
+            list.push((item.id.clone(), end));
+            let mut changes = place(&list, &item.id, Some(below));
+            item.sort_order = end;
+            changes.retain(|(id, key)| {
+                let own = *id == item.id;
+                if own {
+                    item.sort_order = *key;
+                }
+                !own
+            });
+            insert_checklist_item(tx, item)?;
+            update_keys(tx, "checklist_items", "sort_order", &changes)?;
+            Ok((item.clone(), changed(&changes)))
+        },
+        |tx, (item, others)| {
+            let mut commands = crate::storage::sync::create_checklist_item(tx, item)?;
+            commands.extend(crate::storage::sync::reorder(
+                tx,
+                "checklist_items",
+                "sort_order",
+                others,
+            )?);
+            Ok(commands)
+        },
+    )
+    .map(|_| ())
 }
 
 /// The checklist holding item `id`, in order, with each item's key.
@@ -651,17 +693,21 @@ fn place(list: &[(String, f64)], id: &str, after: Option<&str>) -> Vec<(String, 
     vec![(id.to_string(), key)]
 }
 
-/// Apply key changes in one transaction. `table` and `column` are fixed names.
+/// Apply key changes in one transaction, recording the new order for sync.
+/// `table` and `column` are fixed names.
 fn write(db: &Database, table: &str, column: &str, changes: &[(String, f64)]) -> Result<()> {
     if changes.is_empty() {
         return Ok(());
     }
-    db.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
-        update_keys(&tx, table, column, changes)?;
-        tx.commit()?;
-        Ok(())
-    })
+    db.write(
+        crate::clock::now_millis(),
+        |tx| update_keys(tx, table, column, changes),
+        |tx, ()| crate::storage::sync::reorder(tx, table, column, &changed(changes)),
+    )
+}
+
+fn changed(changes: &[(String, f64)]) -> Vec<String> {
+    changes.iter().map(|(id, _)| id.clone()).collect()
 }
 
 fn update_keys(

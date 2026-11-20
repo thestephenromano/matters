@@ -489,3 +489,205 @@ fn undoing_a_heading_deletion_leaves_tasks_that_moved_away() {
     check(&db);
     assert_eq!(db.get_task(&id(11)).unwrap().unwrap().project_id, None);
 }
+
+/// Today's order in the engine matches the rows' `today_order` within each
+/// section (daytime and This Evening), the only order Today shows.
+fn check_today(db: &Database) {
+    let s = db.engine_snapshot().unwrap().unwrap();
+    for evening in [false, true] {
+        let section: Vec<_> = s
+            .tasks
+            .iter()
+            .filter(|t| t.is_evening() == evening)
+            .collect();
+        let mut engine: Vec<_> = section
+            .iter()
+            .map(|t| (t.today_order, t.id.clone()))
+            .collect();
+        engine.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut rows: Vec<_> = section
+            .iter()
+            .map(|t| {
+                let row = db.get_task(&t.id).unwrap().unwrap();
+                (row.today_order, row.id)
+            })
+            .collect();
+        rows.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let ids = |l: Vec<(f64, String)>| l.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
+        assert_eq!(ids(engine), ids(rows), "evening: {evening}");
+    }
+}
+
+#[test]
+fn ordering_keeps_the_engine_in_the_rows_order() {
+    use matters_core::{ordering, View};
+    let db = synced();
+    db.add_area(&mut Area::new(id(1), "Home", 0.0)).unwrap();
+    db.add_area(&mut Area::new(id(2), "Work", 0.0)).unwrap();
+    db.add_project(&mut Project::new(id(3), "Garden", 0.0))
+        .unwrap();
+    db.add_project(&mut Project::new(id(4), "Shed", 0.0))
+        .unwrap();
+    db.add_heading(&mut Heading::new(id(5), id(3), "Spring", 0.0))
+        .unwrap();
+    db.add_heading(&mut Heading::new(id(6), id(3), "Summer", 0.0))
+        .unwrap();
+    for n in 10..14 {
+        db.add_task(&mut Task::new(id(n), format!("inbox {n}"), 0.0))
+            .unwrap();
+    }
+    for n in 20..23 {
+        let mut task = Task::new(id(n), format!("project {n}"), 0.0);
+        Home::Project {
+            project: id(3),
+            heading: None,
+        }
+        .apply(&mut task);
+        db.add_task(&mut task).unwrap();
+    }
+    check(&db);
+
+    ordering::place_task(&db, &View::Inbox, today(), &id(13), None).unwrap();
+    ordering::place_task(&db, &View::Inbox, today(), &id(10), Some(&id(12))).unwrap();
+    ordering::move_task(&db, &View::Inbox, today(), &id(11), 2).unwrap();
+    let mut below = Task::new(id(40), "below", 0.0);
+    ordering::add_task_below(&db, &View::Inbox, today(), &mut below, &id(12)).unwrap();
+    check(&db);
+    for n in 10..14 {
+        db.set_task_schedule(&id(n), &Schedule::Today { evening: false }, today())
+            .unwrap();
+    }
+    ordering::place_task(&db, &View::Today, today(), &id(12), None).unwrap();
+    ordering::move_task(&db, &View::Today, today(), &id(13), 1).unwrap();
+    ordering::place_in_today(&db, today(), &id(10), true, None).unwrap();
+    check(&db);
+    check_today(&db);
+
+    let project = View::Project(id(3));
+    ordering::place_in_heading(&db, &id(3), today(), &id(20), Some(&id(5)), None).unwrap();
+    ordering::place_in_heading(&db, &id(3), today(), &id(21), Some(&id(5)), Some(&id(20))).unwrap();
+    ordering::move_task(&db, &project, today(), &id(22), 1).unwrap();
+    ordering::place_heading(&db, &id(6), None).unwrap();
+    ordering::move_heading(&db, &id(6), 1).unwrap();
+    check(&db);
+
+    ordering::move_heading_to_project(&db, &id(5), &id(4)).unwrap();
+    ordering::place_project(&db, &id(4), None).unwrap();
+    ordering::place_project_in_area(&db, &id(3), Some(&id(2)), None).unwrap();
+    ordering::place_project_in_area(&db, &id(4), Some(&id(2)), Some(&id(3))).unwrap();
+    ordering::place_area(&db, &id(2), None).unwrap();
+    check(&db);
+
+    let mut item = ChecklistItem::new(id(30), id(20), "a", 0.0);
+    db.add_checklist_item(&mut item).unwrap();
+    db.add_checklist_item(&mut ChecklistItem::new(id(31), id(20), "b", 0.0))
+        .unwrap();
+    ordering::add_checklist_item_below(
+        &db,
+        &mut ChecklistItem::new(id(32), id(20), "c", 0.0),
+        &id(30),
+    )
+    .unwrap();
+    ordering::place_checklist_item(&db, &id(31), None).unwrap();
+    ordering::move_checklist_item(&db, &id(30), 5).unwrap();
+    check(&db);
+
+    let mut evening = View::Today.new_task(id(41), "evening", today()).unwrap();
+    ordering::add_task_below(&db, &View::Today, today(), &mut evening, &id(10)).unwrap();
+    check(&db);
+    check_today(&db);
+}
+
+#[test]
+fn a_renumbering_keeps_hidden_rows_in_the_rows_order() {
+    use matters_core::{ordering, View};
+    let db = synced();
+    // Tied keys force `place` to renumber the visible list; a scheduled
+    // task in the same home list is not visible in the Inbox.
+    for (n, key) in [(1, 1.0), (2, 1.0), (3, 1.5), (4, 2.0)] {
+        db.create_task(&Task::new(id(n), format!("t{n}"), key))
+            .unwrap();
+    }
+    db.set_task_schedule(&id(3), &Schedule::Someday, today())
+        .unwrap();
+    ordering::place_task(&db, &View::Inbox, today(), &id(4), None).unwrap();
+    check(&db);
+}
+
+#[test]
+fn a_task_changing_today_section_takes_its_place_by_key() {
+    use matters_core::{ordering, View};
+    let db = synced();
+    for n in 1..5 {
+        let mut task = View::Today
+            .new_task(id(n), &format!("t{n}"), today())
+            .unwrap();
+        db.add_task(&mut task).unwrap();
+    }
+    // Evening: t1 and t3; daytime: t2 and t4, keys interleaved.
+    ordering::place_in_today(&db, today(), &id(1), true, None).unwrap();
+    ordering::place_in_today(&db, today(), &id(3), true, Some(&id(1))).unwrap();
+    db.set_task_schedule(&id(2), &Schedule::Today { evening: true }, today())
+        .unwrap();
+    check_today(&db);
+    db.set_task_schedule(&id(1), &Schedule::Today { evening: false }, today())
+        .unwrap();
+    check_today(&db);
+    check(&db);
+}
+
+#[test]
+fn restoring_a_tasks_order_keys_restores_its_place() {
+    use matters_core::{ordering, View};
+    let db = synced();
+    for n in 1..4 {
+        let mut task = View::Today
+            .new_task(id(n), &format!("t{n}"), today())
+            .unwrap();
+        db.add_task(&mut task).unwrap();
+    }
+    let first = db.get_task(&id(1)).unwrap().unwrap();
+    ordering::place_task(&db, &View::Today, today(), &id(1), Some(&id(3))).unwrap();
+    ordering::place_task(&db, &View::Inbox, today(), &id(1), Some(&id(3))).ok();
+    // Batch Undo puts both keys back.
+    ordering::restore_task_order(&db, &id(1), first.sort_order, first.today_order).unwrap();
+    check(&db);
+    check_today(&db);
+}
+
+#[test]
+fn reordering_looks_only_at_true_siblings() {
+    use matters_core::{ordering, View};
+    let db = synced();
+    db.add_project(&mut Project::new(id(1), "p", 0.0)).unwrap();
+    db.add_project(&mut Project::new(id(2), "q", 0.0)).unwrap();
+    // Today mixes home lists: t11 is in a project, t10 and t12 in the
+    // Inbox. t10 moved between t11 and t12 has t11 before it in Today but
+    // nothing before it in the Inbox.
+    for n in 10..13 {
+        let mut task = View::Today
+            .new_task(id(n), &format!("t{n}"), today())
+            .unwrap();
+        if n == 11 {
+            task.project_id = Some(id(1));
+        }
+        db.add_task(&mut task).unwrap();
+        check_today(&db);
+    }
+    ordering::place_task(&db, &View::Today, today(), &id(10), Some(&id(11))).unwrap();
+    check_today(&db);
+    // A heading or checklist item of another parent sits between a moved
+    // one's new key and its true predecessor's.
+    for (n, project, key) in [(20, 1, 1.0), (21, 1, 2.5), (22, 2, 1.0), (23, 2, 2.0)] {
+        db.create_heading(&Heading::new(id(n), id(project), format!("h{n}"), key))
+            .unwrap();
+    }
+    ordering::place_heading(&db, &id(22), Some(&id(23))).unwrap();
+    check(&db);
+    for (n, task, key) in [(30, 10, 1.0), (31, 10, 2.5), (32, 12, 1.0), (33, 12, 2.0)] {
+        db.create_checklist_item(&ChecklistItem::new(id(n), id(task), format!("c{n}"), key))
+            .unwrap();
+    }
+    ordering::place_checklist_item(&db, &id(32), Some(&id(33))).unwrap();
+    check(&db);
+}
