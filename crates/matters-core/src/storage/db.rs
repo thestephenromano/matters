@@ -251,8 +251,10 @@ impl Database {
     }
 
     /// File a project in an area, or take it out of one (`None`), at the
-    /// end of the area's projects. The area must exist and not be in the
-    /// Trash. Filing a project where it already is changes nothing.
+    /// end of the area's projects. Neither the project nor the area may be
+    /// in the Trash, the project itself or through its area, so a project
+    /// in the Trash is put back only with Put Back. This is the only way a
+    /// project changes area; filing it where it already is changes nothing.
     pub fn set_project_area(&self, project_id: &str, area_id: Option<&str>) -> Result<()> {
         self.with_conn_mut(|conn| {
             let tx = conn.transaction()?;
@@ -261,7 +263,10 @@ impl Database {
             }
             let current: Option<Option<String>> = tx
                 .query_row(
-                    "SELECT area_id FROM projects WHERE id = ?1",
+                    &format!(
+                        "SELECT area_id FROM projects WHERE id = ?1 AND {}",
+                        trash::LIVE_PROJECT
+                    ),
                     params![project_id],
                     |r| r.get(0),
                 )
@@ -392,7 +397,8 @@ impl Database {
     }
 
     /// Write the project's editable fields; like [`Self::update_task`], never
-    /// its order or trash state.
+    /// its order, trash state or area, so a stale copy can't undo a move.
+    /// [`Self::set_project_area`] files a project in another area.
     pub fn update_project(&self, project: &Project) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
@@ -402,12 +408,11 @@ impl Database {
 
         conn.execute(
             "UPDATE projects SET
-                area_id = ?1, title = ?2, notes = ?3, start_date = ?4, time_of_day = ?5,
-                is_someday = ?6, deadline = ?7, status = ?8, completed_at = ?9,
-                updated_at = ?10
-             WHERE id = ?11",
+                title = ?1, notes = ?2, start_date = ?3, time_of_day = ?4,
+                is_someday = ?5, deadline = ?6, status = ?7, completed_at = ?8,
+                updated_at = ?9
+             WHERE id = ?10",
             params![
-                project.area_id,
                 project.title,
                 project.notes,
                 start_date,
@@ -673,17 +678,13 @@ impl Database {
         Ok(task)
     }
 
-    /// Write the task's editable fields. Order and trash state are not among
-    /// them: they change only through the ordering operations
-    /// (`crate::ordering`) and [`Self::trash_task`] / [`Self::restore_task`],
-    /// so saving a stale copy can't reorder, trash or resurrect a task.
-    ///
-    /// The task's home must be valid, as for [`Self::create_task`]; nothing
-    /// is written otherwise. [`Self::move_task`] is the way to file a task
-    /// somewhere else.
+    /// Write the task's editable fields. Order, trash state and home are
+    /// not among them: they change only through the ordering operations
+    /// (`crate::ordering`), [`Self::trash_task`] / [`Self::restore_task`]
+    /// and [`Self::set_task_home`], so saving a stale copy can't reorder,
+    /// trash, resurrect or re-file a task.
     pub fn update_task(&self, task: &Task) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        Self::check_home(&conn, task)?;
         let now = crate::clock::now_millis();
         let start_date = task.start_date.map(|d| d.to_string());
         let deadline = task.deadline.map(|d| d.to_string());
@@ -691,14 +692,10 @@ impl Database {
 
         conn.execute(
             "UPDATE tasks SET
-                area_id = ?1, project_id = ?2, heading_id = ?3, title = ?4, notes = ?5,
-                start_date = ?6, time_of_day = ?7, is_someday = ?8, deadline = ?9,
-                status = ?10, completed_at = ?11, updated_at = ?12
-             WHERE id = ?13",
+                title = ?1, notes = ?2, start_date = ?3, time_of_day = ?4, is_someday = ?5,
+                deadline = ?6, status = ?7, completed_at = ?8, updated_at = ?9
+             WHERE id = ?10",
             params![
-                task.area_id,
-                task.project_id,
-                task.heading_id,
                 task.title,
                 task.notes,
                 start_date,
@@ -745,7 +742,10 @@ impl Database {
     /// itself or through its area; a heading must belong to the project
     /// named with it. Moving a task to where it already is changes nothing,
     /// not even its place in the list.
-    pub fn move_task(&self, id: &str, home: &Home) -> Result<()> {
+    ///
+    /// This is the only way a task changes home. (`crate::ordering::move_task`
+    /// moves a task up or down within a list.)
+    pub fn set_task_home(&self, id: &str, home: &Home) -> Result<()> {
         self.with_conn_mut(|conn| {
             let tx = conn.transaction()?;
             let mut task = tx
@@ -767,15 +767,17 @@ impl Database {
                 Home::Area(area) => {
                     Self::check_live(&tx, "areas", trash::LIVE_AREA, "area", area)?;
                 }
-                Home::Project { project, .. } => {
+                Home::Project { project, heading } => {
                     Self::check_live(&tx, "projects", trash::LIVE_PROJECT, "project", project)?;
+                    if let Some(heading) = heading {
+                        Self::check_heading(&tx, project, heading)?;
+                    }
                 }
             }
             if Home::of(&task).ok().as_ref() == Some(home) {
                 return Ok(());
             }
             home.apply(&mut task);
-            Self::check_home(&tx, &task)?;
             let now = crate::clock::now_millis();
             tx.execute(
                 "UPDATE tasks SET area_id = ?1, project_id = ?2, heading_id = ?3, updated_at = ?4,
@@ -788,39 +790,42 @@ impl Database {
         })
     }
 
-    /// Refuse a task whose ids name no valid home: both an area and a
+    /// Refuse a new task whose ids name no valid home: both an area and a
     /// project, a heading without a project ([`Home::of`]), or a heading of
-    /// another project. Every task write goes through this, so no path can
-    /// store a broken hierarchy.
+    /// another project. Only [`Self::create_task`] and
+    /// [`Self::set_task_home`] write a task's home, and both check it, so no
+    /// path can store a broken hierarchy.
     fn check_home(conn: &Connection, task: &Task) -> Result<()> {
         if let Home::Project {
             project,
             heading: Some(heading),
         } = Home::of(task)?
         {
-            let owner: Option<String> = conn
-                .query_row(
-                    "SELECT project_id FROM headings WHERE id = ?1",
-                    params![heading],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match owner {
-                None => {
-                    return Err(MattersError::NotFound {
-                        entity: "heading",
-                        id: heading,
-                    })
-                }
-                Some(owner) if owner != project => {
-                    return Err(MattersError::Validation(format!(
-                        "heading '{heading}' is not in project '{project}'"
-                    )))
-                }
-                Some(_) => {}
-            }
+            Self::check_heading(conn, &project, &heading)?;
         }
         Ok(())
+    }
+
+    /// `NotFound` unless heading `heading` exists, `Validation` unless it
+    /// belongs to `project`.
+    fn check_heading(conn: &Connection, project: &str, heading: &str) -> Result<()> {
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT project_id FROM headings WHERE id = ?1",
+                params![heading],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match owner {
+            None => Err(MattersError::NotFound {
+                entity: "heading",
+                id: heading.to_string(),
+            }),
+            Some(owner) if owner != project => Err(MattersError::Validation(format!(
+                "heading '{heading}' is not in project '{project}'"
+            ))),
+            Some(_) => Ok(()),
+        }
     }
 
     /// `NotFound` unless `table` has a row `id` meeting `live`, one of the

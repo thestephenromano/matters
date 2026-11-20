@@ -1,5 +1,6 @@
 use jiff::civil::Date;
 
+use super::home::Home;
 use super::status::Status;
 use super::task::Task;
 use super::when::Schedule;
@@ -131,8 +132,9 @@ impl View {
         if task.is_trashed() {
             return View::Trash;
         }
-        if let Some(project_id) = &task.project_id {
-            return View::Project(project_id.clone());
+        let home = Home::listed(task);
+        if let Home::Project { project, .. } = home {
+            return View::Project(project);
         }
         if matches!(task.status, Status::Completed | Status::Canceled) {
             return View::Logbook;
@@ -144,9 +146,9 @@ impl View {
             Some(date) if date > today => View::Upcoming,
             Some(_) => View::Today,
             None if task.deadline.is_some_and(|d| d <= today) => View::Today,
-            None => match &task.area_id {
-                Some(area_id) => View::Area(area_id.clone()),
-                None => View::Inbox,
+            None => match home {
+                Home::Area(area) => View::Area(area),
+                _ => View::Inbox,
             },
         }
     }

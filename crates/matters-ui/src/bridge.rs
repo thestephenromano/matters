@@ -816,7 +816,7 @@ impl qobject::AppController {
                 "'{other}' is not a destination"
             ))),
         };
-        let result = home.and_then(|home| self.db.move_task(&String::from(task_id), &home));
+        let result = home.and_then(|home| self.db.set_task_home(&String::from(task_id), &home));
         let ok = result.is_ok();
         self.finish(result);
         ok

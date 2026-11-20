@@ -1,7 +1,8 @@
 //! Moving tasks and projects (#148, part of #54): a task is filed in the
 //! Inbox, an area, or a project and one of its headings, at the end of the
 //! destination; moves that would break the hierarchy are refused, as are
-//! writes that would store one.
+//! new tasks that would store one. A whole-entity save never changes where
+//! a task or project lives.
 
 use jiff::civil::Date;
 use matters_core::{
@@ -65,16 +66,16 @@ fn home_of(db: &Database, id: &str) -> Home {
 fn a_task_moves_to_the_end_of_each_kind_of_home() {
     let db = fixture();
 
-    db.move_task("a", &Home::Area("home".into())).unwrap();
+    db.set_task_home("a", &Home::Area("home".into())).unwrap();
     assert_eq!(ids(&db, View::Inbox), ["b"], "it leaves the Inbox at once");
     assert_eq!(ids(&db, View::Area("home".into())), ["x", "a"]);
 
-    db.move_task("a", &project("p", Some("h1"))).unwrap();
+    db.set_task_home("a", &project("p", Some("h1"))).unwrap();
     assert_eq!(ids(&db, View::Area("home".into())), ["x"]);
     assert_eq!(ids(&db, View::Project("p".into())), ["y", "a", "z"]);
     assert_eq!(home_of(&db, "a"), project("p", Some("h1")));
 
-    db.move_task("a", &project("p", None)).unwrap();
+    db.set_task_home("a", &project("p", None)).unwrap();
     assert_eq!(
         ids(&db, View::Project("p".into())),
         ["y", "a", "z"],
@@ -82,18 +83,18 @@ fn a_task_moves_to_the_end_of_each_kind_of_home() {
     );
     assert_eq!(home_of(&db, "a"), project("p", None));
 
-    db.move_task("y", &project("p", Some("h2"))).unwrap();
+    db.set_task_home("y", &project("p", Some("h2"))).unwrap();
     assert_eq!(
         ids(&db, View::Project("p".into())),
         ["a", "z", "y"],
         "within its project, to the end of a heading"
     );
 
-    db.move_task("y", &project("q", Some("qh"))).unwrap();
+    db.set_task_home("y", &project("q", Some("qh"))).unwrap();
     assert_eq!(ids(&db, View::Project("p".into())), ["a", "z"]);
     assert_eq!(ids(&db, View::Project("q".into())), ["y"]);
 
-    db.move_task("y", &Home::Inbox).unwrap();
+    db.set_task_home("y", &Home::Inbox).unwrap();
     assert_eq!(ids(&db, View::Inbox), ["b", "y"]);
     assert_eq!(home_of(&db, "y"), Home::Inbox);
 }
@@ -109,7 +110,7 @@ fn a_moved_task_keeps_its_schedule_deadline_notes_and_checklist() {
     db.create_checklist_item(&ChecklistItem::new("c", "a", "rake", 0.0))
         .unwrap();
 
-    db.move_task("a", &project("p", Some("h1"))).unwrap();
+    db.set_task_home("a", &project("p", Some("h1"))).unwrap();
 
     let moved = db.get_task("a").unwrap().unwrap();
     assert_eq!(
@@ -124,7 +125,7 @@ fn a_moved_task_keeps_its_schedule_deadline_notes_and_checklist() {
     assert_eq!(db.list_checklist_items("a").unwrap().len(), 1);
     assert!(ids(&db, View::Today).contains(&"a".to_string()));
 
-    db.move_task("a", &Home::Inbox).unwrap();
+    db.set_task_home("a", &Home::Inbox).unwrap();
     assert_eq!(
         ids(&db, View::Inbox),
         ["b"],
@@ -138,8 +139,8 @@ fn moving_a_task_to_where_it_is_changes_nothing() {
     let db = fixture();
     let before = db.get_task("a").unwrap().unwrap();
 
-    db.move_task("a", &Home::Inbox).unwrap();
-    db.move_task("z", &project("p", Some("h2"))).unwrap();
+    db.set_task_home("a", &Home::Inbox).unwrap();
+    db.set_task_home("z", &project("p", Some("h2"))).unwrap();
 
     assert_eq!(ids(&db, View::Inbox), ["a", "b"]);
     assert_eq!(db.get_task("a").unwrap().unwrap(), before);
@@ -167,14 +168,14 @@ fn a_move_to_a_missing_or_trashed_home_is_refused() {
         (project("boxed", None), "project"),
         (project("p", Some("missing")), "heading"),
     ] {
-        match db.move_task("a", &home) {
+        match db.set_task_home("a", &home) {
             Err(MattersError::NotFound { entity: e, .. }) => assert_eq!(e, entity, "{home:?}"),
             other => panic!("{home:?}: expected NotFound, got {other:?}"),
         }
     }
     assert!(
         matches!(
-            db.move_task("a", &project("p", Some("qh"))),
+            db.set_task_home("a", &project("p", Some("qh"))),
             Err(MattersError::Validation(_))
         ),
         "a heading of another project"
@@ -191,7 +192,7 @@ fn a_task_in_the_trash_cannot_be_moved() {
     for id in ["a", "y", "missing"] {
         assert!(
             matches!(
-                db.move_task(id, &Home::Area("home".into())),
+                db.set_task_home(id, &Home::Area("home".into())),
                 Err(MattersError::NotFound { entity: "task", .. })
             ),
             "{id}"
@@ -205,7 +206,7 @@ fn a_task_in_the_trash_cannot_be_moved() {
 type Breaks = fn(&mut Task);
 
 #[test]
-fn a_write_that_would_break_the_hierarchy_is_refused() {
+fn a_new_task_with_a_broken_hierarchy_is_refused() {
     let db = fixture();
     let broken: [(&str, Breaks); 3] = [
         ("area and project", |t| {
@@ -228,22 +229,13 @@ fn a_write_that_would_break_the_hierarchy_is_refused() {
             "create: {name}"
         );
         assert!(db.get_task(&new.id).unwrap().is_none(), "{name}");
-
-        let before = db.get_task("a").unwrap().unwrap();
-        let mut edited = before.clone();
-        breaks(&mut edited);
-        edited.title = "edited".into();
-        assert!(
-            matches!(db.update_task(&edited), Err(MattersError::Validation(_))),
-            "update: {name}"
-        );
-        assert_eq!(db.get_task("a").unwrap().unwrap(), before, "{name}");
     }
 
-    let mut missing = db.get_task("y").unwrap().unwrap();
+    let mut missing = Task::new("new missing", "missing", 9.0);
+    missing.project_id = Some("p".into());
     missing.heading_id = Some("missing".into());
     assert!(matches!(
-        db.update_task(&missing),
+        db.create_task(&missing),
         Err(MattersError::NotFound {
             entity: "heading",
             ..
@@ -309,4 +301,115 @@ fn a_project_filed_in_an_area_goes_to_the_end_of_its_projects() {
             ("r".into(), None)
         ]
     );
+}
+
+// Review follow-up (#149): only the guarded moves change where something
+// lives; a whole-entity save keeps it.
+
+#[test]
+fn a_project_in_the_trash_cannot_be_refiled() {
+    let db = fixture();
+    db.create_area(&Area::new("old", "Old", 2.0)).unwrap();
+    let mut boxed = Project::new("boxed", "Boxed", 2.0);
+    boxed.area_id = Some("old".into());
+    db.create_project(&boxed).unwrap();
+    db.trash_area("old").unwrap();
+    db.trash_project("q").unwrap();
+
+    for (project, area) in [
+        ("boxed", None),
+        ("boxed", Some("home")),
+        ("q", Some("home")),
+        ("q", None),
+    ] {
+        assert!(
+            matches!(
+                db.set_project_area(project, area),
+                Err(MattersError::NotFound {
+                    entity: "project",
+                    ..
+                })
+            ),
+            "{project} to {area:?}"
+        );
+    }
+    assert_eq!(
+        db.get_project("boxed").unwrap().unwrap().area_id.as_deref(),
+        Some("old")
+    );
+    db.restore_area("old").unwrap();
+    assert!(
+        sidebar(&db).contains(&("boxed".into(), Some("old".into()))),
+        "Put Back still brings the project back with its area"
+    );
+}
+
+#[test]
+fn saving_a_task_never_changes_its_home() {
+    let db = fixture();
+    db.create_project(&Project::new("gone", "Gone", 3.0))
+        .unwrap();
+    db.trash_project("gone").unwrap();
+    let before = db.get_task("y").unwrap().unwrap();
+
+    let homes = [
+        Home::Inbox,
+        Home::Area("home".into()),
+        project("q", None),
+        project("p", Some("h1")),
+        project("gone", None),
+    ];
+    for home in homes {
+        let mut edited = db.get_task("y").unwrap().unwrap();
+        home.apply(&mut edited);
+        edited.notes = format!("saved with {home:?}");
+        db.update_task(&edited).unwrap();
+        let saved = db.get_task("y").unwrap().unwrap();
+        assert_eq!(saved.notes, edited.notes, "{home:?}");
+        assert_eq!(Home::of(&saved).unwrap(), project("p", None), "{home:?}");
+        assert_eq!(saved.sort_order, before.sort_order, "{home:?}");
+    }
+    assert_eq!(ids(&db, View::Project("p".into())), ["y", "z"]);
+}
+
+#[test]
+fn saving_a_project_never_changes_its_area() {
+    let db = fixture();
+    db.trash_area("work").unwrap();
+    for area in [Some("work"), Some("home"), Some("missing")] {
+        let mut edited = db.get_project("p").unwrap().unwrap();
+        edited.area_id = area.map(str::to_string);
+        edited.notes = "edited".into();
+        db.update_project(&edited).unwrap();
+        let saved = db.get_project("p").unwrap().unwrap();
+        assert_eq!(saved.area_id, None, "{area:?}");
+        assert_eq!(saved.notes, "edited");
+    }
+    assert_eq!(sidebar(&db), [("p".into(), None), ("q".into(), None)]);
+}
+
+#[test]
+fn a_task_stored_before_the_hierarchy_rule_stays_editable() {
+    let db = fixture();
+    // Earlier versions accepted any combination of ids; such rows must not
+    // lock the task against edits.
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET area_id = 'home', project_id = 'p', heading_id = 'qh' WHERE id = 'a'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let mut task = db.get_task("a").unwrap().unwrap();
+    assert!(Home::of(&task).is_err());
+    assert_eq!(Home::listed(&task), project("p", Some("qh")));
+    assert_eq!(View::containing(&task, today()), View::Project("p".into()));
+
+    task.notes = "still editable".into();
+    db.update_task(&task).unwrap();
+    assert_eq!(db.get_task("a").unwrap().unwrap().notes, "still editable");
+
+    db.set_task_home("a", &Home::Area("home".into())).unwrap();
+    assert_eq!(home_of(&db, "a"), Home::Area("home".into()));
 }

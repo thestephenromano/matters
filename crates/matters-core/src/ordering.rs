@@ -25,7 +25,7 @@
 use jiff::civil::Date;
 use rusqlite::params;
 
-use crate::domain::{ChecklistItem, Task, View};
+use crate::domain::{ChecklistItem, Home, Task, View};
 use crate::error::{MattersError, Result};
 use crate::query::QueryEngine;
 use crate::storage::db::{
@@ -235,17 +235,6 @@ pub fn place_in_heading(
     let Some(task) = list.iter().find(|t| t.id == id) else {
         return Err(invalid(format!("task '{id}' is not in this project")));
     };
-    if let Some(heading) = heading {
-        if !db
-            .list_headings_for_project(project_id)?
-            .iter()
-            .any(|h| h.id == heading)
-        {
-            return Err(invalid(format!(
-                "heading '{heading}' is not in this project"
-            )));
-        }
-    }
     if let Some(after) = after {
         if !list
             .iter()
@@ -257,9 +246,12 @@ pub fn place_in_heading(
         }
     }
     if task.heading_id.as_deref() != heading {
-        let mut task = task.clone();
-        task.heading_id = heading.map(str::to_string);
-        db.update_task(&task)?;
+        // Checks that the heading is in this project.
+        let home = Home::Project {
+            project: project_id.to_string(),
+            heading: heading.map(str::to_string),
+        };
+        db.set_task_home(id, &home)?;
     }
     place_task(db, &View::Project(project_id.to_string()), today, id, after)
 }
