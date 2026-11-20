@@ -169,7 +169,7 @@ fn an_item_added_below_another_lands_right_under_it() {
 
 /// Make every key update fail, as a busy or failing database would.
 fn refuse_key_updates(db: &Database) {
-    db.with_conn(|conn| {
+    db.with_raw_conn(|conn| {
         conn.execute_batch(
             "CREATE TRIGGER refuse_keys BEFORE UPDATE OF sort_order ON checklist_items
              BEGIN SELECT RAISE(ABORT, 'injected key failure'); END;",

@@ -95,9 +95,8 @@ fn a_someday_project_holds_its_tasks_back_and_is_listed_in_someday() {
     }
 
     // Brought back from Someday, the project lets its tasks go.
-    let mut p = db.get_project("p").unwrap().unwrap();
-    p.apply_schedule(&Schedule::None, today());
-    db.update_project(&p).unwrap();
+    db.set_project_schedule("p", &Schedule::None, today())
+        .unwrap();
     assert_eq!(rows(&db, &View::Today, today()), ["p-today"]);
     assert_eq!(rows(&db, &View::Anytime, today()), ["p-today", "p-anytime"]);
     assert_eq!(rows(&db, &View::Upcoming, today()), ["p-later"]);
@@ -218,14 +217,12 @@ fn a_project_save_never_changes_its_status() {
     let db = Database::open_in_memory().unwrap();
     project(&db, "p", Schedule::None);
     task(&db, "t", Some("p"), Schedule::None);
-    let stale = db.get_project("p").unwrap().unwrap();
     db.finish_project("p", Outcome::Completed, Outcome::Completed)
         .unwrap();
 
-    // A copy read before finishing, saved with a new When.
-    let mut edited = stale.clone();
-    edited.apply_schedule(&Schedule::Someday, today());
-    db.update_project(&edited).unwrap();
+    // A new When for the finished project.
+    db.set_project_schedule("p", &Schedule::Someday, today())
+        .unwrap();
 
     let saved = db.get_project("p").unwrap().unwrap();
     assert_eq!(saved.status, Status::Completed);

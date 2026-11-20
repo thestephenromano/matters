@@ -960,6 +960,7 @@ dependencies = [
  "dirs",
  "interim",
  "jiff",
+ "matters-core",
  "rusqlite",
  "serde",
  "tempfile",

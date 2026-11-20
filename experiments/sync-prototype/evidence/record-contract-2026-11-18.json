@@ -31,7 +31,7 @@
     "experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md": "55feba116369cffef17b55203f41224ed0ecbdfe14d87d707ae186eb5c8a1f79",
     "experiments/sync-prototype/REVIEW_WRITER_LIFECYCLE.md": "db070ece7687ec68f8bf119e96dd47ed38f3386b7b88d8d08960dbb699dead98",
     "experiments/sync-prototype/baseline/Cargo.toml": "36853bbbd79151afeb6479fac879f5e9be2e7b50f1e0d50804e7c05c621c5aad",
-    "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
+    "experiments/sync-prototype/baseline/src/main.rs": "16a0a4ef08f13436774aefebde03cf603da2c864727f554b33957b42d38c0b7c",
     "experiments/sync-prototype/src/lib.rs": "e3ea30e66952000e309cbe8449ca9525ede31f4f32de2aa69a4c242f051044e9",
     "experiments/sync-prototype/src/model.rs": "21ea2823fb40428eb65be105a099dcca2d1c174b939ac3458380e0dc4ec7ee98",
     "experiments/sync-prototype/src/replica.rs": "e1ca6cce7f5b231ffce1ff722dc027ea10c8dc8f4bef52d5b0a2ec75a29d8594",

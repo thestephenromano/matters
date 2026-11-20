@@ -97,9 +97,8 @@ fn rescheduled_or_trashed_tasks_leave_immediately() {
     let mut f = Fixture::new(&["a", "b", "c"]);
     f.show(View::Today);
 
-    let mut b = f.db.get_task("b").unwrap().unwrap();
-    b.apply_schedule(&Schedule::Someday, today());
-    f.db.update_task(&b).unwrap();
+    f.db.set_task_schedule("b", &Schedule::Someday, today())
+        .unwrap();
     f.db.trash_task("c").unwrap();
     assert_eq!(f.show(View::Today), ["a"]);
 }

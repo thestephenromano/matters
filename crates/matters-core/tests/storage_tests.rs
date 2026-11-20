@@ -44,21 +44,20 @@ fn deleting_a_checklist_item_removes_only_that_item() {
 }
 
 #[test]
-fn a_project_is_read_back_as_it_was_saved() {
+fn a_project_is_read_back_as_it_was_edited() {
     let db = Database::open_in_memory().unwrap();
-    let mut project = Project::new("p", "Garden", 0.0);
-    db.create_project(&project).unwrap();
+    db.create_project(&Project::new("p", "Garden", 0.0))
+        .unwrap();
     db.create_project(&Project::new("other", "Shed", 1.0))
         .unwrap();
 
-    project.title = "Garden, phase 2".into();
-    project.notes = "after the frost".into();
-    project.start_date = Some(jiff::civil::date(2026, 12, 1));
-    project.deadline = Some(jiff::civil::date(2027, 3, 1));
-    project.is_someday = true;
-    project.status = Status::Completed;
-    project.completed_at = Some(5);
-    db.update_project(&project).unwrap();
+    let start = jiff::civil::date(2026, 12, 1);
+    let deadline = jiff::civil::date(2027, 3, 1);
+    db.rename_project("p", "Garden, phase 2").unwrap();
+    db.set_project_notes("p", "after the frost").unwrap();
+    db.set_project_schedule("p", &matters_core::Schedule::Date(start), start)
+        .unwrap();
+    db.set_project_deadline("p", Some(deadline)).unwrap();
 
     let saved = db.get_project("p").unwrap().unwrap();
     assert_eq!(
@@ -72,16 +71,47 @@ fn a_project_is_read_back_as_it_was_saved() {
             saved.completed_at,
         ),
         (
-            project.title.as_str(),
-            project.notes.as_str(),
-            project.start_date,
-            project.deadline,
-            true,
+            "Garden, phase 2",
+            "after the frost",
+            Some(start),
+            Some(deadline),
+            false,
             Status::Open,
             None,
         ),
-        "a save never finishes a project: finish_project does"
+        "edits never finish a project: finish_project does"
     );
+    for missing in [
+        db.set_project_notes("missing", ""),
+        db.set_project_deadline("missing", None),
+        db.set_task_notes("missing", ""),
+        db.set_task_deadline("missing", None),
+        db.cancel_task("missing"),
+    ] {
+        assert!(matches!(
+            missing,
+            Err(matters_core::MattersError::NotFound { .. })
+        ));
+    }
     let other = db.get_project("other").unwrap().unwrap();
     assert_eq!((other.title.as_str(), other.is_someday), ("Shed", false));
+}
+
+#[test]
+fn the_shared_connection_reads_but_never_writes() {
+    let db = Database::open_in_memory().unwrap();
+    db.create_task(&matters_core::Task::new("t", "t", 0.0))
+        .unwrap();
+    let write = db.with_conn(|conn| {
+        conn.execute("UPDATE tasks SET title = 'raw' WHERE id = 't'", [])?;
+        Ok(())
+    });
+    assert!(write.is_err(), "a raw write is refused");
+    let title: String = db
+        .with_conn(|conn| Ok(conn.query_row("SELECT title FROM tasks", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(title, "t");
+    // Typed writes still work afterwards.
+    db.rename_task("t", "typed").unwrap();
+    assert_eq!(db.get_task("t").unwrap().unwrap().title, "typed");
 }

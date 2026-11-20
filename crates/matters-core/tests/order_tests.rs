@@ -118,9 +118,8 @@ fn today_keeps_its_own_order() {
     let db = Database::open_in_memory().unwrap();
     project_fixture(&db, &["a", "b", "c"]);
     for id in ["a", "b", "c"] {
-        let mut t = db.get_task(id).unwrap().unwrap();
-        t.apply_schedule(&Schedule::Today { evening: false }, today());
-        db.update_task(&t).unwrap();
+        db.set_task_schedule(id, &Schedule::Today { evening: false }, today())
+            .unwrap();
     }
 
     place_task(&db, &View::Today, today(), "c", None).unwrap();
@@ -289,9 +288,8 @@ fn once_arranged_a_move_changes_only_the_moved_tasks_key() {
     let db = Database::open_in_memory().unwrap();
     project_fixture(&db, &["a", "b", "c", "d"]);
     for id in ["a", "b", "c", "d"] {
-        let mut t = db.get_task(id).unwrap().unwrap();
-        t.apply_schedule(&Schedule::Today { evening: false }, today());
-        db.update_task(&t).unwrap();
+        db.set_task_schedule(id, &Schedule::Today { evening: false }, today())
+            .unwrap();
     }
     // The first move in each list renumbers it; Today in a different order
     // from the project.
@@ -338,9 +336,8 @@ fn new_tasks_and_projects_are_added_at_the_end() {
     let db = Database::open_in_memory().unwrap();
     project_fixture(&db, &["a", "b", "c"]);
     for id in ["a", "b", "c"] {
-        let mut t = db.get_task(id).unwrap().unwrap();
-        t.apply_schedule(&Schedule::Today { evening: false }, today());
-        db.update_task(&t).unwrap();
+        db.set_task_schedule(id, &Schedule::Today { evening: false }, today())
+            .unwrap();
     }
     // Renumber both lists by moving.
     place_task(&db, &project("p1"), today(), "c", None).unwrap();
@@ -390,10 +387,8 @@ fn a_new_area_goes_below_one_moved_to_the_end() {
 fn saving_a_task_never_changes_its_order() {
     let db = Database::open_in_memory().unwrap();
     project_fixture(&db, &["a", "b", "c"]);
-    let mut stale = db.get_task("c").unwrap().unwrap();
     place_task(&db, &project("p1"), today(), "c", None).unwrap();
-    stale.notes = "late autosave".into();
-    db.update_task(&stale).unwrap();
+    db.set_task_notes("c", "late autosave").unwrap();
     assert_eq!(ids(&db, &project("p1")), ["c", "a", "b"]);
 }
 

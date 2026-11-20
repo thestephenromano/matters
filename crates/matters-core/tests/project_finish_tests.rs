@@ -127,13 +127,9 @@ fn a_task_changed_by_hand_after_finishing_is_left_as_it_is_on_reopening() {
     db.complete_task("a").unwrap();
     // Ticked again though already done.
     db.complete_task("b").unwrap();
-    // Saved open from the editor, then canceled through a save.
-    let mut c = task(&db, "c");
-    c.status = Status::Open;
-    c.completed_at = None;
-    db.update_task(&c).unwrap();
-    c.status = Status::Canceled;
-    db.update_task(&c).unwrap();
+    // Reopened, then canceled.
+    db.uncomplete_task("c").unwrap();
+    db.cancel_task("c").unwrap();
 
     db.reopen_project("p").unwrap();
     assert_eq!(status(&db, "a"), Status::Completed);
@@ -146,9 +142,8 @@ fn a_save_that_keeps_a_task_closed_keeps_its_mark() {
     let db = fixture();
     db.finish_project("p", Outcome::Completed, Outcome::Completed)
         .unwrap();
-    let mut a = task(&db, "a");
-    a.notes = "edited while the project was finished".into();
-    db.update_task(&a).unwrap();
+    db.set_task_notes("a", "edited while the project was finished")
+        .unwrap();
 
     db.reopen_project("p").unwrap();
     assert_eq!(status(&db, "a"), Status::Open);
@@ -280,7 +275,7 @@ fn the_sidebar_lists_open_projects_and_finished_ones_are_listed_apart() {
         .unwrap();
     db.finish_project("r", Outcome::Canceled, Outcome::Canceled)
         .unwrap();
-    db.with_conn(|c| {
+    db.with_raw_conn(|c| {
         c.execute_batch("UPDATE projects SET completed_at = 100 WHERE id = 'q';")?;
         Ok(())
     })
@@ -313,7 +308,7 @@ fn the_sidebar_lists_open_projects_and_finished_ones_are_listed_apart() {
 
 /// Set when something was finished, to order the Logbook.
 fn finished_at(db: &Database, table: &str, id: &str, at: i64) {
-    db.with_conn(|c| {
+    db.with_raw_conn(|c| {
         c.execute(
             &format!("UPDATE {table} SET completed_at = ?1 WHERE id = ?2"),
             rusqlite::params![at, id],
