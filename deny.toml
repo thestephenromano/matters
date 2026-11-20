@@ -19,6 +19,9 @@ ignore = [
 [licenses]
 # Matters is MIT OR Apache-2.0; dependencies may use these licenses.
 allow = [
+    # BlueOak Model License: minicbor, the sync record codec (approved
+    # 2026-11-20 with the record stack's production adoption, #36).
+    "BlueOak-1.0.0",
     # Boost: Loro's xxhash-rust (approved 2026-11-20 with Loro's adoption).
     "BSL-1.0",
     "MIT",

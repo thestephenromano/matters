@@ -1,0 +1,19 @@
+[package]
+name = "matters-sync"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+authors = ["Matters Contributors"]
+description = "Post-quantum authenticated sync records for Matters (ADR 0002, #36)"
+
+[dependencies]
+# Exact pins approved for production on 2026-11-20 (ADR 0002, #36).
+minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
+hpke-rs-crypto = "=0.8.0"
+hpke-rs-libcrux = { version = "=0.8.0", default-features = false, features = ["std", "sys-rng", "draft-ietf-hpke-pq"] }
+libcrux-ml-dsa = { version = "=0.0.11", default-features = false, features = ["std", "mldsa65"] }
+thiserror = "2.0"
+
+[dev-dependencies]
+serde_json = "1"
