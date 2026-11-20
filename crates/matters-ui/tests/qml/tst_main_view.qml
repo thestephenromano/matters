@@ -29,7 +29,7 @@ Item {
             // previous test's popover or dialog; while one is, it catches
             // clicks, and opening it again does nothing.
             for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
-                                "emptyTrashDialog", "quickFindDialog"]) {
+                                "emptyTrashDialog", "quickFindDialog", "movePopup"]) {
                 const popup = findChild(view, name);
                 if (popup)
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
@@ -1941,6 +1941,180 @@ Item {
             typeText("z");
             keyClick(Qt.Key_Return);
             waitForChecklist(row, ["a", "z", "b"]);
+        }
+
+        // ---- Move (#54) -----------------------------------------------------
+
+        function openMove() {
+            const popup = findChild(view, "movePopup");
+            keyClick(Qt.Key_M, Qt.ControlModifier | Qt.ShiftModifier);
+            tryVerify(() => popup.opened, 1000, "Ctrl+Shift+M opens the Move popover");
+            waitForRendering(popup.contentItem);
+            return popup;
+        }
+
+        // The destinations the popover lists now, as "kind:title".
+        function moveChoices(popup) {
+            return popup.shown.map(d => d.kind + ":" + d.title);
+        }
+
+        function test_ctrl_shift_m_moves_the_selected_task_under_a_heading() {
+            controller.createProject("mv-proj");
+            const project = JSON.parse(controller.projectsJson).find(p => p.title === "mv-proj").id;
+            controller.selectProject(project);
+            const heading = controller.addHeading("mv-head");
+            verify(heading !== "");
+            controller.selectView("inbox");
+            view.captureTask("mv-stay");
+            view.captureTask("mv-go");
+            waitForRow("mv-go");
+            selectLast("mv-go");
+
+            // Escape closes it without moving anything.
+            let popup = openMove();
+            verify(findChild(popup.contentItem, "moveFilter").activeFocus, "ready for typing");
+            const inbox = popup.shown.find(d => d.kind === "inbox");
+            verify(inbox.current, "the task's home is marked");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !popup.visible, 1000);
+            verify(indexOf("mv-go") >= 0);
+            tryVerify(() => list.activeFocus, 1000, "focus returns to the list");
+
+            // A project's name finds its headings too.
+            popup = openMove();
+            typeText("mv-proj");
+            compare(moveChoices(popup), ["project:mv-proj", "heading:mv-head"]);
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Return);
+
+            waitForNoRow("mv-go");
+            tryVerify(() => !popup.visible, 1000);
+            compare(selectedTitle(), "mv-stay", "the selection moves to its neighbour");
+
+            controller.selectProject(project);
+            waitForRow("mv-go");
+            compare(list.model.headingAt(indexOf("mv-go")), heading, "filed under the heading");
+        }
+
+        function test_the_move_popover_is_clicked_to_send_a_task_to_an_area() {
+            createArea("mv-click-area");
+            controller.selectView("inbox");
+            view.captureTask("mv-click");
+            waitForRow("mv-click");
+            selectLast("mv-click");
+            const popup = openMove();
+            typeText("mv-click-area");
+            const list2 = findChild(popup.contentItem, "moveDestinations");
+            tryVerify(() => childrenNamed(list2.contentItem, "moveDestination").length === 1, 1000);
+            mouseClick(childrenNamed(list2.contentItem, "moveDestination")[0]);
+            waitForNoRow("mv-click");
+
+            const area = JSON.parse(controller.areasJson).find(a => a.title === "mv-click-area").id;
+            controller.selectArea(area);
+            waitForRow("mv-click");
+        }
+
+        // Drag `grip` to `to` (a point in `view`) in both directions.
+        function dragGripToPoint(grip, to, during) {
+            const from = grip.mapToItem(view, grip.width / 2, grip.height / 2);
+            mousePress(view, from.x, from.y);
+            const steps = 16;
+            for (let i = 1; i <= steps; ++i)
+                mouseMove(view, from.x + (to.x - from.x) * i / steps,
+                          from.y + (to.y - from.y) * i / steps, 10, Qt.LeftButton);
+            if (during)
+                during();
+            mouseRelease(view, to.x, to.y);
+        }
+
+        function centre(item) {
+            return item.mapToItem(view, item.width / 2, item.height / 2);
+        }
+
+        function sidebarProject(title) {
+            const projects = findChild(view, "projectsList");
+            const index = projects.model.findIndex(p => p.title === title);
+            projects.positionViewAtIndex(index, ListView.Contain);
+            let found = null;
+            tryVerify(() => {
+                found = findVisual(view, i => i.objectName === "projectItem" && i.visible
+                                   && i.modelData.title === title);
+                return found !== null;
+            }, 2000, "'" + title + "' in the sidebar");
+            return found;
+        }
+
+        function shownArea(title) {
+            findChild(view, "projectsList").positionViewAtEnd();
+            let found = null;
+            tryVerify(() => (found = sidebarArea(title)) !== null, 2000);
+            return found;
+        }
+
+        function dragTaskToSidebar(title, target) {
+            controller.selectView("inbox");
+            const row = waitForRow(title);
+            const indicator = findChild(view, "dropIndicator");
+            dragGripToPoint(findChild(row, "dragGrip"), centre(target), () => {
+                compare(target.border.width, 2, "the entry under the pointer is marked");
+                verify(!indicator.visible, "no drop line in the list");
+            });
+            waitForNoRow(title);
+            // The entries are rebuilt as the counts change; nothing is marked.
+            compare(view.sidebarDrop, null, "nothing is marked after the drop");
+        }
+
+        function test_dragging_a_task_onto_the_sidebar_moves_or_schedules_it() {
+            controller.selectView("inbox");
+            for (const t of ["sb-someday", "sb-today", "sb-project", "sb-area"])
+                view.captureTask(t);
+            controller.createProject("sb-proj");
+            const project = JSON.parse(controller.projectsJson).find(p => p.title === "sb-proj").id;
+            const area = createArea("sb-area-target");
+
+            dragTaskToSidebar("sb-someday", findChild(view, "nav-someday"));
+            dragTaskToSidebar("sb-today", findChild(view, "nav-today"));
+            dragTaskToSidebar("sb-project", sidebarProject("sb-proj"));
+            dragTaskToSidebar("sb-area", shownArea("sb-area-target"));
+
+            controller.selectView("someday");
+            waitForRow("sb-someday");
+            controller.selectView("today");
+            waitForRow("sb-today");
+            controller.selectProject(project);
+            waitForRow("sb-project");
+            controller.selectArea(area);
+            waitForRow("sb-area");
+            controller.selectView("inbox");
+            waitForNoRow("sb-someday");
+            waitForNoRow("sb-area");
+        }
+
+        // With a long sidebar the area may be out of sight: held near the
+        // bottom edge, the dragged project scrolls the sidebar to it.
+        function test_dragging_a_project_onto_an_area_files_it_there() {
+            controller.createProject("pa-proj");
+            const area = createArea("pa-area");
+            const projects = findChild(view, "projectsList");
+            const grip = findChild(sidebarProject("pa-proj"), "projectGrip");
+            const from = grip.mapToItem(view, grip.width / 2, grip.height / 2);
+            const edge = projects.mapToItem(view, projects.width / 2, projects.height - 8);
+            mousePress(view, from.x, from.y);
+            for (let i = 1; i <= 12; ++i)
+                mouseMove(view, from.x + (edge.x - from.x) * i / 12, from.y + (edge.y - from.y) * i / 12,
+                          10, Qt.LeftButton);
+            tryVerify(() => projects.atYEnd, 5000, "the sidebar scrolls to its end");
+            let target = null;
+            tryVerify(() => (target = sidebarArea("pa-area")) !== null, 2000);
+            const to = centre(target);
+            mouseMove(view, to.x, to.y, 10, Qt.LeftButton);
+            mouseMove(view, to.x, to.y + 1, 10, Qt.LeftButton);
+            compare(target.border.width, 2, "the area is marked");
+            verify(!findChild(view, "projectDropIndicator").visible);
+            mouseRelease(view, to.x, to.y + 1);
+            tryVerify(() => JSON.parse(controller.projectsJson).find(p => p.title === "pa-proj").area_id === area,
+                      2000, "the project is filed in the area");
+            tryVerify(() => sidebarAreaProject("pa-proj") !== null, 2000, "listed under the area");
         }
     }
 }

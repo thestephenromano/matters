@@ -21,8 +21,8 @@ use cxx_qt_lib::{
 };
 use matters_core::{
     local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
-    DeadlineStatus, DeletedHeading, Heading, ListRow, Project, QueryEngine, Schedule, Status, Task,
-    View, Visit,
+    DeadlineStatus, DeletedHeading, Heading, Home, ListRow, Project, QueryEngine, Schedule, Status,
+    Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -291,6 +291,25 @@ pub mod qobject {
             heading_id: &QString,
             after_id: &QString,
         );
+
+        /// Where the Move popover can send `task_id` (SPEC §4), as JSON, in
+        /// sidebar order: the Inbox; the projects without an area, each
+        /// followed by its headings; then each area with its projects. Each
+        /// entry has `kind` (`inbox`, `area`, `project` or `heading`), `id`,
+        /// `title`, `context` (the project or area it sits in), `depth`
+        /// (for indenting) and `current` (the task's home).
+        #[qinvokable]
+        fn move_destinations(self: &AppController, task_id: &QString) -> QString;
+        /// File a task at the end of a destination from `move_destinations`
+        /// (`kind` and `id`; the Inbox has no id). Returns false, changing
+        /// nothing, when it is refused.
+        #[qinvokable]
+        fn move_task_to(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            kind: &QString,
+            id: &QString,
+        ) -> bool;
     }
 
     impl cxx_qt::Initialize for AppController {}
@@ -750,6 +769,57 @@ impl qobject::AppController {
             (!after.is_empty()).then_some(after.as_str()),
         );
         self.finish(result);
+    }
+
+    pub fn move_destinations(&self, task_id: &QString) -> QString {
+        let current = self
+            .db
+            .get_task(&String::from(task_id))
+            .ok()
+            .flatten()
+            .and_then(|task| Home::of(&task).ok());
+        match move_destinations(&self.db, current.as_ref()) {
+            Ok(destinations) => to_json(&destinations),
+            Err(err) => {
+                eprintln!("matters: {err}");
+                QString::from("[]")
+            }
+        }
+    }
+
+    pub fn move_task_to(
+        self: Pin<&mut Self>,
+        task_id: &QString,
+        kind: &QString,
+        id: &QString,
+    ) -> bool {
+        let id = String::from(id);
+        let home = match String::from(kind).as_str() {
+            "inbox" => Ok(Home::Inbox),
+            "area" => Ok(Home::Area(id)),
+            "project" => Ok(Home::Project {
+                project: id,
+                heading: None,
+            }),
+            "heading" => match self.db.get_heading(&id) {
+                Ok(Some(heading)) => Ok(Home::Project {
+                    project: heading.project_id,
+                    heading: Some(heading.id),
+                }),
+                Ok(None) => Err(matters_core::MattersError::NotFound {
+                    entity: "heading",
+                    id,
+                }),
+                Err(err) => Err(err),
+            },
+            other => Err(matters_core::MattersError::Validation(format!(
+                "'{other}' is not a destination"
+            ))),
+        };
+        let result = home.and_then(|home| self.db.move_task(&String::from(task_id), &home));
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
     }
 
     pub fn toggle_task(self: Pin<&mut Self>, task_id: &QString) {
@@ -1250,6 +1320,86 @@ fn search_results(found: &matters_core::QuickFindResult) -> Vec<SearchResult<'_>
         title: &t.title,
     });
     areas.chain(projects).chain(tasks).collect()
+}
+
+/// One entry of the Move popover (`AppController::move_destinations`).
+#[derive(serde::Serialize)]
+struct MoveDestination {
+    kind: &'static str,
+    id: String,
+    title: String,
+    context: String,
+    depth: u8,
+    current: bool,
+}
+
+/// The Move popover's destinations, in sidebar order, with `current` (the
+/// task's home) marked.
+fn move_destinations(
+    db: &Database,
+    current: Option<&Home>,
+) -> matters_core::Result<Vec<MoveDestination>> {
+    let mut list = vec![MoveDestination {
+        kind: "inbox",
+        id: String::new(),
+        title: "Inbox".into(),
+        context: String::new(),
+        depth: 0,
+        current: current == Some(&Home::Inbox),
+    }];
+    let projects = db.list_projects()?;
+    let add_project = |list: &mut Vec<MoveDestination>,
+                       project: &Project,
+                       context: &str,
+                       depth: u8|
+     -> matters_core::Result<()> {
+        let here = |heading: Option<&str>| {
+            current
+                == Some(&Home::Project {
+                    project: project.id.clone(),
+                    heading: heading.map(str::to_string),
+                })
+        };
+        list.push(MoveDestination {
+            kind: "project",
+            id: project.id.clone(),
+            title: project.title.clone(),
+            context: context.to_string(),
+            depth,
+            current: here(None),
+        });
+        for heading in db.list_headings_for_project(&project.id)? {
+            list.push(MoveDestination {
+                kind: "heading",
+                current: here(Some(&heading.id)),
+                id: heading.id,
+                title: heading.title,
+                context: project.title.clone(),
+                depth: depth + 1,
+            });
+        }
+        Ok(())
+    };
+    for project in projects.iter().filter(|p| p.area_id.is_none()) {
+        add_project(&mut list, project, "", 0)?;
+    }
+    for area in db.list_areas()? {
+        list.push(MoveDestination {
+            kind: "area",
+            current: current == Some(&Home::Area(area.id.clone())),
+            id: area.id.clone(),
+            title: area.title.clone(),
+            context: String::new(),
+            depth: 0,
+        });
+        for project in projects
+            .iter()
+            .filter(|p| p.area_id.as_deref() == Some(area.id.as_str()))
+        {
+            add_project(&mut list, project, &area.title, 1)?;
+        }
+    }
+    Ok(list)
 }
 
 // =============================================================================
