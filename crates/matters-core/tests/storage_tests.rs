@@ -77,9 +77,10 @@ fn a_project_is_read_back_as_it_was_saved() {
             project.start_date,
             project.deadline,
             true,
-            Status::Completed,
-            Some(5),
-        )
+            Status::Open,
+            None,
+        ),
+        "a save never finishes a project: finish_project does"
     );
     let other = db.get_project("other").unwrap().unwrap();
     assert_eq!((other.title.as_str(), other.is_someday), ("Shed", false));

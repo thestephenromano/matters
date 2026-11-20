@@ -487,9 +487,12 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Write the project's editable fields; like [`Self::update_task`], never
-    /// its order, trash state or area, so a stale copy can't undo a move.
-    /// [`Self::set_project_area`] files a project in another area.
+    /// Write the project's editable fields: title, notes, When and deadline.
+    /// Like [`Self::update_task`], never its order, trash state or area, so
+    /// a stale copy can't undo a move ([`Self::set_project_area`] files a
+    /// project in another area), and never its status: only
+    /// [`Self::finish_project`] and [`Self::reopen_project`] change that,
+    /// together with the tasks they close and reopen.
     pub fn update_project(&self, project: &Project) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
@@ -500,9 +503,8 @@ impl Database {
         conn.execute(
             "UPDATE projects SET
                 title = ?1, notes = ?2, start_date = ?3, time_of_day = ?4,
-                is_someday = ?5, deadline = ?6, status = ?7, completed_at = ?8,
-                updated_at = ?9
-             WHERE id = ?10",
+                is_someday = ?5, deadline = ?6, updated_at = ?7
+             WHERE id = ?8",
             params![
                 project.title,
                 project.notes,
@@ -510,8 +512,6 @@ impl Database {
                 project.time_of_day,
                 is_someday,
                 deadline,
-                project.status.as_str(),
-                project.completed_at,
                 now,
                 project.id,
             ],

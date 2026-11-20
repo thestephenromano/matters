@@ -1404,6 +1404,16 @@ fn search_results(found: &matters_core::QuickFindResult) -> Vec<SearchResult<'_>
     areas.chain(projects).chain(tasks).collect()
 }
 
+/// How QML names a `DeadlineStatus`: none, set, today or overdue.
+fn deadline_key(status: DeadlineStatus) -> &'static str {
+    match status {
+        DeadlineStatus::None => "none",
+        DeadlineStatus::Set => "set",
+        DeadlineStatus::DueToday => "today",
+        DeadlineStatus::Overdue => "overdue",
+    }
+}
+
 /// One entry of the Move popover (`AppController::move_destinations`).
 #[derive(serde::Serialize)]
 struct MoveDestination {
@@ -1512,10 +1522,12 @@ enum Role {
     /// Checklist items done, and in all (0 without a checklist).
     ChecklistDone,
     ChecklistTotal,
+    /// `open`, `completed` or `canceled`.
+    Status,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 14] = [
+    const ALL: [(Role, &'static str); 15] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -1530,6 +1542,7 @@ impl Role {
         (Role::ChecklistTotal, "checklistTotal"),
         (Role::Kind, "kind"),
         (Role::HeadingId, "headingId"),
+        (Role::Status, "status"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -1636,15 +1649,13 @@ impl qobject::TaskListModel {
                         tasks.iter().map(|t| t.id.clone()).zip(keys).collect();
                     let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
                     let progress = db.checklist_progress(&ids)?;
-                    let rows = engine.list_rows(&view, tasks)?;
+                    let rows = engine.list_rows(&view, tasks, local_today())?;
                     for row in &rows {
                         let key = match row {
                             ListRow::EmptyHeading(h) => {
                                 matters_core::heading_section_key(&h.id, &h.title)
                             }
-                            ListRow::Project(p) => {
-                                matters_core::logbook_section_key(p.completed_at)
-                            }
+                            ListRow::Project(p) => matters_core::project_section_key(&view, p),
                             ListRow::Task(_) => continue,
                         };
                         sections.insert(row_key(row), key);
@@ -1756,6 +1767,7 @@ impl qobject::TaskListModel {
                     .as_str(),
             )),
             Role::Someday => QVariant::from(&task.is_someday),
+            Role::Status => QVariant::from(&QString::from(task.status.as_str())),
             Role::Section => QVariant::from(&QString::from(
                 self.sections
                     .get(&task.id)
@@ -1770,33 +1782,39 @@ impl qobject::TaskListModel {
                 let total = self.progress.get(&task.id).map_or(0, |p| p.total);
                 QVariant::from(&i32::try_from(total).unwrap_or(i32::MAX))
             }
-            Role::DeadlineStatus => {
-                QVariant::from(&QString::from(match task.deadline_status(local_today()) {
-                    DeadlineStatus::None => "none",
-                    DeadlineStatus::Set => "set",
-                    DeadlineStatus::DueToday => "today",
-                    DeadlineStatus::Overdue => "overdue",
-                }))
-            }
+            Role::DeadlineStatus => QVariant::from(&QString::from(deadline_key(
+                task.deadline_status(local_today()),
+            ))),
         }
     }
 
-    /// A finished project's row in the Logbook: its kind, id (as `taskId`),
-    /// title, whether it was completed, and section; the other roles are
-    /// empty.
+    /// A project's row (the Logbook, Today, Upcoming, Someday): its kind, id
+    /// (as `taskId`), title, status, When, deadline and section; the
+    /// task-only roles are empty.
     fn project_data(&self, row: &ListRow, project: &Project, role: Role) -> QVariant {
+        let date =
+            |d: Option<String>| QVariant::from(&QString::from(d.unwrap_or_default().as_str()));
         match role {
             Role::Kind => QVariant::from(&QString::from("project")),
             Role::TaskId => QVariant::from(&QString::from(project.id.as_str())),
             Role::Title => QVariant::from(&QString::from(project.title.as_str())),
             Role::Done => QVariant::from(&(project.status == Status::Completed)),
+            Role::Status => QVariant::from(&QString::from(project.status.as_str())),
+            Role::StartDate => date(project.start_date.map(|d| d.to_string())),
+            Role::Evening => QVariant::from(&(project.time_of_day.as_deref() == Some("evening"))),
+            Role::Someday => QVariant::from(&project.is_someday),
+            Role::Deadline => date(project.deadline.map(|d| d.to_string())),
+            Role::DeadlineStatus => QVariant::from(&QString::from(deadline_key(
+                project.deadline_status(local_today()),
+            ))),
             Role::Section => QVariant::from(&QString::from(
                 self.sections
                     .get(&row_key(row))
                     .map(String::as_str)
                     .unwrap_or_default(),
             )),
-            _ => QVariant::default(),
+            Role::ChecklistDone | Role::ChecklistTotal => QVariant::from(&0_i32),
+            Role::Notes | Role::HeadingId => QVariant::from(&QString::default()),
         }
     }
 
@@ -1819,7 +1837,8 @@ impl qobject::TaskListModel {
             | Role::Notes
             | Role::StartDate
             | Role::Deadline
-            | Role::DeadlineStatus => QVariant::from(&QString::default()),
+            | Role::DeadlineStatus
+            | Role::Status => QVariant::from(&QString::default()),
         }
     }
 

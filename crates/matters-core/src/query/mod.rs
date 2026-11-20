@@ -44,6 +44,19 @@ pub fn heading_section_key(id: &str, title: &str) -> String {
     format!("heading:{id}:{title}")
 }
 
+/// The section a project's row sits in, in `view` ([`QueryEngine::list_rows`]):
+/// in Upcoming, the day it starts; in the Logbook, the day it was finished;
+/// elsewhere none.
+pub fn project_section_key(view: &View, project: &Project) -> String {
+    match view {
+        View::Upcoming => project
+            .start_date
+            .map_or(String::new(), |d| format!("date:{d}")),
+        View::Logbook => logbook_section_key(project.completed_at),
+        _ => String::new(),
+    }
+}
+
 /// The Logbook's section key for something finished at `completed_at`
 /// (milliseconds): `done:YYYY-MM-DD`, its local day, or `done:` when that
 /// is unknown.
@@ -94,18 +107,42 @@ macro_rules! outside_finished_projects {
     };
 }
 
+/// The task's project, if any, doesn't hold it back: a project that is
+/// Someday, or starts after the reference date `?1`, keeps its tasks out of
+/// Today and Anytime until then (#56). The project itself is listed instead
+/// ([`QueryEngine::list_rows`]).
+macro_rules! not_held_by_project {
+    () => {
+        "(project_id IS NULL OR project_id NOT IN (SELECT id FROM projects
+            WHERE status = 'open' AND (is_someday = 1 OR start_date > ?1)))"
+    };
+}
+
+/// The task's project, if any, is not Someday: a Someday project keeps its
+/// tasks out of Upcoming too.
+macro_rules! not_in_someday_project {
+    () => {
+        "(project_id IS NULL OR project_id NOT IN (SELECT id FROM projects
+            WHERE status = 'open' AND is_someday = 1))"
+    };
+}
+
 /// TODAY: scheduled for today or earlier (overdue), or undated with a deadline
 /// today or earlier.
 const TODAY_WHERE: &str = concat!(
     "status = 'open' AND is_someday = 0
     AND (start_date <= ?1 OR (start_date IS NULL AND deadline <= ?1)) AND ",
-    outside_finished_projects!()
+    outside_finished_projects!(),
+    " AND ",
+    not_held_by_project!()
 );
 
 /// UPCOMING: start date strictly after the reference date.
 const UPCOMING_WHERE: &str = concat!(
     "status = 'open' AND is_someday = 0 AND start_date > ?1 AND ",
-    outside_finished_projects!()
+    outside_finished_projects!(),
+    " AND ",
+    not_in_someday_project!()
 );
 
 /// ANYTIME: actionable now and organised under an area or project.
@@ -113,7 +150,9 @@ const ANYTIME_WHERE: &str = concat!(
     "status = 'open' AND is_someday = 0
     AND (start_date IS NULL OR start_date <= ?1)
     AND (project_id IS NOT NULL OR area_id IS NOT NULL) AND ",
-    outside_finished_projects!()
+    outside_finished_projects!(),
+    " AND ",
+    not_held_by_project!()
 );
 
 /// SOMEDAY: explicitly deferred.
@@ -128,6 +167,21 @@ const LOGBOOK_WHERE: &str = concat!(
     "status IN ('completed', 'canceled') AND ",
     outside_finished_projects!()
 );
+
+// Projects listed as rows of their own (#56), beside the tasks, for live
+// projects only. `?1` is the reference date.
+
+/// Today lists an open project whose deadline is today or past.
+const PROJECT_TODAY_WHERE: &str = "status = 'open' AND deadline <= ?1";
+
+/// Upcoming lists an open project on the day it starts.
+const PROJECT_UPCOMING_WHERE: &str = "status = 'open' AND is_someday = 0 AND start_date > ?1";
+
+/// Someday lists the open projects deferred to Someday.
+const PROJECT_SOMEDAY_WHERE: &str = "status = 'open' AND is_someday = 1";
+
+/// The sidebar's order for projects listed beside tasks.
+const PROJECT_ROW_ORDER: &str = "sort_order ASC, created_at ASC, id ASC";
 
 /// PROJECT: a project's live tasks, done or not (the same set its progress
 /// ring counts). `?1` is the project id.
@@ -228,19 +282,22 @@ impl<'a> QueryEngine<'a> {
                 COUNT(CASE WHEN {SOMEDAY_WHERE} THEN 1 END),
                 COUNT(CASE WHEN {LOGBOOK_WHERE} THEN 1 END),
                 (SELECT COUNT(*) FROM projects
-                  WHERE {} AND status IN ('completed', 'canceled'))
+                  WHERE {live} AND status IN ('completed', 'canceled')),
+                (SELECT COUNT(*) FROM projects WHERE {live} AND {PROJECT_TODAY_WHERE}),
+                (SELECT COUNT(*) FROM projects WHERE {live} AND {PROJECT_UPCOMING_WHERE}),
+                (SELECT COUNT(*) FROM projects WHERE {live} AND {PROJECT_SOMEDAY_WHERE})
              FROM tasks WHERE {LIVE}",
-            trash::LIVE_PROJECT
+            live = trash::LIVE_PROJECT
         );
         self.db.with_conn(|conn| {
             Ok(conn.query_row(&sql, params![ref_str], |r| {
                 let n = |i| r.get::<_, i64>(i).map(|v| v as usize);
                 Ok(ViewCounts {
                     inbox: n(0)?,
-                    today: n(1)?,
-                    upcoming: n(2)?,
+                    today: n(1)? + n(7)?,
+                    upcoming: n(2)? + n(8)?,
                     anytime: n(3)?,
-                    someday: n(4)?,
+                    someday: n(4)? + n(9)?,
                     logbook: n(5)? + n(6)?,
                 })
             })?)
@@ -441,14 +498,44 @@ impl<'a> QueryEngine<'a> {
     ///   its own where its tasks would be, so it can be seen and moved into.
     /// * In the Logbook, each finished project is a row, placed among the
     ///   tasks by when it was finished (#55).
+    /// * Today lists first the open projects whose deadline is today or
+    ///   past; Someday, the projects deferred to Someday; Upcoming, each
+    ///   project that starts later at the head of its day (#56).
     ///
-    /// Other views list only their tasks.
-    pub fn list_rows(&self, view: &View, tasks: Vec<Task>) -> Result<Vec<ListRow>> {
-        if *view == View::Logbook {
-            return self.logbook_rows(tasks);
-        }
-        let View::Project(project_id) = view else {
-            return Ok(tasks.into_iter().map(ListRow::Task).collect());
+    /// Other views list only their tasks. `reference_date` is today, as for
+    /// [`Self::tasks_in`].
+    pub fn list_rows(
+        &self,
+        view: &View,
+        tasks: Vec<Task>,
+        reference_date: Date,
+    ) -> Result<Vec<ListRow>> {
+        let today = reference_date.to_string();
+        // Projects listed above the tasks.
+        let first = |projects: Vec<Project>, tasks: Vec<Task>| -> Vec<ListRow> {
+            let projects = projects.into_iter().map(ListRow::Project);
+            projects
+                .chain(tasks.into_iter().map(ListRow::Task))
+                .collect()
+        };
+        let project_id = match view {
+            View::Logbook => return self.logbook_rows(tasks),
+            View::Today => {
+                let due = self.select_live_projects(
+                    PROJECT_TODAY_WHERE,
+                    PROJECT_ROW_ORDER,
+                    params![today],
+                )?;
+                return Ok(first(due, tasks));
+            }
+            View::Someday => {
+                let deferred =
+                    self.select_live_projects(PROJECT_SOMEDAY_WHERE, PROJECT_ROW_ORDER, [])?;
+                return Ok(first(deferred, tasks));
+            }
+            View::Upcoming => return self.upcoming_rows(tasks, &today),
+            View::Project(id) => id,
+            _ => return Ok(tasks.into_iter().map(ListRow::Task).collect()),
         };
         let headings = self.db.list_headings_for_project(project_id)?;
         // Group 0 is above the headings; group i + 1 is heading i. A task
@@ -477,6 +564,47 @@ impl<'a> QueryEngine<'a> {
             }
         }
         Ok(rows)
+    }
+
+    /// Upcoming's tasks with the projects that start later merged in: a
+    /// project heads the tasks of the day it starts.
+    fn upcoming_rows(&self, tasks: Vec<Task>, today: &str) -> Result<Vec<ListRow>> {
+        let mut projects = self
+            .select_live_projects(
+                PROJECT_UPCOMING_WHERE,
+                &format!("start_date ASC, {PROJECT_ROW_ORDER}"),
+                params![today],
+            )?
+            .into_iter()
+            .peekable();
+        let mut rows = Vec::new();
+        for task in tasks {
+            while let Some(project) = projects.next_if(|p| p.start_date <= task.start_date) {
+                rows.push(ListRow::Project(project));
+            }
+            rows.push(ListRow::Task(task));
+        }
+        rows.extend(projects.map(ListRow::Project));
+        Ok(rows)
+    }
+
+    /// Live projects matching `rule`, the projects' counterpart of
+    /// `select_live`.
+    fn select_live_projects(
+        &self,
+        rule: &str,
+        order: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<Project>> {
+        let sql = format!(
+            "SELECT {PROJECT_COLUMNS} FROM projects WHERE {} AND ({rule}) ORDER BY {order}",
+            trash::LIVE_PROJECT
+        );
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params, Database::map_project_row)?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
     }
 
     /// The Logbook's tasks with the finished projects merged in, most

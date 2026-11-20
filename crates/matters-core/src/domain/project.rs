@@ -2,6 +2,8 @@ use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
 use super::status::Status;
+use super::task::DeadlineStatus;
+use super::when::Schedule;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Project {
@@ -28,6 +30,22 @@ pub struct Project {
 impl Project {
     pub fn is_trashed(&self) -> bool {
         self.trashed_at.is_some()
+    }
+
+    /// Set the project's When (#56), all three stored fields together, as
+    /// for a task ([`crate::Task::apply_schedule`]). A project that is
+    /// Someday or starts after today holds back its tasks
+    /// ([`crate::QueryEngine`]).
+    pub fn apply_schedule(&mut self, schedule: &Schedule, today: Date) {
+        let (start_date, time_of_day, is_someday) = schedule.to_db_fields(today);
+        self.start_date = start_date;
+        self.time_of_day = time_of_day.map(str::to_string);
+        self.is_someday = is_someday;
+    }
+
+    /// Where the project stands against its deadline on `today`.
+    pub fn deadline_status(&self, today: Date) -> DeadlineStatus {
+        DeadlineStatus::of(self.deadline, self.status, today)
     }
 
     pub fn new(id: impl Into<String>, title: impl Into<String>, sort_order: f64) -> Self {

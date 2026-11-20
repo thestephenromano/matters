@@ -14,8 +14,8 @@ pub use domain::{
 };
 pub use error::{MattersError, Result};
 pub use query::{
-    heading_section_key, logbook_section_key, ListRow, ProjectView, QueryEngine, QuickFindResult,
-    TodayView, UpcomingGroup, ViewCounts,
+    heading_section_key, logbook_section_key, project_section_key, ListRow, ProjectView,
+    QueryEngine, QuickFindResult, TodayView, UpcomingGroup, ViewCounts,
 };
 pub use storage::Database;
 pub use visit::Visit;

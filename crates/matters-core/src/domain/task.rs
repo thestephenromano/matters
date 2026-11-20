@@ -17,6 +17,21 @@ pub enum DeadlineStatus {
     Overdue,
 }
 
+impl DeadlineStatus {
+    /// Where something with `deadline` and `status` stands on `today`.
+    /// Only open items are due or overdue: a finished one's deadline is
+    /// just shown. Tasks and projects share this rule.
+    pub fn of(deadline: Option<Date>, status: Status, today: Date) -> Self {
+        match deadline {
+            None => DeadlineStatus::None,
+            Some(_) if status != Status::Open => DeadlineStatus::Set,
+            Some(d) if d < today => DeadlineStatus::Overdue,
+            Some(d) if d == today => DeadlineStatus::DueToday,
+            Some(_) => DeadlineStatus::Set,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -81,13 +96,7 @@ impl Task {
     /// Where this task stands against its deadline on `today`. Only open
     /// tasks are due or overdue: a finished task's deadline is just shown.
     pub fn deadline_status(&self, today: Date) -> DeadlineStatus {
-        match self.deadline {
-            None => DeadlineStatus::None,
-            Some(_) if self.status != Status::Open => DeadlineStatus::Set,
-            Some(d) if d < today => DeadlineStatus::Overdue,
-            Some(d) if d == today => DeadlineStatus::DueToday,
-            Some(_) => DeadlineStatus::Set,
-        }
+        DeadlineStatus::of(self.deadline, self.status, today)
     }
 
     pub fn is_trashed(&self) -> bool {
