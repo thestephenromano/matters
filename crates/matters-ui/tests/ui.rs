@@ -79,6 +79,8 @@ fn main() {
     // A fake calendar, read at once rather than on a worker (#62). The tests
     // start with events hidden (`init()`), and those about events show them.
     matters_ui::install_calendar_source(Box::new(fake_calendar()), false);
+    // Reminders are kept, never shown on the desktop (#60).
+    matters_ui::install_notifier(Box::new(matters_ui::notify::RecordingNotifier::default()));
     matters_ui::init_qml();
 
     let source_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/qml");

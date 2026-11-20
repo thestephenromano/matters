@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::schema::{
-    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7,
-    MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
+    MIGRATION_V10, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
+    MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -18,7 +18,7 @@ use crate::error::{MattersError, Result};
 pub(crate) const TASK_COLUMNS: &str =
     "id, area_id, project_id, heading_id, title, notes, start_date,
      time_of_day, is_someday, deadline, status, completed_at, sort_order,
-     created_at, updated_at, trashed_at, today_order";
+     created_at, updated_at, trashed_at, today_order, reminder_time";
 
 /// Columns read by [`Database::map_area_row`], in its expected order.
 pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
@@ -118,6 +118,7 @@ impl Database {
             (7, MIGRATION_V7),
             (8, MIGRATION_V8),
             (9, MIGRATION_V9),
+            (10, MIGRATION_V10),
         ] {
             if version < target {
                 let tx = conn.transaction()?;
@@ -916,8 +917,9 @@ impl Database {
                     "INSERT INTO tasks (
                 id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                created_at, updated_at, trashed_at, today_order
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                created_at, updated_at, trashed_at, today_order, reminder_time
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                ?18)",
                     params![
                         task.id,
                         task.area_id,
@@ -936,6 +938,7 @@ impl Database {
                         task.updated_at,
                         task.trashed_at,
                         task.today_order,
+                        task.reminder.map(crate::reminders::stored_time),
                     ],
                 )?;
                 Ok(())
@@ -997,6 +1000,52 @@ impl Database {
              start_date = CASE WHEN ?1 THEN COALESCE(start_date, ?2) ELSE start_date END",
             &[&evening, &today.to_string()],
             |tx, _| super::sync::rescheduled(tx, id),
+        )
+    }
+
+    /// Set or clear a task's reminder (#60): the time of day it is due on
+    /// the task's start date. Seconds are dropped.
+    pub fn set_task_reminder(&self, id: &str, time: Option<jiff::civil::Time>) -> Result<()> {
+        let time = time.map(crate::reminders::to_minute);
+        self.update_fields(
+            "tasks",
+            "task",
+            id,
+            "reminder_time = ?1",
+            &[&time.map(crate::reminders::stored_time)],
+            |_, _| {
+                Ok(vec![crate::crdt::Command::SetReminder {
+                    id: id.into(),
+                    time,
+                }])
+            },
+        )
+    }
+
+    /// Remind about task `id` at `time` (to the minute) on its start date.
+    /// A reminder needs a date: a task with none, or deferred to Someday, is
+    /// scheduled for `today` in the same change.
+    pub fn remind_task_at(&self, id: &str, time: jiff::civil::Time, today: Date) -> Result<()> {
+        let time = crate::reminders::to_minute(time);
+        self.update_fields(
+            "tasks",
+            "task",
+            id,
+            "reminder_time = ?1,
+             time_of_day = CASE WHEN start_date IS NULL OR is_someday = 1 THEN NULL
+                                ELSE time_of_day END,
+             start_date = CASE WHEN start_date IS NULL OR is_someday = 1 THEN ?2
+                               ELSE start_date END,
+             is_someday = 0",
+            &[&crate::reminders::stored_time(time), &today.to_string()],
+            |tx, _| {
+                let mut commands = super::sync::rescheduled(tx, id)?;
+                commands.push(crate::crdt::Command::SetReminder {
+                    id: id.into(),
+                    time: Some(time),
+                });
+                Ok(commands)
+            },
         )
     }
 
@@ -1519,6 +1568,9 @@ impl Database {
             updated_at: row.get(14)?,
             trashed_at: row.get(15)?,
             today_order: row.get(16)?,
+            reminder: row
+                .get::<_, Option<String>>(17)?
+                .and_then(|s| crate::reminders::parse_stored_time(&s)),
         })
     }
 

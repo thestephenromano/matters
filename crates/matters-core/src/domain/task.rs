@@ -1,4 +1,4 @@
-use jiff::civil::Date;
+use jiff::civil::{Date, Time};
 use serde::{Deserialize, Serialize};
 
 use super::status::Status;
@@ -44,6 +44,11 @@ pub struct Task {
     pub time_of_day: Option<String>, // Some("evening") or None
     pub is_someday: bool,
     pub deadline: Option<Date>,
+    /// The time of day to be reminded, on the task's start date (#60). A
+    /// task with no start date, deferred to Someday or finished has no
+    /// reminder due (`crate::reminders`).
+    #[serde(default)]
+    pub reminder: Option<Time>,
     pub status: Status,
     pub completed_at: Option<i64>,
     /// When the task was moved to the Trash; `None` while it is not trashed.
@@ -75,6 +80,7 @@ impl Task {
             time_of_day: None,
             is_someday: false,
             deadline: None,
+            reminder: None,
             status: Status::Open,
             completed_at: None,
             trashed_at: None,

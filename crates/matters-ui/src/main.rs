@@ -34,6 +34,8 @@ fn main() {
         Err(reason) => Box::new(FakeCalendarSource::unavailable(reason.0)),
     };
     matters_ui::install_calendar_source(calendars, true);
+    // Reminders (#60) as desktop notifications.
+    matters_ui::install_notifier(Box::new(matters_ui::notify::DesktopNotifier));
     matters_ui::init_qml();
 
     let mut app = QGuiApplication::new();

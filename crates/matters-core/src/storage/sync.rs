@@ -312,6 +312,12 @@ pub(crate) fn create_task(tx: &Transaction<'_>, task: &Task) -> Result<Vec<Comma
         task.completed_at,
         task.trashed_at,
     ));
+    if task.reminder.is_some() {
+        commands.push(Command::SetReminder {
+            id: task.id.clone(),
+            time: task.reminder,
+        });
+    }
     // Placed in Today's order within its section, once its When is known.
     commands.extend(reorder(
         tx,
@@ -716,9 +722,16 @@ impl Database {
 }
 
 /// Replace every domain row with the engine's. Order keys become ranks.
+///
+/// Rows that are this device's own and never synced, but reference the
+/// domain rows (`reminder_deliveries`, #60), would be deleted with them by
+/// their cascades. They are kept aside and put back for the rows that still
+/// exist; any later local-only table that references a domain table needs
+/// the same.
 fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
     tx.execute_batch(
-        "DELETE FROM task_tags; DELETE FROM project_tags; DELETE FROM area_tags;
+        "CREATE TEMP TABLE kept_reminder_deliveries AS SELECT * FROM reminder_deliveries;
+         DELETE FROM task_tags; DELETE FROM project_tags; DELETE FROM area_tags;
          DELETE FROM checklist_items; DELETE FROM tasks; DELETE FROM headings;
          DELETE FROM projects; DELETE FROM areas; DELETE FROM tags;",
     )?;
@@ -778,8 +791,9 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
         tx.execute(
             "INSERT INTO tasks (id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order, created_at,
-                updated_at, trashed_at, today_order, closed_by_project)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                updated_at, trashed_at, today_order, closed_by_project, reminder_time)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                ?19)",
             params![
                 t.id,
                 t.area_id,
@@ -798,7 +812,8 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
                 t.updated_at,
                 t.trashed_at,
                 t.today_order,
-                s.closed_by_project.contains(&t.id)
+                s.closed_by_project.contains(&t.id),
+                t.reminder.map(crate::reminders::stored_time)
             ],
         )?;
     }
@@ -834,5 +849,10 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
             params![item, tag],
         )?;
     }
+    tx.execute_batch(
+        "INSERT INTO reminder_deliveries
+             SELECT * FROM kept_reminder_deliveries WHERE task_id IN (SELECT id FROM tasks);
+         DROP TABLE kept_reminder_deliveries;",
+    )?;
     Ok(())
 }

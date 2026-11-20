@@ -113,6 +113,11 @@ pub enum Command {
         id: String,
         deadline: Option<Date>,
     },
+    /// A task's reminder time (#60).
+    SetReminder {
+        id: String,
+        time: Option<jiff::civil::Time>,
+    },
     /// Status, finish time and the "closed by its project" mark change
     /// together, so they can never disagree.
     SetStatus {
@@ -537,6 +542,7 @@ impl Document {
             | Command::SetSchedule { id, .. }
             | Command::SetDeadline { id, .. }
             | Command::SetStatus { id, .. } => (id, Kind::has_notes),
+            Command::SetReminder { id, .. } => (id, |k| k == Kind::Task),
             Command::SetTrashed { id, .. } => {
                 (id, |k| matches!(k, Kind::Area | Kind::Project | Kind::Task))
             }
@@ -568,6 +574,7 @@ impl Document {
                 ..
             } => put(&meta, "schedule", &(start_date, evening, someday))?,
             Command::SetDeadline { deadline, .. } => put(&meta, "deadline", deadline)?,
+            Command::SetReminder { time, .. } => put(&meta, "reminder", time)?,
             Command::SetStatus {
                 status,
                 completed_at,

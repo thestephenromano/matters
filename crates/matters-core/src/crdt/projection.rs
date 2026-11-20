@@ -109,6 +109,15 @@ fn text(value: &Value, key: &str) -> Result<String> {
         .ok_or_else(|| invalid(format!("missing {key}")))
 }
 
+/// A register that is written only once set (the reminder, #60), and is
+/// missing from documents written before it existed: missing means unset.
+fn optional_json<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Result<Option<T>> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => json(value, key),
+    }
+}
+
 fn json<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Result<T> {
     serde_json::from_str(&text(value, key)?).map_err(engine)
 }
@@ -292,6 +301,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
                     time_of_day: evening.then(|| "evening".to_string()),
                     is_someday: someday,
                     deadline: json(v, "deadline")?,
+                    reminder: optional_json(v, "reminder")?.flatten(),
                     status,
                     completed_at,
                     trashed_at: json(v, "trashed_at")?,
