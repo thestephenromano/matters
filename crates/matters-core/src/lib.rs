@@ -1,4 +1,5 @@
 pub mod clock;
+pub mod crdt;
 pub mod domain;
 pub mod error;
 pub mod list_diff;

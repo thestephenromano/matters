@@ -11,7 +11,7 @@ description = "Core GTD engine and SQLite persistence for Matters"
 rusqlite = { version = "=0.43.0", features = ["bundled", "uuid"] }
 # Dates and times; chrono is unmaintained (RUSTSEC-2026-0543, #123).
 jiff = { version = "0.2", features = ["serde"] }
-uuid = { version = "1.10", features = ["v4", "serde"] }
+uuid = { version = "1.10", features = ["v4", "v8", "serde"] }
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "6.0"
@@ -19,6 +19,9 @@ dirs = "6.0"
 toml = "1.2"
 # Typed dates in the When picker ("tomorrow", "fri", "in 3 days"); decided on #59.
 interim = { version = "0.2.2", features = ["jiff_0_2"] }
+# The sync engine's document (ADR 0001, adopted 2026-11-20, #35).
+loro = "=1.18.0"
+serde_json = "1"
 
 [features]
 # Raw read-write SQL for tests that stage states the typed operations
