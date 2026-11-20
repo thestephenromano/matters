@@ -481,6 +481,10 @@ fn undoing_a_heading_deletion_leaves_tasks_that_moved_away() {
     }
     let deleted = db.delete_heading(&id(2)).unwrap();
     db.set_task_home(&id(11), &Home::Inbox).unwrap();
+    // A later millisecond, so a stray edit of the moved task would show in
+    // its updated_at.
+    let moved = matters_core::clock::now_millis();
+    while matters_core::clock::now_millis() == moved {}
     db.restore_heading(&deleted).unwrap();
     check(&db);
     assert_eq!(db.get_task(&id(11)).unwrap().unwrap().project_id, None);
