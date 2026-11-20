@@ -1,7 +1,7 @@
 //! The engine document (#35): typed commands, concurrent merges and the
 //! rows read back. Case names follow ADR 0001's concurrency fixtures.
 
-use matters_core::crdt::{Anchor, Command, Document, Kind, Snapshot};
+use matters_core::crdt::{Anchor, Command, Document, Kind, LinkKind, Snapshot};
 use matters_core::{MattersError, Status};
 
 fn id(n: u128) -> String {
@@ -690,4 +690,227 @@ fn c19_today_skips_references_that_no_longer_name_a_task() {
     b.apply(&[create(62, Kind::Task, None, "two")], 20).unwrap();
     let s = converged(&mut a, &mut b);
     assert!(s.repairs.contains(&format!("today-duplicate:{}", id(62))));
+}
+
+#[test]
+fn c12_tag_names_merge_ignoring_case_and_keep_assignments() {
+    let (mut a, mut b) = pair();
+    let tag = |n: u128, name: &str| Command::CreateTag {
+        id: id(n),
+        name: name.into(),
+        parent: None,
+        at: Anchor::Last,
+        created_at: 1,
+    };
+    a.apply(
+        &[
+            tag(80, "Work"),
+            Command::Link {
+                item: id(TASK),
+                tag: id(80),
+                present: true,
+            },
+        ],
+        20,
+    )
+    .unwrap();
+    b.apply(
+        &[
+            tag(81, "work"),
+            Command::Link {
+                item: id(OTHER),
+                tag: id(81),
+                present: true,
+            },
+        ],
+        20,
+    )
+    .unwrap();
+    let s = converged(&mut a, &mut b);
+    assert_eq!(s.tags.len(), 1);
+    assert_eq!(s.tags[0].id, id(80), "the smaller UUID keeps the name");
+    assert!(s.links.contains(&(LinkKind::Task, id(TASK), id(80))));
+    assert!(s.links.contains(&(LinkKind::Task, id(OTHER), id(80))));
+    assert!(s.repairs.contains(&format!("tag-merge:{}", id(81))));
+}
+
+#[test]
+fn deleting_a_tag_lifts_its_children() {
+    let (mut a, _) = pair();
+    a.apply(
+        &[
+            Command::CreateTag {
+                id: id(90),
+                name: "a".into(),
+                parent: None,
+                at: Anchor::Last,
+                created_at: 1,
+            },
+            Command::CreateTag {
+                id: id(91),
+                name: "b".into(),
+                parent: Some(id(90)),
+                at: Anchor::Last,
+                created_at: 1,
+            },
+            Command::CreateTag {
+                id: id(92),
+                name: "c".into(),
+                parent: Some(id(91)),
+                at: Anchor::Last,
+                created_at: 1,
+            },
+            Command::DeleteTag { id: id(91) },
+        ],
+        20,
+    )
+    .unwrap();
+    let s = a.project().unwrap();
+    let c = s.tags.iter().find(|t| t.id == id(92)).unwrap();
+    assert_eq!(c.parent_id, Some(id(90)));
+}
+
+fn tag(n: u128, name: &str, parent: Option<u128>) -> Command {
+    Command::CreateTag {
+        id: id(n),
+        name: name.into(),
+        parent: parent.map(id),
+        at: Anchor::Last,
+        created_at: 1,
+    }
+}
+
+fn link(item: u128, t: u128, present: bool) -> Command {
+    Command::Link {
+        item: id(item),
+        tag: id(t),
+        present,
+    }
+}
+
+#[test]
+fn tags_are_renamed_moved_and_given_to_projects_and_areas() {
+    let (mut a, mut b) = pair();
+    a.apply(
+        &[
+            tag(100, "Errands", None),
+            tag(101, "Home", None),
+            tag(102, "Shop", Some(100)),
+            Command::RenameTag {
+                id: id(101),
+                name: "House".into(),
+            },
+            Command::MoveTag {
+                id: id(102),
+                parent: Some(id(101)),
+                at: Anchor::First,
+            },
+            Command::MoveTag {
+                id: id(100),
+                parent: None,
+                at: Anchor::After(id(101)),
+            },
+            link(PROJECT, 101, true),
+            link(AREA, 102, true),
+            link(TASK, 100, true),
+            link(TASK, 100, false),
+        ],
+        20,
+    )
+    .unwrap();
+    let s = converged(&mut a, &mut b);
+    let names: Vec<_> = s
+        .tags
+        .iter()
+        .map(|t| (t.name.as_str(), t.parent_id.clone()))
+        .collect();
+    assert_eq!(
+        names,
+        [("House", None), ("Shop", Some(id(101))), ("Errands", None)]
+    );
+    assert!(s.tags[0].sort_order < s.tags[2].sort_order);
+    assert_eq!(s.tags[0].updated_at, 20);
+    assert_eq!(
+        s.links.iter().cloned().collect::<Vec<_>>(),
+        [
+            (LinkKind::Project, id(PROJECT), id(101)),
+            (LinkKind::Area, id(AREA), id(102)),
+        ]
+    );
+}
+
+#[test]
+fn assignments_of_deleted_tags_and_purged_items_disappear() {
+    let (mut a, _) = pair();
+    a.apply(
+        &[
+            tag(110, "a", None),
+            tag(111, "b", None),
+            link(TASK, 110, true),
+            link(OTHER, 111, true),
+            Command::DeleteTag { id: id(110) },
+            Command::Purge {
+                ids: vec![id(OTHER)],
+            },
+        ],
+        20,
+    )
+    .unwrap();
+    let s = a.project().unwrap();
+    assert!(s.links.is_empty(), "{:?}", s.links);
+    assert!(s.tombstones.contains(&id(110)));
+    for refused in [
+        Command::RenameTag {
+            id: id(110),
+            name: "x".into(),
+        },
+        link(TASK, 110, true),
+        tag(TASK, "uses a task's id", None),
+        tag(111, "again", None),
+        tag(110, "deleted", None),
+        create(111, Kind::Task, None, "uses a tag's id"),
+        Command::MoveTag {
+            id: id(111),
+            parent: None,
+            at: Anchor::After(id(111)),
+        },
+        Command::MoveTag {
+            id: id(111),
+            parent: None,
+            at: Anchor::After(id(TASK)),
+        },
+        link(HEADING, 111, true),
+    ] {
+        let mut b = Document::import(&a.snapshot().unwrap(), 3).unwrap();
+        assert!(
+            b.apply(std::slice::from_ref(&refused), 30).is_err(),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn a_merged_tag_hands_its_children_to_the_keeper() {
+    let (mut a, mut b) = pair();
+    a.apply(&[tag(120, "work", None)], 20).unwrap();
+    b.apply(&[tag(121, "Work", None), tag(122, "calls", Some(121))], 20)
+        .unwrap();
+    let s = converged(&mut a, &mut b);
+    let calls = s.tags.iter().find(|t| t.id == id(122)).unwrap();
+    assert_eq!(calls.parent_id, Some(id(120)));
+    assert_eq!(s.tags.len(), 2);
+}
+
+#[test]
+fn the_smaller_uuid_keeps_a_shared_tag_name_whatever_the_order() {
+    let (mut a, _) = pair();
+    // The larger UUID comes first in the tree.
+    a.apply(&[tag(141, "Same", None), tag(140, "same", None)], 20)
+        .unwrap();
+    let s = a.project().unwrap();
+    assert_eq!(s.tags.len(), 1);
+    assert_eq!(
+        (s.tags[0].id.clone(), s.tags[0].name.as_str()),
+        (id(140), "same")
+    );
 }
