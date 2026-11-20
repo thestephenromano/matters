@@ -16,7 +16,7 @@
     "docs/SYNC_KEY_DISTRIBUTION.md": "1f188f361e898fc8c290f8f290f2210eb342ff417b5344d45b90ddb39fe18e4f",
     "docs/SYNC_RECORD_CONTRACT.md": "c1e87734a2a1d817aeab0f8176fc0569fe2a597a19a841af89fa0cceace46eea",
     "docs/SYNC_WRITER_LIFECYCLE.md": "141225be73dbd1e2b9fb887d98350ec85b7036fe16ca9a299fe128a895a37ca5",
-    "docs/decisions/0002-post-quantum-sync.md": "ec465816e0e514e4b15f7258929ae615a3a1d4a6b4822b1ccb5db47feab24fea",
+    "docs/decisions/0002-post-quantum-sync.md": "dba1a8323d958e801948462e9907663bbd9cce014027eb91c0bfb2c322dc1bc0",
     "docs/protocol/sync-key-distribution-v0.cddl": "fb1c1ad2f755b8c3a5dc381567dfbcc8b265473c6b9eb485900739562a1576bf",
     "docs/protocol/sync-record-v0.cddl": "fe3c16e53791efa6b7a25ae48f3be862cb61253b9b8df9c47617aadd7d1dfd18",
     "experiments/sync-prototype/.gitignore": "395fc2939d3e8df2f16cd3752e9501b85a47191f283fff07ed4bc4d9875013d9",

@@ -1,8 +1,10 @@
 # ADR 0002: post-quantum recipient envelopes and signed sync records
 
-Date: 2026-11-18. Status: **approved for bounded prototype evaluation on 2026-11-18; not production-ready**. Tracks [#33](https://github.com/thestephenromano/matters/issues/33). Implements no cryptography. The application composition below needs interoperability evidence and independent review, even though its cryptographic constructions come from existing specifications.
+Date: 2026-11-18. Status: **approved for bounded prototype evaluation on 2026-11-18; adopted for production code on 2026-11-20, behind the independent-review release gate (#45)**. Tracks [#33](https://github.com/thestephenromano/matters/issues/33). Implements no cryptography. The application composition below needs interoperability evidence and independent review, even though its cryptographic constructions come from existing specifications.
 
 The maintainer approved the proposed hybrid HPKE/ML-DSA stack for prototype evaluation in the project conversation on 2026-11-18. Approval covers the experiment and draft-wire-format exposure; it does not waive interoperability, usage-bound or independent-review gates.
+
+On 2026-11-20 the maintainer adopted this stack for production code in the `matters-sync` crate (#36), with sync off by default. The pins are: hpke-rs-crypto and hpke-rs-libcrux 0.8.0 (libcrux provider, `draft-ietf-hpke-pq`), libcrux-ml-dsa 0.0.11 (ML-DSA-65) and minicbor 2.3.1. Every cryptographic call routes through those providers. Adoption does not waive the interoperability, usage-bound or independent-review gates below: #45 stays the gate before real users' data.
 
 ## Recommendation
 
