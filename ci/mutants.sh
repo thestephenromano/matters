@@ -15,7 +15,9 @@ all=0
 if [ "${1:-}" = "--all" ]; then all=1; shift; fi
 reports="${1:-target/mutants}"
 base="${MATTERS_MUTANTS_BASE:-origin/main}"
-budget="${MATTERS_MUTANTS_TIMEOUT:-1800}"
+# 75 minutes: four mutants at a time take about 25 s each, so a diff of
+# 150 mutants (#193) needs about an hour. Small diffs finish as before.
+budget="${MATTERS_MUTANTS_TIMEOUT:-4500}"
 jobs="${MATTERS_MUTANTS_JOBS:-4}"
 
 require_tool git
