@@ -30,7 +30,7 @@ Item {
             // clicks, and opening it again does nothing.
             for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
                                 "emptyTrashDialog", "quickFindDialog", "movePopup",
-                                "finishProjectDialog"]) {
+                                "finishProjectDialog", "tagsDialog"]) {
                 const popup = findChild(view, name);
                 if (popup)
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
@@ -2311,6 +2311,148 @@ Item {
             controller.selectProject(one);
             tryCompare(notes, "text", "seed packets and soil");
             compare(controller.currentProjectNotes, "seed packets and soil");
+        }
+
+        // ---- Tags (#57) -----------------------------------------------------------
+
+        function chipNames(item, name) {
+            return childrenNamed(item, name).filter(c => c.visible).map(c => c.name);
+        }
+
+        function tagIdNamed(name) {
+            const tag = JSON.parse(controller.tagsJson).find(t => t.name === name);
+            return tag ? tag.id : "";
+        }
+
+        // Ctrl+Shift+T on the selected task: its tag field takes the keys.
+        function openTagsOf(title) {
+            selectLast(title);
+            keyClick(Qt.Key_T, Qt.ControlModifier | Qt.ShiftModifier);
+            const row = rowFor(title);
+            tryVerify(() => row.isExpanded, 1000, "the task opens");
+            const input = findChild(findChild(row, "taskTags"), "tagInput");
+            tryVerify(() => input.activeFocus, 2000, "its tag field has the cursor");
+            return row;
+        }
+
+        function test_a_task_is_tagged_and_untagged_by_keyboard() {
+            addToToday("tg-task");
+            const row = openTagsOf("tg-task");
+            const field = findChild(row, "taskTags");
+
+            typeText("tg-errands");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => chipNames(field, "tagChip").indexOf("tg-errands") >= 0, 2000, "a new tag, given");
+            verify(tagIdNamed("tg-errands") !== "", "and created");
+            typeText("tg-home");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => chipNames(field, "tagChip").length === 2, 2000);
+
+            // Backspace in the empty field takes off the last tag.
+            keyClick(Qt.Key_Backspace);
+            tryVerify(() => compareArrays(chipNames(field, "tagChip"), ["tg-errands"]), 2000, "tg-home taken off");
+            verify(tagIdNamed("tg-home") !== "", "the tag itself is kept");
+
+            // Escape clears what was typed, then closes the task like any
+            // editor in it; closed, the row shows its tags.
+            typeText("tg-half");
+            keyClick(Qt.Key_Escape);
+            compare(findChild(field, "tagInput").text, "");
+            verify(row.isExpanded);
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !row.isExpanded, 1000);
+            tryVerify(() => list.activeFocus, 1000);
+            verify(view.Window.activeFocusItem.visible, "the keys go to something on screen, not the hidden field");
+            tryVerify(() => compareArrays(chipNames(row, "rowTag"), ["tg-errands"]), 2000, "shown on the row");
+        }
+
+        function compareArrays(a, b) {
+            return JSON.stringify(a) === JSON.stringify(b);
+        }
+
+        function test_typing_suggests_existing_tags() {
+            controller.createTag("tg-hardware", "");
+            controller.createTag("tg-hardly", "");
+            const count = JSON.parse(controller.tagsJson).length;
+            addToToday("tg-suggest");
+            const row = openTagsOf("tg-suggest");
+            const field = findChild(row, "taskTags");
+
+            typeText("tg-hard");
+            tryVerify(() => chipNames(field, "tagSuggestion").length === 2, 1000, "both suggested");
+            keyClick(Qt.Key_Down); // the second
+            keyClick(Qt.Key_Return);
+            tryVerify(() => compareArrays(chipNames(field, "tagChip"), ["tg-hardly"]), 2000);
+            compare(JSON.parse(controller.tagsJson).length, count, "no new tag");
+            // What the task has is no longer suggested.
+            typeText("tg-hard");
+            tryVerify(() => compareArrays(chipNames(field, "tagSuggestion"), ["tg-hardware"]), 1000);
+            keyClick(Qt.Key_Escape);
+        }
+
+        function test_projects_and_areas_take_tags_in_their_headers() {
+            openFreshProject("tg-proj", ["tg-in-proj"]);
+            const projectField = findChild(view, "projectTags");
+            mouseClick(findChild(projectField, "tagInput"));
+            typeText("tg-project-tag");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => compareArrays(chipNames(projectField, "tagChip"), ["tg-project-tag"]), 2000);
+
+            const area = createArea("tg-area");
+            controller.selectArea(area);
+            const areaField = findChild(view, "areaTags");
+            tryVerify(() => areaField.visible, 1000);
+            compare(chipNames(areaField, "tagChip").length, 0, "the area's own tags");
+            mouseClick(findChild(areaField, "tagInput"));
+            typeText("tg-area-tag");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => compareArrays(chipNames(areaField, "tagChip"), ["tg-area-tag"]), 2000);
+            mouseClick(childrenNamed(areaField, "removeTag")[0]);
+            tryVerify(() => chipNames(areaField, "tagChip").length === 0, 2000, "taken off by its button");
+        }
+
+        function tagRowNamed(name) {
+            const dialog = findChild(view, "tagsDialog");
+            return childrenNamed(dialog.contentItem, "tagRow").find(r => r.visible && r.name === name) || null;
+        }
+
+        function test_the_tags_dialog_renames_nests_and_deletes() {
+            const parent = controller.createTag("tg-dlg-parent", "");
+            const child = controller.createTag("tg-dlg-child", "");
+            addToToday("tg-dlg-task");
+            controller.addTag("task", rowFor("tg-dlg-task").taskId, child);
+
+            clickWhenShown(findChild(view, "tagsButton"));
+            const dialog = findChild(view, "tagsDialog");
+            tryVerify(() => dialog.opened, 1000);
+
+            // Nest the child under the parent.
+            let row = null;
+            tryVerify(() => (row = tagRowNamed("tg-dlg-child")) !== null, 1000);
+            mouseClick(findChild(row, "nestTag"));
+            const under = findChild(row, "nestUnder-" + parent);
+            tryVerify(() => under.visible, 1000);
+            mouseClick(under);
+            tryVerify(() => JSON.parse(controller.tagsJson).find(t => t.id === child).parent_id === parent, 2000);
+
+            // Rename it in place.
+            tryVerify(() => (row = tagRowNamed("tg-dlg-child")) !== null, 1000);
+            const name = findChild(row, "tagName");
+            mouseClick(name);
+            keyClick(Qt.Key_A, Qt.ControlModifier);
+            typeText("tg-dlg-renamed");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => tagIdNamed("tg-dlg-renamed") === child, 2000);
+
+            // Delete the parent: the child moves up, the task keeps its tag.
+            tryVerify(() => (row = tagRowNamed("tg-dlg-parent")) !== null, 1000);
+            mouseClick(findChild(row, "deleteTag"));
+            tryVerify(() => tagIdNamed("tg-dlg-parent") === "", 2000);
+            compare(JSON.parse(controller.tagsJson).find(t => t.id === child).parent_id, null);
+            dialog.close();
+            tryVerify(() => !dialog.visible, 2000);
+            const task = rowFor("tg-dlg-task");
+            tryVerify(() => compareArrays(chipNames(task, "rowTag"), ["tg-dlg-renamed"]), 2000);
         }
     }
 }

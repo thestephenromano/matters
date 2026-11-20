@@ -296,3 +296,37 @@ fn a_v7_database_is_migrated_and_takes_tags() {
     db.create_project(&Project::new("p", "P", 0.0)).unwrap();
     db.add_tag_to(Tagged::Project("p"), "new").unwrap();
 }
+
+#[test]
+fn a_lists_tasks_have_their_tags_read_in_one_go_and_tags_are_found_by_name() {
+    let db = fixture();
+    tag(&db, "b", "B", None);
+    tag(&db, "a", "A", None);
+    tag(&db, "a1", "A1", Some("a"));
+    db.add_tag_to(Tagged::Task("loose"), "a1").unwrap();
+    db.add_tag_to(Tagged::Task("loose"), "b").unwrap();
+    db.add_tag_to(Tagged::Task("in-p"), "a").unwrap();
+    db.add_tag_to(Tagged::Project("p"), "b").unwrap(); // not the task's own
+
+    let ids: Vec<String> = (0..1200).map(|i| format!("none-{i}")).collect();
+    let mut asked: Vec<&str> = ids.iter().map(String::as_str).collect();
+    asked.extend(["loose", "in-p", "in-q"]);
+    let tags = db.tags_of_tasks(&asked).unwrap();
+    let names = |task: &str| -> Vec<String> {
+        tags.get(task)
+            .map(|ts| ts.iter().map(|t| t.name.clone()).collect())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        names("loose"),
+        ["B", "A1"],
+        "in tag-list order, past the first chunk"
+    );
+    assert_eq!(names("in-p"), ["A"]);
+    assert!(!tags.contains_key("in-q"));
+    assert_eq!(tags.len(), 2);
+
+    assert_eq!(db.tag_named(" a1 ").unwrap().unwrap().id, "a1");
+    assert!(db.tag_named("nope").unwrap().is_none());
+    assert!(db.tag_named("  ").unwrap().is_none());
+}
