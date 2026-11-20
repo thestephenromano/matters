@@ -1,4 +1,4 @@
-use matters_core::{Area, ChecklistItem, Database, Project, QueryEngine, Status, Task};
+use matters_core::{Area, ChecklistItem, Database, Home, Project, QueryEngine, Status, Task};
 
 #[test]
 fn test_inbox_flow() {
@@ -9,7 +9,7 @@ fn test_inbox_flow() {
     let mut task1 = Task::new("task-1", "Buy oat milk", 1.0);
     db.create_task(&task1).unwrap();
 
-    let mut task2 = Task::new("task-2", "Review Q4 goals", 2.0);
+    let task2 = Task::new("task-2", "Review Q4 goals", 2.0);
     db.create_task(&task2).unwrap();
 
     let inbox = query.inbox().unwrap();
@@ -29,8 +29,14 @@ fn test_inbox_flow() {
     let project = Project::new("proj-1", "Personal Finances", 1.0);
     db.create_project(&project).unwrap();
 
-    task2.project_id = Some(project.id);
-    db.update_task(&task2).unwrap();
+    db.set_task_home(
+        &task2.id,
+        &Home::Project {
+            project: project.id,
+            heading: None,
+        },
+    )
+    .unwrap();
 
     let inbox = query.inbox().unwrap();
     assert!(inbox.is_empty(), "Inbox should be processed to zero");
