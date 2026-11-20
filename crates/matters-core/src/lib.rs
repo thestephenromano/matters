@@ -6,6 +6,7 @@ pub mod ordering;
 pub mod query;
 pub mod settings;
 pub mod storage;
+pub mod undo;
 pub mod visit;
 
 pub use clock::{local_today, DayTracker};
@@ -20,4 +21,5 @@ pub use query::{
 };
 pub use settings::{LogPolicy, LogbookSettings, Settings, SettingsFile};
 pub use storage::Database;
+pub use undo::TaskSnapshot;
 pub use visit::Visit;

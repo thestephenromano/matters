@@ -365,6 +365,25 @@ pub fn add_task_below(
     }
 }
 
+/// Give task `id` back the order keys it had, in its home list
+/// (`sort_order`) and in Today (`today_order`), so it is listed where it
+/// was: Undo (#64, [`crate::TaskSnapshot`]).
+pub fn restore_task_order(
+    db: &Database,
+    id: &str,
+    sort_order: f64,
+    today_order: f64,
+) -> Result<()> {
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        let id = id.to_string();
+        update_keys(&tx, "tasks", "sort_order", &[(id.clone(), sort_order)])?;
+        update_keys(&tx, "tasks", "today_order", &[(id, today_order)])?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
 /// Put a Today task in the daytime section or This Evening, right after
 /// `after` within that section (first when `None`). Changing section changes
 /// only This Evening: the task's date is kept, so an overdue task stays
