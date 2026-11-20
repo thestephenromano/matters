@@ -1,8 +1,8 @@
 # ADR 0001: adopt Loro for the local sync prototype
 
-Date: 2026-11-18. Status: **approved for bounded prototype evaluation on 2026-11-18**. Tracks [#32](https://github.com/thestephenromano/matters/issues/32); implementation belongs to [#35](https://github.com/thestephenromano/matters/issues/35).
+Date: 2026-11-18. Status: **approved for bounded prototype evaluation on 2026-11-18; adopted for application integration on 2026-11-20**. Tracks [#32](https://github.com/thestephenromano/matters/issues/32); implementation belongs to [#35](https://github.com/thestephenromano/matters/issues/35).
 
-The maintainer approved Loro 1.18 and the proposed hybrid HPKE/ML-DSA stack for prototype evaluation in the project conversation on 2026-11-18. This authorizes implementation of the experiment; production adoption and issue closure still require the evidence below.
+The maintainer approved Loro 1.18 and the proposed hybrid HPKE/ML-DSA stack for prototype evaluation in the project conversation on 2026-11-18. On 2026-11-20, on the evidence recorded under [Closure evidence](#closure-evidence), the maintainer adopted Loro 1.18 for integration into `matters-core` ([#35](https://github.com/thestephenromano/matters/issues/35)), with sync off by default. Adoption selects the engine and this document model. The acceptance budgets below become #35's gates, and the post-quantum stack keeps its own status in [ADR 0002](0002-post-quantum-sync.md).
 
 ## Recommendation and evidence
 
@@ -56,7 +56,7 @@ An authenticated malicious writer can still vandalize content. These rules provi
 
 ## Concurrency fixture specification
 
-All fixtures begin from one shared genesis document with fixed UUIDs and fixed test-only peer IDs. Fork replicas A/B, execute the actions below without delivery, exchange both ways, then repeat with reversed delivery, duplicate batches, dependency-before/after permutations and a restart between import and projection. Compare canonical projections and causal frontiers, not raw snapshot byte equality. Retain the schedule/seed and history on failure. These are specifications; no fixture has run yet.
+All fixtures begin from one shared genesis document with fixed UUIDs and fixed test-only peer IDs. Fork replicas A/B, execute the actions below without delivery, exchange both ways, then repeat with reversed delivery, duplicate batches, dependency-before/after permutations and a restart between import and projection. Compare canonical projections and causal frontiers, not raw snapshot byte equality. Retain the schedule/seed and history on failure. The prototype executes C01–C21 (see [Closure evidence](#closure-evidence)) with the limits stated there.
 
 | ID | Concurrent actions | Required oracle |
 | --- | --- | --- |
@@ -123,6 +123,17 @@ Proposed prototype budgets, subject to approval:
 - Replay: 10,000-task bootstrap below 5 s on the named development host; 100,000 operations of catch-up below 10 s with visible progress. These are prototype usability targets, not service SLAs.
 - Retention: record all history/pending bytes; no destructive compaction. Measure storage growth and establish a quota before pilot. No storage-cost claim is justified yet.
 
-If these gates fail, first determine whether the engine, adapter or workload budget owns the failure. Compare the same fixture/trace with Automerge before inventing infrastructure. Approval authorizes a bounded prototype, not production adoption. The prototype decision is approved; record the remaining evidence links here before closing #32.
+If these gates fail, first determine whether the engine, adapter or workload budget owns the failure. Compare the same fixture/trace with Automerge before inventing infrastructure. The prototype approval authorized a bounded experiment. Application integration was approved on 2026-11-20; these budgets are #35's acceptance gates, measured there against the unchanged SQLite baseline.
 
 Initial execution is recorded in [the prototype evidence](../evidence/sync-prototype-2026-11-18.json). The focused cases pass on Linux x86_64, with explicit coverage limits for actor authentication, hostile imports and UI behavior. The 1,000-task comparison is exploratory; no full-workload acceptance budget is marked passed.
+
+## Closure evidence
+
+#32's deliverables, with the artifacts that establish each:
+
+- **Adoption record:** this ADR names Loro 1.18.0, one document per personal collection, the rejected alternatives and their reasons. Exact checksums and source revisions are in [the dependency evidence](../evidence/sync-dependencies-2026-11-18.json); the prototype's lockfile pins the resolved graph ([`experiments/sync-prototype/Cargo.lock`](../../experiments/sync-prototype/Cargo.lock)).
+- **Concurrency cases:** [`tests/convergence.rs`](../../experiments/sync-prototype/tests/convergence.rs) runs C01–C19 against two SQLite-backed replicas, with reversed and duplicate delivery and fixed test peer IDs. C20 guards the reserved derived-identity namespace, and C21 is a seeded property test over merged concurrent histories. The [prototype README](../../experiments/sync-prototype/README.md#what-the-experiment-establishes) states which variants each name covers. Writer-actor ownership (C15) and authenticated import admission (C16) are exercised by the [durable receive](../SYNC_DURABLE_RECEIVE.md) and [writer lifecycle](../SYNC_WRITER_LIFECYCLE.md) experiments, not by the convergence suite.
+- **Migration model:** [Migration and evaluation gates](#migration-and-evaluation-gates) fixes one initial lineage per collection, created by one device with the existing UUIDs. Other devices bootstrap from it, and independent imports go through an explicit import workflow. Implementation belongs to [#41](https://github.com/thestephenromano/matters/issues/41).
+- **Evaluation plan:** the workloads, measurements and budgets above. The [exploratory 1,000-task run](../evidence/sync-prototype-2026-11-18.json) names its host and configuration. No full-workload budget is marked passed; #35 measures them.
+- **Canonical design:** [SYNC_DESIGN.md](../SYNC_DESIGN.md), linked from the [specification](../SPEC.md#54-planned-encrypted-synchronization), the README and epic [#31](https://github.com/thestephenromano/matters/issues/31).
+- **SQL write audit:** the table above audits the baseline commit and names the later ordering boundary. #35 re-runs the audit against the code it integrates, including the later headings, move and project-completion paths, before routing writes through commands.

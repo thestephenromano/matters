@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-18
 
-**Status:** Agreed product requirements; proposed architecture and dependency choices.
+**Status:** Agreed product requirements. CRDT engine adopted: Loro 1.18 ([ADR 0001](decisions/0001-crdt-adoption.md), 2026-11-20). Post-quantum stack approved for prototype evaluation ([ADR 0002](decisions/0002-post-quantum-sync.md)). Service contract and components pending ([#34](https://github.com/thestephenromano/matters/issues/34)).
 
 **Scope:** Matters as the first customer of an independently usable sync service.
 
