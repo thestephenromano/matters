@@ -265,7 +265,11 @@ Item {
             focusList();
 
             keyClick(Qt.Key_Down);
-            compare(list.selectedTaskId, list.model.idAt(0), "Down selects the first task");
+            // Projects due today are listed above the tasks (#56).
+            let first = 0;
+            while (list.model.idAt(first) === "")
+                ++first;
+            compare(list.selectedTaskId, list.model.idAt(first), "Down selects the first task");
             focusList();
             keyClick(Qt.Key_Up);
             compare(selectedTitle(), "key-3", "Up selects the last task");
@@ -2130,7 +2134,7 @@ Item {
         }
 
         function logbookProject(title) {
-            for (const item of childrenNamed(list.contentItem, "logbookProject")) {
+            for (const item of childrenNamed(list.contentItem, "projectRow")) {
                 if (item.visible && item.title === title)
                     return item;
             }
@@ -2166,7 +2170,7 @@ Item {
             controller.selectView("logbook");
             let row = null;
             tryVerify(() => (row = logbookProject("fin-proj")) !== null, 2000, "listed in the Logbook");
-            compare(findChild(row, "logbookProjectOutcome").text, "Completed project");
+            compare(findChild(row, "projectRowLabel").text, "Completed project");
             verify(indexOf("fin-1") < 0 && indexOf("fin-2") < 0);
             mouseClick(row);
             tryCompare(controller, "currentProjectId", id);
@@ -2194,7 +2198,7 @@ Item {
             controller.selectView("logbook");
             let row = null;
             tryVerify(() => (row = logbookProject("cancel-proj")) !== null, 2000);
-            compare(findChild(row, "logbookProjectOutcome").text, "Canceled project");
+            compare(findChild(row, "projectRowLabel").text, "Canceled project");
         }
 
         function test_a_project_with_every_task_done_offers_to_be_completed() {
@@ -2208,6 +2212,105 @@ Item {
             tryCompare(controller, "currentProjectStatus", "completed");
             verify(!findChild(view, "finishProjectDialog").visible);
             verify(!button.visible);
+        }
+
+        // ---- A project's When, deadline and notes (#56) -----------------------
+
+        function projectRowNamed(title) {
+            for (const item of childrenNamed(list.contentItem, "projectRow")) {
+                if (item.visible && item.title === title)
+                    return item;
+            }
+            return null;
+        }
+
+        function openProjectPill(name) {
+            const popup = findChild(view, "whenPopup");
+            clickWhenShown(findChild(view, name));
+            tryVerify(() => popup.opened, 1000, name + " opens the popover");
+            waitForRendering(popup.contentItem);
+            verify(popup.forProject, "for the project, not a task");
+            return popup;
+        }
+
+        function test_a_projects_when_and_deadline_are_set_from_its_header() {
+            openFreshProject("pd-proj", ["pd-task"]);
+            const id = projectIdOf("pd-proj");
+            const when = findChild(view, "projectWhen");
+            compare(findChild(when, "pillLabel").text, "When");
+
+            // Someday: the project holds its task back and waits in Someday.
+            let popup = openProjectPill("projectWhen");
+            mouseClick(findChild(popup.contentItem, "when-someday"));
+            tryVerify(() => !popup.visible, 2000);
+            tryVerify(() => controller.currentProjectSomeday, 1000);
+            compare(findChild(when, "pillLabel").text, "Someday");
+            controller.selectView("anytime");
+            waitForNoRow("pd-task");
+            controller.selectView("someday");
+            tryVerify(() => projectRowNamed("pd-proj") !== null, 2000, "listed in Someday");
+
+            // A typed date: the project waits in Upcoming instead.
+            controller.selectProject(id);
+            popup = openProjectPill("projectWhen");
+            typeText("in 5 days");
+            keyClick(Qt.Key_Return);
+            tryVerify(() => !popup.visible, 2000);
+            tryVerify(() => controller.currentProjectStartDate === isoInDays(5), 1000);
+            controller.selectView("upcoming");
+            tryVerify(() => projectRowNamed("pd-proj") !== null, 2000, "listed in Upcoming");
+
+            // Due today: Today lists it, with its deadline in red.
+            controller.selectProject(id);
+            popup = openProjectPill("projectDeadline");
+            mouseClick(findChild(popup.contentItem, "deadline-today"));
+            tryVerify(() => !popup.visible, 2000);
+            tryCompare(controller, "currentProjectDeadlineStatus", "today");
+            controller.selectView("today");
+            let row = null;
+            tryVerify(() => (row = projectRowNamed("pd-proj")) !== null, 2000, "listed in Today");
+            verify(findChild(row, "projectRowLabel").urgent, "its deadline is shown as due");
+            mouseClick(row);
+            tryCompare(controller, "currentProjectId", id);
+
+            // Cleared again: the task is back in Anytime, the project out
+            // of Today.
+            popup = openProjectPill("projectWhen");
+            mouseClick(findChild(popup.contentItem, "when-none"));
+            tryVerify(() => !popup.visible, 2000);
+            tryCompare(controller, "currentProjectStartDate", "");
+            popup = openProjectPill("projectDeadline");
+            mouseClick(findChild(popup.contentItem, "deadline-none"));
+            tryVerify(() => !popup.visible, 2000);
+            tryCompare(controller, "currentProjectDeadline", "");
+            controller.selectView("anytime");
+            waitForRow("pd-task");
+            controller.selectView("today");
+            wait(0);
+            tryVerify(() => projectRowNamed("pd-proj") === null, 2000, "no longer in Today");
+        }
+
+        function test_project_notes_save_as_they_are_typed_and_keep_focus() {
+            openFreshProject("pn-one", ["pn-task"]);
+            const one = projectIdOf("pn-one");
+            controller.createProject("pn-two");
+            const two = projectIdOf("pn-two");
+            const notes = findChild(view, "projectNotes");
+            compare(notes.text, "");
+
+            mouseClick(notes);
+            verify(notes.activeFocus);
+            typeText("seed packets");
+            tryCompare(controller, "currentProjectNotes", "seed packets", 3000, "saved after a pause");
+            verify(notes.activeFocus, "saving doesn't take the focus");
+            typeText(" and soil");
+
+            // Leaving for another project saves what was typed there.
+            controller.selectProject(two);
+            tryCompare(notes, "text", "");
+            controller.selectProject(one);
+            tryCompare(notes, "text", "seed packets and soil");
+            compare(controller.currentProjectNotes, "seed packets and soil");
         }
     }
 }
