@@ -1,3 +1,4 @@
+use jiff::civil::Date;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -9,7 +10,7 @@ use super::schema::{
 use super::trash;
 use crate::domain::{
     Area, ChecklistItem, ChecklistProgress, DeletedHeading, Heading, Home, Outcome, Project,
-    Status, Task,
+    Schedule, Status, Task,
 };
 use crate::error::{MattersError, Result};
 
@@ -114,6 +115,9 @@ impl Database {
         Ok(())
     }
 
+    /// The write boundary. Every change to the database goes through a
+    /// typed operation in this crate, so a later sync layer can capture
+    /// each one as a domain command (ADR 0001, #35).
     pub(crate) fn with_conn_mut<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&mut Connection) -> Result<T>,
@@ -122,12 +126,60 @@ impl Database {
         f(&mut conn)
     }
 
+    /// Read through the connection. SQLite refuses any write for the
+    /// duration (`PRAGMA query_only`), so this can't bypass the typed
+    /// operations.
     pub fn with_conn<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
         let conn = self.conn.lock().unwrap();
-        f(&conn)
+        conn.pragma_update(None, "query_only", true)?;
+        let result = f(&conn);
+        conn.pragma_update(None, "query_only", false)?;
+        result
+    }
+
+    /// Raw read-write access, for tests that stage states the typed
+    /// operations never produce. Only with the `test-support` feature.
+    #[cfg(feature = "test-support")]
+    pub fn with_raw_conn<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Connection) -> Result<T>,
+    {
+        self.with_conn_mut(f)
+    }
+
+    /// Run one `UPDATE … WHERE id = ?` that sets `assignments` (with
+    /// `updated_at`), or `NotFound` when there is no such row. `values`
+    /// fill the assignments' placeholders, `?1` onwards; the id and the
+    /// time take the next two.
+    fn update_fields(
+        &self,
+        table: &str,
+        entity: &'static str,
+        id: &str,
+        assignments: &str,
+        values: &[&dyn rusqlite::ToSql],
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = crate::clock::now_millis();
+        let n = values.len();
+        let sql = format!(
+            "UPDATE {table} SET {assignments}, updated_at = ?{} WHERE id = ?{}",
+            n + 2,
+            n + 1
+        );
+        let mut all: Vec<&dyn rusqlite::ToSql> = values.to_vec();
+        all.push(&id);
+        all.push(&now);
+        if conn.execute(&sql, all.as_slice())? == 0 {
+            return Err(MattersError::NotFound {
+                entity,
+                id: id.to_string(),
+            });
+        }
+        Ok(())
     }
 
     // =========================================================================
@@ -198,18 +250,6 @@ impl Database {
         ))?;
         let rows = stmt.query_map([], Self::map_area_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    /// Rename an area. Its order and trash state change only through the
-    /// ordering and trash operations, so a stale copy can't undo them.
-    pub fn update_area(&self, area: &Area) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        conn.execute(
-            "UPDATE areas SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            params![area.title, now, area.id],
-        )?;
-        Ok(())
     }
 
     /// Rename an area. The name is cleaned like a task title
@@ -489,36 +529,37 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Write the project's editable fields: title, notes, When and deadline.
-    /// Like [`Self::update_task`], never its order, trash state or area, so
-    /// a stale copy can't undo a move ([`Self::set_project_area`] files a
-    /// project in another area), and never its status: only
-    /// [`Self::finish_project`] and [`Self::reopen_project`] change that,
-    /// together with the tasks they close and reopen.
-    pub fn update_project(&self, project: &Project) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let start_date = project.start_date.map(|d| d.to_string());
-        let deadline = project.deadline.map(|d| d.to_string());
-        let is_someday = if project.is_someday { 1 } else { 0 };
+    /// Replace a project's notes.
+    pub fn set_project_notes(&self, id: &str, notes: &str) -> Result<()> {
+        self.update_fields("projects", "project", id, "notes = ?1", &[&notes])
+    }
 
-        conn.execute(
-            "UPDATE projects SET
-                title = ?1, notes = ?2, start_date = ?3, time_of_day = ?4,
-                is_someday = ?5, deadline = ?6, updated_at = ?7
-             WHERE id = ?8",
-            params![
-                project.title,
-                project.notes,
-                start_date,
-                project.time_of_day,
-                is_someday,
-                deadline,
-                now,
-                project.id,
+    /// Set a project's When ([`Project::apply_schedule`]): start date,
+    /// evening and Someday change together.
+    pub fn set_project_schedule(&self, id: &str, schedule: &Schedule, today: Date) -> Result<()> {
+        let (start_date, time_of_day, is_someday) = schedule.to_db_fields(today);
+        self.update_fields(
+            "projects",
+            "project",
+            id,
+            "start_date = ?1, time_of_day = ?2, is_someday = ?3",
+            &[
+                &start_date.map(|d| d.to_string()),
+                &time_of_day,
+                &is_someday,
             ],
-        )?;
-        Ok(())
+        )
+    }
+
+    /// Set or clear a project's deadline.
+    pub fn set_project_deadline(&self, id: &str, deadline: Option<Date>) -> Result<()> {
+        self.update_fields(
+            "projects",
+            "project",
+            id,
+            "deadline = ?1",
+            &[&deadline.map(|d| d.to_string())],
+        )
     }
 
     /// Move a project to the Trash, taking its tasks with it: they leave
@@ -771,38 +812,57 @@ impl Database {
         Ok(task)
     }
 
-    /// Write the task's editable fields. Order, trash state and home are
-    /// not among them: they change only through the ordering operations
-    /// (`crate::ordering`), [`Self::trash_task`] / [`Self::restore_task`]
-    /// and [`Self::set_task_home`], so saving a stale copy can't reorder,
-    /// trash, resurrect or re-file a task.
-    pub fn update_task(&self, task: &Task) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let now = crate::clock::now_millis();
-        let start_date = task.start_date.map(|d| d.to_string());
-        let deadline = task.deadline.map(|d| d.to_string());
-        let is_someday = if task.is_someday { 1 } else { 0 };
+    /// Replace a task's notes.
+    ///
+    /// Tasks change field by field, never by saving a whole copy: a stale
+    /// copy can't undo another edit, and each change is one intent a sync
+    /// layer can record. Order, trash state and home change only through
+    /// the ordering operations (`crate::ordering`), [`Self::trash_task`] /
+    /// [`Self::restore_task`] and [`Self::set_task_home`].
+    pub fn set_task_notes(&self, id: &str, notes: &str) -> Result<()> {
+        self.update_fields("tasks", "task", id, "notes = ?1", &[&notes])
+    }
 
-        conn.execute(
-            "UPDATE tasks SET
-                title = ?1, notes = ?2, start_date = ?3, time_of_day = ?4, is_someday = ?5,
-                deadline = ?6, status = ?7, completed_at = ?8, updated_at = ?9,
-                closed_by_project = CASE WHEN ?7 = 'open' THEN 0 ELSE closed_by_project END
-             WHERE id = ?10",
-            params![
-                task.title,
-                task.notes,
-                start_date,
-                task.time_of_day,
-                is_someday,
-                deadline,
-                task.status.as_str(),
-                task.completed_at,
-                now,
-                task.id,
+    /// Set a task's When ([`Task::apply_schedule`]): start date, evening
+    /// and Someday change together.
+    pub fn set_task_schedule(&self, id: &str, schedule: &Schedule, today: Date) -> Result<()> {
+        let (start_date, time_of_day, is_someday) = schedule.to_db_fields(today);
+        self.update_fields(
+            "tasks",
+            "task",
+            id,
+            "start_date = ?1, time_of_day = ?2, is_someday = ?3",
+            &[
+                &start_date.map(|d| d.to_string()),
+                &time_of_day,
+                &is_someday,
             ],
-        )?;
-        Ok(())
+        )
+    }
+
+    /// Move a Today task between the daytime section and This Evening,
+    /// keeping its date (an overdue task stays overdue). A task with no
+    /// date that goes to This Evening is scheduled for `today`.
+    pub(crate) fn set_task_evening(&self, id: &str, evening: bool, today: Date) -> Result<()> {
+        self.update_fields(
+            "tasks",
+            "task",
+            id,
+            "time_of_day = CASE WHEN ?1 THEN 'evening' END,
+             start_date = CASE WHEN ?1 THEN COALESCE(start_date, ?2) ELSE start_date END",
+            &[&evening, &today.to_string()],
+        )
+    }
+
+    /// Set or clear a task's deadline.
+    pub fn set_task_deadline(&self, id: &str, deadline: Option<Date>) -> Result<()> {
+        self.update_fields(
+            "tasks",
+            "task",
+            id,
+            "deadline = ?1",
+            &[&deadline.map(|d| d.to_string())],
+        )
     }
 
     /// Rename a task. The title is cleaned ([`Task::clean_title`]); a blank
@@ -955,6 +1015,18 @@ impl Database {
         Ok(())
     }
 
+    /// Cancel a task: it is finished without being done, and goes to the
+    /// Logbook like a completed one.
+    pub fn cancel_task(&self, id: &str) -> Result<()> {
+        self.update_fields(
+            "tasks",
+            "task",
+            id,
+            "status = 'canceled', completed_at = ?1, closed_by_project = 0",
+            &[&crate::clock::now_millis()],
+        )
+    }
+
     pub fn uncomplete_task(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = crate::clock::now_millis();
@@ -1021,7 +1093,7 @@ impl Database {
     // =========================================================================
 
     pub fn create_checklist_item(&self, item: &ChecklistItem) -> Result<()> {
-        self.with_conn(|conn| insert_checklist_item(conn, item))
+        self.with_conn_mut(|conn| insert_checklist_item(conn, item))
     }
 
     /// Add `item` at the end of its task's checklist. Its title is cleaned

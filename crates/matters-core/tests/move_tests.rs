@@ -102,11 +102,12 @@ fn a_task_moves_to_the_end_of_each_kind_of_home() {
 #[test]
 fn a_moved_task_keeps_its_schedule_deadline_notes_and_checklist() {
     let db = fixture();
-    let mut task = db.get_task("a").unwrap().unwrap();
-    task.apply_schedule(&Schedule::Today { evening: true }, today());
-    task.deadline = Some(jiff::civil::date(2026, 12, 1));
-    task.notes = "bring gloves".into();
-    db.update_task(&task).unwrap();
+    db.set_task_schedule("a", &Schedule::Today { evening: true }, today())
+        .unwrap();
+    db.set_task_deadline("a", Some(jiff::civil::date(2026, 12, 1)))
+        .unwrap();
+    db.set_task_notes("a", "bring gloves").unwrap();
+    let task = db.get_task("a").unwrap().unwrap();
     db.create_checklist_item(&ChecklistItem::new("c", "a", "rake", 0.0))
         .unwrap();
 
@@ -352,23 +353,16 @@ fn saving_a_task_never_changes_its_home() {
     db.trash_project("gone").unwrap();
     let before = db.get_task("y").unwrap().unwrap();
 
-    let homes = [
-        Home::Inbox,
-        Home::Area("home".into()),
-        project("q", None),
-        project("p", Some("h1")),
-        project("gone", None),
-    ];
-    for home in homes {
-        let mut edited = db.get_task("y").unwrap().unwrap();
-        home.apply(&mut edited);
-        edited.notes = format!("saved with {home:?}");
-        db.update_task(&edited).unwrap();
-        let saved = db.get_task("y").unwrap().unwrap();
-        assert_eq!(saved.notes, edited.notes, "{home:?}");
-        assert_eq!(Home::of(&saved).unwrap(), project("p", None), "{home:?}");
-        assert_eq!(saved.sort_order, before.sort_order, "{home:?}");
-    }
+    // Only set_task_home writes a home: every field edit leaves it.
+    db.set_task_notes("y", "edited").unwrap();
+    db.set_task_schedule("y", &Schedule::Someday, today())
+        .unwrap();
+    db.set_task_deadline("y", Some(today())).unwrap();
+    db.rename_task("y", "renamed").unwrap();
+    let saved = db.get_task("y").unwrap().unwrap();
+    assert_eq!(saved.notes, "edited");
+    assert_eq!(Home::of(&saved).unwrap(), project("p", None));
+    assert_eq!(saved.sort_order, before.sort_order);
     assert_eq!(ids(&db, View::Project("p".into())), ["y", "z"]);
 }
 
@@ -376,15 +370,15 @@ fn saving_a_task_never_changes_its_home() {
 fn saving_a_project_never_changes_its_area() {
     let db = fixture();
     db.trash_area("work").unwrap();
-    for area in [Some("work"), Some("home"), Some("missing")] {
-        let mut edited = db.get_project("p").unwrap().unwrap();
-        edited.area_id = area.map(str::to_string);
-        edited.notes = "edited".into();
-        db.update_project(&edited).unwrap();
-        let saved = db.get_project("p").unwrap().unwrap();
-        assert_eq!(saved.area_id, None, "{area:?}");
-        assert_eq!(saved.notes, "edited");
-    }
+    // Only set_project_area files a project: every field edit leaves it.
+    db.set_project_notes("p", "edited").unwrap();
+    db.set_project_schedule("p", &Schedule::Someday, today())
+        .unwrap();
+    db.set_project_deadline("p", Some(today())).unwrap();
+    db.rename_project("p", "renamed").unwrap();
+    let saved = db.get_project("p").unwrap().unwrap();
+    assert_eq!(saved.area_id, None);
+    assert_eq!(saved.notes, "edited");
     assert_eq!(sidebar(&db), [("p".into(), None), ("q".into(), None)]);
 }
 
@@ -393,7 +387,7 @@ fn a_task_stored_before_the_hierarchy_rule_stays_editable() {
     let db = fixture();
     // Earlier versions accepted any combination of ids; such rows must not
     // lock the task against edits.
-    db.with_conn(|c| {
+    db.with_raw_conn(|c| {
         c.execute(
             "UPDATE tasks SET area_id = 'home', project_id = 'p', heading_id = 'qh' WHERE id = 'a'",
             [],
@@ -401,13 +395,12 @@ fn a_task_stored_before_the_hierarchy_rule_stays_editable() {
         Ok(())
     })
     .unwrap();
-    let mut task = db.get_task("a").unwrap().unwrap();
+    let task = db.get_task("a").unwrap().unwrap();
     assert!(Home::of(&task).is_err());
     assert_eq!(Home::listed(&task), project("p", Some("qh")));
     assert_eq!(View::containing(&task, today()), View::Project("p".into()));
 
-    task.notes = "still editable".into();
-    db.update_task(&task).unwrap();
+    db.set_task_notes("a", "still editable").unwrap();
     assert_eq!(db.get_task("a").unwrap().unwrap().notes, "still editable");
 
     db.set_task_home("a", &Home::Area("home".into())).unwrap();

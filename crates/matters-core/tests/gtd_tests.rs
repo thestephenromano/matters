@@ -6,7 +6,7 @@ fn test_inbox_flow() {
     let query = QueryEngine::new(&db);
 
     // 1. Create an inbox task
-    let mut task1 = Task::new("task-1", "Buy oat milk", 1.0);
+    let task1 = Task::new("task-1", "Buy oat milk", 1.0);
     db.create_task(&task1).unwrap();
 
     let task2 = Task::new("task-2", "Review Q4 goals", 2.0);
@@ -18,8 +18,9 @@ fn test_inbox_flow() {
     assert_eq!(inbox[1].title, "Review Q4 goals");
 
     // 2. Schedule task1 for today -> it leaves the inbox
-    task1.start_date = Some(jiff::civil::date(2026, 11, 17));
-    db.update_task(&task1).unwrap();
+    let day = jiff::civil::date(2026, 11, 17);
+    db.set_task_schedule(&task1.id, &matters_core::Schedule::Date(day), day)
+        .unwrap();
 
     let inbox = query.inbox().unwrap();
     assert_eq!(inbox.len(), 1);

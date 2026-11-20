@@ -392,12 +392,7 @@ pub fn place_in_today(
         }
     }
     if task.is_evening() != evening {
-        let mut task = task.clone();
-        task.time_of_day = evening.then(|| "evening".to_string());
-        if evening && task.start_date.is_none() {
-            task.start_date = Some(today);
-        }
-        db.update_task(&task)?;
+        db.set_task_evening(id, evening, today)?;
     }
     place_task(db, &View::Today, today, id, after)
 }

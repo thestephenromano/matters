@@ -166,7 +166,7 @@ impl Database {
     pub fn remove_tag_from(&self, item: Tagged<'_>, tag_id: &str) -> Result<()> {
         let (table, column) = item.table();
         let (_, _, item_id) = item.item();
-        self.with_conn(|conn| {
+        self.with_conn_mut(|conn| {
             conn.execute(
                 &format!("DELETE FROM {table} WHERE {column} = ?1 AND tag_id = ?2"),
                 params![item_id, tag_id],

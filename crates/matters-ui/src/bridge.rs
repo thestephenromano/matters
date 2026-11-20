@@ -1098,9 +1098,11 @@ impl qobject::AppController {
         let Some(schedule) = Schedule::parse(&String::from(when)) else {
             return self.report(format!("'{when}' is not a schedule"));
         };
-        let result = self.edit_task(&String::from(task_id), |task| {
-            task.apply_schedule(&schedule, local_today())
-        });
+        let result = gone_task_is_fine(self.db.set_task_schedule(
+            &String::from(task_id),
+            &schedule,
+            local_today(),
+        ));
         self.finish(result);
     }
 
@@ -1134,9 +1136,11 @@ impl qobject::AppController {
             return false;
         };
         let today = self.day.day();
-        let result = self.edit_task(&String::from(task_id), |task| {
-            task.apply_schedule(&schedule, today)
-        });
+        let result = gone_task_is_fine(self.db.set_task_schedule(
+            &String::from(task_id),
+            &schedule,
+            today,
+        ));
         let ok = result.is_ok();
         self.finish(result);
         ok
@@ -1170,7 +1174,10 @@ impl qobject::AppController {
         else {
             return false;
         };
-        let result = self.edit_task(&String::from(task_id), |task| task.deadline = Some(date));
+        let result = gone_task_is_fine(
+            self.db
+                .set_task_deadline(&String::from(task_id), Some(date)),
+        );
         let ok = result.is_ok();
         self.finish(result);
         ok
@@ -1184,7 +1191,7 @@ impl qobject::AppController {
             Schedule::Date(d) => Some(d),
             _ => None,
         };
-        let result = self.edit_task(&String::from(task_id), |task| task.deadline = deadline);
+        let result = gone_task_is_fine(self.db.set_task_deadline(&String::from(task_id), deadline));
         let ok = result.is_ok();
         self.finish(result);
         ok
@@ -1195,9 +1202,9 @@ impl qobject::AppController {
             return self.report(format!("'{when}' is not a schedule"));
         };
         let today = self.day.day();
-        let result = self.edit_project(&String::from(project_id), |project| {
-            project.apply_schedule(&schedule, today)
-        });
+        let result = self
+            .db
+            .set_project_schedule(&String::from(project_id), &schedule, today);
         self.finish(result);
     }
 
@@ -1211,9 +1218,9 @@ impl qobject::AppController {
             return false;
         };
         let today = self.day.day();
-        let result = self.edit_project(&String::from(project_id), |project| {
-            project.apply_schedule(&schedule, today)
-        });
+        let result = self
+            .db
+            .set_project_schedule(&String::from(project_id), &schedule, today);
         let ok = result.is_ok();
         self.finish(result);
         ok
@@ -1227,12 +1234,13 @@ impl qobject::AppController {
         let Some(deadline) = deadline_from_iso(&String::from(date)) else {
             return false;
         };
-        let result = self.edit_project(&String::from(project_id), |project| {
-            project.deadline = match deadline {
-                Schedule::Date(d) => Some(d),
-                _ => None,
-            }
-        });
+        let deadline = match deadline {
+            Schedule::Date(d) => Some(d),
+            _ => None,
+        };
+        let result = self
+            .db
+            .set_project_deadline(&String::from(project_id), deadline);
         let ok = result.is_ok();
         self.finish(result);
         ok
@@ -1249,9 +1257,9 @@ impl qobject::AppController {
         else {
             return false;
         };
-        let result = self.edit_project(&String::from(project_id), |project| {
-            project.deadline = Some(date)
-        });
+        let result = self
+            .db
+            .set_project_deadline(&String::from(project_id), Some(date));
         let ok = result.is_ok();
         self.finish(result);
         ok
@@ -1259,7 +1267,7 @@ impl qobject::AppController {
 
     pub fn update_project_notes(self: Pin<&mut Self>, project_id: &QString, notes: &QString) {
         let notes = String::from(notes);
-        let result = self.edit_project(&String::from(project_id), |project| project.notes = notes);
+        let result = self.db.set_project_notes(&String::from(project_id), &notes);
         self.finish(result);
     }
 
@@ -1360,7 +1368,7 @@ impl qobject::AppController {
 
     pub fn update_task_notes(self: Pin<&mut Self>, task_id: &QString, notes: &QString) {
         let notes = String::from(notes);
-        let result = self.edit_task(&String::from(task_id), |task| task.notes = notes);
+        let result = gone_task_is_fine(self.db.set_task_notes(&String::from(task_id), &notes));
         self.finish(result);
     }
 
@@ -1398,27 +1406,6 @@ impl qobject::AppController {
     }
 
     // ---- internals ----------------------------------------------------------
-
-    fn edit_project(&self, id: &str, edit: impl FnOnce(&mut Project)) -> matters_core::Result<()> {
-        match self.db.get_project(id)? {
-            Some(mut project) => {
-                edit(&mut project);
-                self.db.update_project(&project)
-            }
-            None => Err(matters_core::MattersError::NotFound {
-                entity: "project",
-                id: id.to_string(),
-            }),
-        }
-    }
-
-    fn edit_task(&self, id: &str, edit: impl FnOnce(&mut Task)) -> matters_core::Result<()> {
-        if let Some(mut task) = self.db.get_task(id)? {
-            edit(&mut task);
-            self.db.update_task(&task)?;
-        }
-        Ok(())
-    }
 
     fn set_view(mut self: Pin<&mut Self>, view: View) {
         self.as_mut().set_current_view(QString::from(view.key()));
@@ -2523,3 +2510,12 @@ qt_list_sink!(
     qobject::ChecklistModel,
     ChecklistItem
 );
+
+/// A task edit that finds the task already gone (deleted while its editor
+/// was open, say) changes nothing, as before field-by-field writes.
+fn gone_task_is_fine(result: matters_core::Result<()>) -> matters_core::Result<()> {
+    match result {
+        Err(matters_core::MattersError::NotFound { entity: "task", .. }) => Ok(()),
+        other => other,
+    }
+}

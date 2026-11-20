@@ -67,9 +67,7 @@ fn a_deadline_due_today_brings_an_inbox_task_into_today() {
     };
     assert!(!in_today());
 
-    let mut task = db.get_task("t").unwrap().unwrap();
-    task.deadline = Some(today());
-    db.update_task(&task).unwrap();
+    db.set_task_deadline("t", Some(today())).unwrap();
     assert!(in_today(), "due today: listed in Today");
     assert!(
         engine

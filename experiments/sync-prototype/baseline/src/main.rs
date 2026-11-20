@@ -27,9 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for line in std::io::stdin().lock().lines() {
         let (id, title): (String, String) = serde_json::from_str(&line?)?;
         let start = Instant::now();
-        let mut task = database.get_task(&id)?.ok_or("missing task")?;
-        task.title = title;
-        database.update_task(&task)?;
+        // The app's title edit: one typed write, no whole-task save.
+        database.rename_task(&id, &title)?;
         let milliseconds = start.elapsed().as_secs_f64() * 1000.0;
         writeln!(output, "{milliseconds}")?;
         output.flush()?;

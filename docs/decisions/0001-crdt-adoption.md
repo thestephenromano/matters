@@ -107,6 +107,14 @@ The Qt [bridge](../../crates/matters-ui/src/bridge.rs) and GTK [UI](../../crates
 
 Persist authoritative engine changes, outgoing work and SQL projection atomically in SQLite before acknowledging a local save. On failed commit, discard/reload speculative in-memory state. Persist original incoming bytes before import; pending imports must survive independently of snapshots. [Loro persistence](https://loro.dev/docs/tutorial/persistence)
 
+### Re-audit for integration (#35, 2026-11-20)
+
+Before the engine is wired in, every write in `matters-core` goes through a typed operation, and the raw connection is read-only:
+
+- Whole-entity saves are gone. `update_task`, `update_project` and `update_area` are replaced by field operations: `set_task_notes`, `set_task_schedule`, `set_task_deadline`, `cancel_task`, `set_project_notes`, `set_project_schedule` and `set_project_deadline`, alongside the existing renames, `complete_task`/`uncomplete_task`, `finish_project`/`reopen_project` and `set_task_home`/`set_project_area`. Moving a Today task between sections writes only its schedule tuple. Both frontends and the measurement baseline use these operations.
+- `Database::with_conn` sets `PRAGMA query_only` for its duration, so SQLite refuses any write through it. Writes use the crate-private `with_conn_mut`. The audit found one write on the read path (`remove_tag_from`), which now uses the write path. Tests that must stage states the operations never produce use `with_raw_conn`, which exists only with the `test-support` feature.
+- The public write surface is the `Database` operations for areas, projects, headings, tasks, checklist items and tags, plus `crate::ordering`. Each is one intent with its own validation, so the engine adapter maps operations to commands one for one.
+
 ## Migration and evaluation gates
 
 One device imports a backed-up SQL database into a new genesis lineage, preserving UUIDs, timestamps, views and existing ordering. Resolve contradictory legacy parent references through a report and explicit choice before conversion. Other devices bootstrap from this lineage; they do not independently convert matching SQL rows. Later independent collections require an explicit import/deduplication workflow. Clone/restore preserves queued edits but assigns a fresh engine writer incarnation before new edits.

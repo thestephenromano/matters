@@ -177,22 +177,13 @@ fn saving_a_task_never_changes_its_trash_state() {
     let db = Database::open_in_memory().unwrap();
     db.create_task(&Task::new("t", "t", 0.0)).unwrap();
 
-    // A copy read before the task was trashed, saved afterwards (a late notes
-    // autosave, say), must not pull it out of the Trash.
-    let mut stale = db.get_task("t").unwrap().unwrap();
+    // An edit after the task was trashed (a late notes autosave, say)
+    // must not pull it out of the Trash.
     db.trash_task("t").unwrap();
-    stale.notes = "late edit".into();
-    db.update_task(&stale).unwrap();
+    db.set_task_notes("t", "late edit").unwrap();
     let now = db.get_task("t").unwrap().unwrap();
     assert!(now.is_trashed());
     assert_eq!(now.notes, "late edit");
-
-    // Nor can a save move a live task into the Trash.
-    db.restore_task("t").unwrap();
-    let mut task = db.get_task("t").unwrap().unwrap();
-    task.trashed_at = Some(1);
-    db.update_task(&task).unwrap();
-    assert!(!db.get_task("t").unwrap().unwrap().is_trashed());
 }
 
 #[test]
@@ -376,17 +367,10 @@ fn emptying_the_trash_destroys_trashed_projects_with_their_contents() {
 fn saving_a_project_never_changes_its_trash_state() {
     let db = Database::open_in_memory().unwrap();
     db.create_project(&Project::new("p", "p", 0.0)).unwrap();
-    let mut stale = db.get_project("p").unwrap().unwrap();
     db.trash_project("p").unwrap();
-    stale.title = "renamed".into();
-    db.update_project(&stale).unwrap();
+    db.rename_project("p", "renamed").unwrap();
+    db.set_project_notes("p", "late edit").unwrap();
     assert!(db.get_project("p").unwrap().unwrap().is_trashed());
-
-    db.restore_project("p").unwrap();
-    let mut project = db.get_project("p").unwrap().unwrap();
-    project.trashed_at = Some(1);
-    db.update_project(&project).unwrap();
-    assert!(!db.get_project("p").unwrap().unwrap().is_trashed());
 }
 
 /// Area `a1` holds project `p1` (tasks `p1-open`, `p1-done`, and `p1-alone`,
@@ -530,17 +514,9 @@ fn emptying_the_trash_destroys_a_trashed_area_with_everything_in_it() {
 fn saving_an_area_never_changes_its_trash_state() {
     let db = Database::open_in_memory().unwrap();
     db.create_area(&Area::new("a", "a", 0.0)).unwrap();
-    let mut stale = db.get_area("a").unwrap().unwrap();
     db.trash_area("a").unwrap();
-    stale.title = "renamed".into();
-    db.update_area(&stale).unwrap();
+    db.rename_area("a", "renamed").unwrap();
     let now = db.get_area("a").unwrap().unwrap();
     assert!(now.is_trashed());
     assert_eq!(now.title, "renamed");
-
-    db.restore_area("a").unwrap();
-    let mut area = db.get_area("a").unwrap().unwrap();
-    area.trashed_at = Some(1);
-    db.update_area(&area).unwrap();
-    assert!(!db.get_area("a").unwrap().unwrap().is_trashed());
 }

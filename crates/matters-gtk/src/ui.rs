@@ -327,7 +327,7 @@ impl Ui {
     }
 
     pub(crate) fn schedule(self: &Rc<Self>, id: &str, schedule: &Schedule) {
-        let result = self.edit_task(id, |task| task.apply_schedule(schedule, local_today()));
+        let result = gone_task_is_fine(self.db.set_task_schedule(id, schedule, local_today()));
         self.check(result);
         self.refresh_soon();
     }
@@ -344,19 +344,11 @@ impl Ui {
                 .iter()
                 .any(|t| t.id == id && t.notes == notes);
             if !unchanged {
-                let result = ui.edit_task(&id, |task| task.notes = notes);
+                let result = gone_task_is_fine(ui.db.set_task_notes(&id, &notes));
                 ui.check(result);
                 ui.refresh();
             }
         });
-    }
-
-    fn edit_task(&self, id: &str, edit: impl FnOnce(&mut Task)) -> matters_core::Result<()> {
-        if let Some(mut task) = self.db.get_task(id)? {
-            edit(&mut task);
-            self.db.update_task(&task)?;
-        }
-        Ok(())
     }
 
     fn refresh_soon(self: &Rc<Self>) {
@@ -523,5 +515,14 @@ impl ListSink<Task> for RowSink<'_> {
     }
     fn changed(&mut self, row: usize) {
         self.widgets[row].update(&self.tasks[row]);
+    }
+}
+
+/// A task edit that finds the task already gone (deleted while its notes
+/// were being saved, say) changes nothing, as before field-by-field writes.
+fn gone_task_is_fine(result: matters_core::Result<()>) -> matters_core::Result<()> {
+    match result {
+        Err(matters_core::MattersError::NotFound { entity: "task", .. }) => Ok(()),
+        other => other,
     }
 }
