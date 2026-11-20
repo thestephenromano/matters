@@ -175,6 +175,64 @@ impl Database {
         })
     }
 
+    /// The tags given to each of `task_ids` itself, in tag-list order, for
+    /// a list's rows; tasks without tags are left out. One query per 500
+    /// tasks.
+    pub fn tags_of_tasks(
+        &self,
+        task_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<Tag>>> {
+        let order: std::collections::HashMap<String, (usize, Tag)> = self
+            .list_tags()?
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| (t.id.clone(), (i, t)))
+            .collect();
+        let mut found: std::collections::HashMap<String, Vec<(usize, Tag)>> =
+            std::collections::HashMap::new();
+        self.with_conn(|conn| {
+            for chunk in task_ids.chunks(500) {
+                let marks = vec!["?"; chunk.len()].join(",");
+                let mut stmt = conn.prepare_cached(&format!(
+                    "SELECT task_id, tag_id FROM task_tags WHERE task_id IN ({marks})"
+                ))?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?;
+                for row in rows {
+                    let (task, tag) = row?;
+                    if let Some(entry) = order.get(&tag) {
+                        found.entry(task).or_default().push(entry.clone());
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(found
+            .into_iter()
+            .map(|(task, mut tags)| {
+                tags.sort_by_key(|(i, _)| *i);
+                (task, tags.into_iter().map(|(_, t)| t).collect())
+            })
+            .collect())
+    }
+
+    /// The tag named `name`, ignoring case, if there is one.
+    pub fn tag_named(&self, name: &str) -> Result<Option<Tag>> {
+        let Some(name) = Task::clean_title(name) else {
+            return Ok(None);
+        };
+        self.with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    &format!("SELECT {TAG_COLUMNS} FROM tags WHERE name = ?1 COLLATE NOCASE"),
+                    params![name],
+                    map_tag_row,
+                )
+                .optional()?)
+        })
+    }
+
     /// The tags given to `item` itself, in tag-list order (not what a task
     /// inherits from its project and area).
     pub fn tags_of(&self, item: Tagged<'_>) -> Result<Vec<Tag>> {

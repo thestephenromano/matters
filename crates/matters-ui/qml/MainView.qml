@@ -36,6 +36,24 @@ Item {
         }
     }
 
+    // Every tag, parents before children, with its depth (#57).
+    readonly property var allTags: {
+        try {
+            return JSON.parse(controller.tagsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
+    // The tags of the open project or area.
+    readonly property var currentTags: {
+        try {
+            return JSON.parse(controller.currentTagsJson);
+        } catch (e) {
+            return [];
+        }
+    }
+
     readonly property var trashedAreas: {
         try {
             return JSON.parse(controller.trashedAreasJson);
@@ -336,6 +354,18 @@ Item {
         taskListView.selectedTaskId = id;
         newBelowId = id; // the field moves under the new task once it is listed
         Qt.callLater(root.scrollToTask, id);
+    }
+
+    // The task whose tag field should take keyboard focus once it is open
+    // (Ctrl+Shift+T, #57).
+    property string tagEditId: ""
+
+    function editSelectedTags() {
+        const id = taskListView.selectedTaskId;
+        if (taskModel.rowOf(id) < 0)
+            return;
+        taskListView.expandedTaskId = id;
+        tagEditId = id;
     }
 
     // The task whose title should take keyboard focus once it is open (F2).
@@ -912,6 +942,19 @@ Item {
                         font.pixelSize: 11
                         font.weight: Font.Bold
                         Layout.fillWidth: true
+                    }
+
+                    ToolButton {
+                        objectName: "tagsButton"
+                        icon.width: 16
+                        contentItem: Icon {
+                            name: "tag"
+                            size: 16
+                            color: root.colTextSecondary
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Tags"
+                        onClicked: tagsDialog.open()
                     }
 
                     ToolButton {
@@ -1503,6 +1546,21 @@ Item {
                         }
                     }
 
+                    TagField {
+                        objectName: "projectTags"
+                        Layout.fillWidth: true
+                        kind: "project"
+                        itemId: controller.currentProjectId
+                        tags: root.currentTags
+                        allTags: root.allTags
+                        controller: controller
+                        textPrimary: root.colTextPrimary
+                        textSecondary: root.colTextSecondary
+                        chipColor: root.isDark ? "#2C2E33" : "#E9ECEF"
+                        highlightColor: root.colSidebarActive
+                        onLeave: taskListView.forceActiveFocus()
+                    }
+
                     // Saves after a pause in typing and when editing ends,
                     // like a task's notes.
                     TextArea {
@@ -1565,6 +1623,25 @@ Item {
                             onTriggered: projectNotes.save()
                         }
                     }
+                }
+
+                // An area's tags (#57), under its title.
+                TagField {
+                    objectName: "areaTags"
+                    visible: controller.currentView === "area"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 46
+                    Layout.topMargin: -10
+                    kind: "area"
+                    itemId: controller.currentAreaId
+                    tags: root.currentTags
+                    allTags: root.allTags
+                    controller: controller
+                    textPrimary: root.colTextPrimary
+                    textSecondary: root.colTextSecondary
+                    chipColor: root.isDark ? "#2C2E33" : "#E9ECEF"
+                    highlightColor: root.colSidebarActive
+                    onLeave: taskListView.forceActiveFocus()
                 }
 
                 // Quick Task Input Bar (not in the Logbook or the Trash)
@@ -2107,6 +2184,9 @@ Item {
                                     required property bool someday
                                     required property int checklistDone
                                     required property int checklistTotal
+                                    // JSON `[{id, name}]`: the task's own tags (#57).
+                                    required property string tags
+                                    readonly property var tagList: JSON.parse(tags)
                                     required property int index
 
                                     readonly property bool isExpanded: taskListView.expandedTaskId === taskId
@@ -2120,6 +2200,13 @@ Item {
                                     function focusNewBelow() {
                                         if (newBelowHere)
                                             newBelowInput.forceActiveFocus();
+                                    }
+
+                                    readonly property bool tagEditRequested: root.tagEditId === taskId && isExpanded
+                                    onTagEditRequestedChanged: if (tagEditRequested) Qt.callLater(taskRow.beginTagEdit)
+                                    function beginTagEdit() {
+                                        root.tagEditId = "";
+                                        taskTags.focusInput();
                                     }
 
                                     readonly property bool titleEditRequested: root.titleEditId === taskId
@@ -2418,6 +2505,28 @@ Item {
                                                 }
                                             }
 
+                                            // The task's tags, while the row is closed.
+                                            Repeater {
+                                                model: taskRow.isExpanded ? [] : taskRow.tagList.slice(0, 3)
+                                                delegate: Rectangle {
+                                                    id: rowTag
+                                                    objectName: "rowTag"
+                                                    required property var modelData
+                                                    readonly property string name: modelData.name
+                                                    Layout.preferredHeight: 20
+                                                    Layout.preferredWidth: rowTagText.contentWidth + 14
+                                                    radius: 10
+                                                    color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                    Text {
+                                                        id: rowTagText
+                                                        anchors.centerIn: parent
+                                                        text: rowTag.name
+                                                        font.pixelSize: 11
+                                                        color: root.colTextSecondary
+                                                    }
+                                                }
+                                            }
+
                                             // Checklist progress, while the row is closed.
                                             Rectangle {
                                                 objectName: "checklistBadge"
@@ -2583,6 +2692,23 @@ Item {
                                                     interval: 600
                                                     onTriggered: notesInput.save()
                                                 }
+                                            }
+
+                                            // Its tags (#57).
+                                            TagField {
+                                                id: taskTags
+                                                objectName: "taskTags"
+                                                Layout.fillWidth: true
+                                                kind: "task"
+                                                itemId: taskRow.taskId
+                                                tags: taskRow.tagList
+                                                allTags: root.allTags
+                                                controller: controller
+                                                textPrimary: root.colTextPrimary
+                                                textSecondary: root.colTextSecondary
+                                                chipColor: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                highlightColor: root.colSidebarActive
+                                                // Escape goes on to the list, which closes the task.
                                             }
 
                                             // The checklist (#21), made only while the row is
@@ -2977,6 +3103,107 @@ Item {
         onClosed: taskListView.forceActiveFocus()
     }
 
+    // Every tag (#57): renamed in place, nested under another tag or brought
+    // to the top level, deleted (its items keep everything else), and new
+    // ones added.
+    Dialog {
+        id: tagsDialog
+        objectName: "tagsDialog"
+        title: "Tags"
+        modal: true
+        x: (parent.width - width) / 2
+        y: 80
+        width: 420
+        standardButtons: Dialog.Close
+        onClosed: taskListView.forceActiveFocus()
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 6
+
+            Label {
+                visible: root.allTags.length === 0
+                text: "No tags yet."
+                color: root.colTextSecondary
+            }
+
+            Repeater {
+                model: root.allTags
+                delegate: RowLayout {
+                    id: tagRow
+                    objectName: "tagRow"
+                    required property var modelData
+                    readonly property string tagId: modelData.id
+                    readonly property string name: modelData.name
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    TextField {
+                        objectName: "tagName"
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 16 * tagRow.modelData.depth
+                        text: tagRow.name
+                        font.pixelSize: 13
+                        // A refused name (blank or taken) puts the old one back.
+                        onEditingFinished: if (text !== tagRow.name && !controller.renameTag(tagRow.tagId, text)) text = tagRow.name
+                    }
+
+                    ToolButton {
+                        objectName: "nestTag"
+                        text: "Nest"
+                        font.pixelSize: 11
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Put this tag under another, or at the top"
+                        onClicked: nestMenu.popup()
+
+                        Menu {
+                            id: nestMenu
+                            Instantiator {
+                                model: [{ id: "", name: "Top Level", depth: 0 }].concat(
+                                    root.allTags.filter(t => t.id !== tagRow.tagId))
+                                delegate: MenuItem {
+                                    required property var modelData
+                                    objectName: "nestUnder-" + (modelData.id === "" ? "top" : modelData.id)
+                                    text: modelData.name
+                                    leftPadding: 12 + 12 * modelData.depth
+                                    checkable: true
+                                    checked: (tagRow.modelData.parent_id || "") === modelData.id
+                                    onTriggered: controller.setTagParent(tagRow.tagId, modelData.id)
+                                }
+                                onObjectAdded: (index, object) => nestMenu.insertItem(index, object)
+                                onObjectRemoved: (index, object) => nestMenu.removeItem(object)
+                            }
+                        }
+                    }
+
+                    ToolButton {
+                        objectName: "deleteTag"
+                        Accessible.name: "Delete the tag " + tagRow.name
+                        contentItem: Icon {
+                            name: "trash"
+                            size: 14
+                            color: root.colTextSecondary
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Delete the tag; what it was on is kept"
+                        onClicked: controller.deleteTag(tagRow.tagId)
+                    }
+                }
+            }
+
+            TextField {
+                objectName: "newTagInput"
+                Layout.fillWidth: true
+                placeholderText: "New tag"
+                font.pixelSize: 13
+                onAccepted: {
+                    if (controller.createTag(text, "") !== "")
+                        text = "";
+                }
+            }
+        }
+    }
+
     Dialog {
         id: newAreaDialog
         objectName: "newAreaDialog"
@@ -3092,6 +3319,11 @@ Item {
         sequence: "Ctrl+D"
         enabled: taskListView.selectedTaskId !== ""
         onActivated: root.openDeadlineFor(taskListView.selectedTaskId)
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+T"
+        enabled: taskListView.selectedTaskId !== "" && controller.currentView !== "trash"
+        onActivated: root.editSelectedTags()
     }
     // Trashed tasks can't be moved; Put Back first.
     Shortcut {

@@ -22,7 +22,7 @@ use cxx_qt_lib::{
 use matters_core::{
     local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
     DeadlineStatus, DeletedHeading, Heading, Home, ListRow, Outcome, Project, QueryEngine,
-    Schedule, Status, Task, View, Visit,
+    Schedule, Status, Tag, Tagged, Task, View, Visit,
 };
 use uuid::Uuid;
 
@@ -80,6 +80,11 @@ pub mod qobject {
         #[qproperty(QString, projects_json)]
         /// Areas in the sidebar, in order.
         #[qproperty(QString, areas_json)]
+        /// Every tag (#57), parents before their children, as JSON objects
+        /// with `id`, `name`, `parent_id` and `depth`.
+        #[qproperty(QString, tags_json)]
+        /// The tags of the open project or area, as JSON `{id, name}`.
+        #[qproperty(QString, current_tags_json)]
         /// Trashed areas, listed in the Trash view.
         #[qproperty(QString, trashed_areas_json)]
         /// Trashed projects, listed in the Trash view.
@@ -230,6 +235,49 @@ pub mod qobject {
             project_id: &QString,
             notes: &QString,
         );
+        /// Tags (#57). `kind` names what is tagged: `task`, `project` or
+        /// `area`. `create_tag` returns the new tag's id, or an empty
+        /// string when the name is refused (blank or taken).
+        #[qinvokable]
+        fn create_tag(
+            self: Pin<&mut AppController>,
+            name: &QString,
+            parent_id: &QString,
+        ) -> QString;
+        #[qinvokable]
+        fn rename_tag(self: Pin<&mut AppController>, tag_id: &QString, name: &QString) -> bool;
+        /// Nest a tag under another, or make it top-level (empty parent).
+        #[qinvokable]
+        fn set_tag_parent(
+            self: Pin<&mut AppController>,
+            tag_id: &QString,
+            parent_id: &QString,
+        ) -> bool;
+        #[qinvokable]
+        fn delete_tag(self: Pin<&mut AppController>, tag_id: &QString);
+        #[qinvokable]
+        fn add_tag(
+            self: Pin<&mut AppController>,
+            kind: &QString,
+            item_id: &QString,
+            tag_id: &QString,
+        );
+        #[qinvokable]
+        fn remove_tag(
+            self: Pin<&mut AppController>,
+            kind: &QString,
+            item_id: &QString,
+            tag_id: &QString,
+        );
+        /// Give an item the tag named `name` (ignoring case), creating the
+        /// tag when there is none. False when the name is blank.
+        #[qinvokable]
+        fn tag_by_name(
+            self: Pin<&mut AppController>,
+            kind: &QString,
+            item_id: &QString,
+            name: &QString,
+        ) -> bool;
         #[qinvokable]
         fn schedule_task(self: Pin<&mut AppController>, task_id: &QString, when: &QString);
         #[qinvokable]
@@ -580,6 +628,8 @@ pub struct AppControllerRust {
     logbook_count: i32,
     projects_json: QString,
     areas_json: QString,
+    tags_json: QString,
+    current_tags_json: QString,
     trashed_areas_json: QString,
     current_area_id: QString,
     trashed_projects_json: QString,
@@ -624,6 +674,8 @@ impl Default for AppControllerRust {
             logbook_count: 0,
             projects_json: QString::from("[]"),
             areas_json: QString::from("[]"),
+            tags_json: QString::from("[]"),
+            current_tags_json: QString::from("[]"),
             trashed_areas_json: QString::from("[]"),
             current_area_id: QString::default(),
             trashed_projects_json: QString::from("[]"),
@@ -1147,6 +1199,90 @@ impl qobject::AppController {
         self.finish(result);
     }
 
+    pub fn create_tag(self: Pin<&mut Self>, name: &QString, parent_id: &QString) -> QString {
+        let parent = String::from(parent_id);
+        let mut tag = Tag::new(
+            Uuid::new_v4().to_string(),
+            String::from(name),
+            (!parent.is_empty()).then_some(parent),
+        );
+        let result = self.db.add_tag(&mut tag);
+        let id = if result.is_ok() {
+            QString::from(tag.id.as_str())
+        } else {
+            QString::default()
+        };
+        self.finish(result);
+        id
+    }
+
+    pub fn rename_tag(self: Pin<&mut Self>, tag_id: &QString, name: &QString) -> bool {
+        let result = self
+            .db
+            .rename_tag(&String::from(tag_id), &String::from(name));
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn set_tag_parent(self: Pin<&mut Self>, tag_id: &QString, parent_id: &QString) -> bool {
+        let parent = String::from(parent_id);
+        let result = self.db.set_tag_parent(
+            &String::from(tag_id),
+            (!parent.is_empty()).then_some(parent.as_str()),
+        );
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn delete_tag(self: Pin<&mut Self>, tag_id: &QString) {
+        let result = self.db.delete_tag(&String::from(tag_id));
+        self.finish(result);
+    }
+
+    pub fn add_tag(self: Pin<&mut Self>, kind: &QString, item_id: &QString, tag_id: &QString) {
+        let id = String::from(item_id);
+        let result = tagged(&String::from(kind), &id)
+            .and_then(|item| self.db.add_tag_to(item, &String::from(tag_id)));
+        self.finish(result);
+    }
+
+    pub fn remove_tag(self: Pin<&mut Self>, kind: &QString, item_id: &QString, tag_id: &QString) {
+        let id = String::from(item_id);
+        let result = tagged(&String::from(kind), &id)
+            .and_then(|item| self.db.remove_tag_from(item, &String::from(tag_id)));
+        self.finish(result);
+    }
+
+    pub fn tag_by_name(
+        self: Pin<&mut Self>,
+        kind: &QString,
+        item_id: &QString,
+        name: &QString,
+    ) -> bool {
+        let name = String::from(name);
+        if Task::clean_title(&name).is_none() {
+            return false;
+        }
+        let id = String::from(item_id);
+        let db = &self.db;
+        let result = tagged(&String::from(kind), &id).and_then(|item| {
+            let tag = match db.tag_named(&name)? {
+                Some(tag) => tag,
+                None => {
+                    let mut tag = Tag::new(Uuid::new_v4().to_string(), name.as_str(), None);
+                    db.add_tag(&mut tag)?;
+                    tag
+                }
+            };
+            db.add_tag_to(item, &tag.id)
+        });
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
     pub fn rename_task(self: Pin<&mut Self>, task_id: &QString, title: &QString) -> bool {
         let title = String::from(title);
         if matters_core::Task::clean_title(&title).is_none() {
@@ -1492,6 +1628,20 @@ impl qobject::AppController {
         self.as_mut()
             .set_current_title(QString::from(title.as_str()));
         self.as_mut().set_current_project_progress(progress);
+        let (all_tags, current_tags) = {
+            let item = match &self.view {
+                View::Project(id) => Some(Tagged::Project(id)),
+                View::Area(id) => Some(Tagged::Area(id)),
+                _ => None,
+            };
+            let current = match item {
+                Some(item) => self.db.tags_of(item)?,
+                None => Vec::new(),
+            };
+            (tag_entries(&self.db.list_tags()?), tag_chips(&current))
+        };
+        self.as_mut().set_tags_json(to_json(&all_tags));
+        self.as_mut().set_current_tags_json(to_json(&current_tags));
         self.as_mut()
             .set_current_project_status(QString::from(status));
         self.as_mut()
@@ -1572,6 +1722,65 @@ fn deadline_from_iso(text: &str) -> Option<Schedule> {
         Some(date @ Schedule::Date(_)) => Some(date),
         _ => None,
     }
+}
+
+/// What `kind` (`task`, `project` or `area`) and `id` name, for tagging.
+fn tagged<'a>(kind: &str, id: &'a str) -> matters_core::Result<Tagged<'a>> {
+    match kind {
+        "task" => Ok(Tagged::Task(id)),
+        "project" => Ok(Tagged::Project(id)),
+        "area" => Ok(Tagged::Area(id)),
+        other => Err(matters_core::MattersError::Validation(format!(
+            "'{other}' can't be tagged"
+        ))),
+    }
+}
+
+/// A tag as the tag list and the Tags dialog show it.
+#[derive(serde::Serialize)]
+struct TagEntry {
+    id: String,
+    name: String,
+    parent_id: Option<String>,
+    /// How deeply it is nested: 0 at the top.
+    depth: usize,
+}
+
+/// `tags` (parents before children, `Database::list_tags`) with depths.
+fn tag_entries(tags: &[Tag]) -> Vec<TagEntry> {
+    let mut depth: HashMap<&str, usize> = HashMap::new();
+    tags.iter()
+        .map(|t| {
+            let d = t
+                .parent_id
+                .as_deref()
+                .and_then(|p| depth.get(p))
+                .map_or(0, |d| d + 1);
+            depth.insert(&t.id, d);
+            TagEntry {
+                id: t.id.clone(),
+                name: t.name.clone(),
+                parent_id: t.parent_id.clone(),
+                depth: d,
+            }
+        })
+        .collect()
+}
+
+/// A tag as an item's chip: its id and name.
+#[derive(serde::Serialize, PartialEq, Clone)]
+struct TagChip {
+    id: String,
+    name: String,
+}
+
+fn tag_chips(tags: &[Tag]) -> Vec<TagChip> {
+    tags.iter()
+        .map(|t| TagChip {
+            id: t.id.clone(),
+            name: t.name.clone(),
+        })
+        .collect()
 }
 
 /// How QML names a `DeadlineStatus`: none, set, today or overdue.
@@ -1694,10 +1903,12 @@ enum Role {
     ChecklistTotal,
     /// `open`, `completed` or `canceled`.
     Status,
+    /// The task's own tags, as JSON `[{id, name}]` (#57).
+    Tags,
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 15] = [
+    const ALL: [(Role, &'static str); 16] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -1713,6 +1924,7 @@ impl Role {
         (Role::Kind, "kind"),
         (Role::HeadingId, "headingId"),
         (Role::Status, "status"),
+        (Role::Tags, "tags"),
     ];
 
     fn from_i32(role: i32) -> Option<Role> {
@@ -1747,6 +1959,8 @@ pub struct TaskListModelRust {
     sections: HashMap<String, String>,
     /// Checklist progress per listed task id that has a checklist (#21).
     progress: HashMap<String, ChecklistProgress>,
+    /// The tags given to each listed task that has any (#57).
+    tags: HashMap<String, Vec<TagChip>>,
     db: Database,
     /// Keeps tasks ticked during this visit in place (see `matters_core::Visit`).
     visit: Visit,
@@ -1771,6 +1985,7 @@ impl Default for TaskListModelRust {
             visit_id: None,
             sections: HashMap::new(),
             progress: HashMap::new(),
+            tags: HashMap::new(),
         }
     }
 }
@@ -1819,6 +2034,11 @@ impl qobject::TaskListModel {
                         tasks.iter().map(|t| t.id.clone()).zip(keys).collect();
                     let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
                     let progress = db.checklist_progress(&ids)?;
+                    let tags: HashMap<String, Vec<TagChip>> = db
+                        .tags_of_tasks(&ids)?
+                        .into_iter()
+                        .map(|(task, tags)| (task, tag_chips(&tags)))
+                        .collect();
                     let rows = engine.list_rows(&view, tasks, local_today())?;
                     for row in &rows {
                         let key = match row {
@@ -1830,14 +2050,15 @@ impl qobject::TaskListModel {
                         };
                         sections.insert(row_key(row), key);
                     }
-                    Ok((rows, sections, progress))
+                    Ok((rows, sections, progress, tags))
                 })
         };
         match target {
-            Ok((rows, sections, progress)) => {
+            Ok((rows, sections, progress, tags)) => {
                 let this = self.as_mut().rust_mut().get_mut();
                 let old_sections = std::mem::replace(&mut this.sections, sections);
                 let old_progress = std::mem::replace(&mut this.progress, progress);
+                let old_tags = std::mem::replace(&mut this.tags, tags);
                 reconcile(&mut QtRows(self.as_mut()), rows, row_key);
                 // A row whose task is unchanged can still move to another
                 // section (the Logbook after midnight, say) or have its
@@ -1850,6 +2071,7 @@ impl qobject::TaskListModel {
                         let key = row_key(row);
                         old_sections.get(&key) != self.sections.get(&key)
                             || old_progress.get(&key) != self.progress.get(&key)
+                            || old_tags.get(&key) != self.tags.get(&key)
                     })
                     .map(|(i, _)| i)
                     .collect();
@@ -1938,6 +2160,10 @@ impl qobject::TaskListModel {
             )),
             Role::Someday => QVariant::from(&task.is_someday),
             Role::Status => QVariant::from(&QString::from(task.status.as_str())),
+            Role::Tags => match self.tags.get(&task.id) {
+                Some(tags) => QVariant::from(&to_json(tags)),
+                None => QVariant::from(&QString::from("[]")),
+            },
             Role::Section => QVariant::from(&QString::from(
                 self.sections
                     .get(&task.id)
@@ -1985,6 +2211,7 @@ impl qobject::TaskListModel {
             )),
             Role::ChecklistDone | Role::ChecklistTotal => QVariant::from(&0_i32),
             Role::Notes | Role::HeadingId => QVariant::from(&QString::default()),
+            Role::Tags => QVariant::from(&QString::from("[]")),
         }
     }
 
@@ -2009,6 +2236,7 @@ impl qobject::TaskListModel {
             | Role::Deadline
             | Role::DeadlineStatus
             | Role::Status => QVariant::from(&QString::default()),
+            Role::Tags => QVariant::from(&QString::from("[]")),
         }
     }
 

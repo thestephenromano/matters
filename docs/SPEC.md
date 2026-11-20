@@ -56,6 +56,7 @@ Area (e.g. Work, Personal, Finances)
 4. **Task (To-Do):**
    * The atomic unit of work.
    * Contains: Title, Notes (markdown-formatted), Checklist, Tags, `When`, `Deadline`, `Status`.
+   * Tags are given to tasks, projects and areas from a tag field that suggests existing tags as you type, and are shown on a closed task's row. A task also matches the tags of its project and area. Tags can be nested; matching a tag matches the tags under it. The Tags window (the tag button in the sidebar) renames, nests and deletes them; deleting a tag never deletes what had it.
    * Can reside in:
      * Inbox (unassigned)
      * Direct child of an Area
@@ -147,6 +148,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `F2` | Selected task | Opens the task with its title selected for editing; `Enter` saves and moves to the notes, `Escape` abandons the edit |
 | `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, and a calendar operable by keyboard). Past days, times of day and phrases that name no day (`week`, `this month`) are refused (`Schedule::parse_typed`) |
 | `Ctrl + D` | Selected task(s) | Opens the **Deadline** popover: a typed day (`fri`, `in 3 days`, `dec 24`), a calendar, *Today* or *Clear*. Rows show the deadline, in red when due today or overdue |
+| `Ctrl + Shift + T` | Selected task | Opens the task with its tag field focused. Typing suggests tags (`Up`/`Down` to pick); `Enter` adds the suggestion or the typed tag, creating it if new; `Backspace` in the empty field removes the last tag; `Escape` clears the field, then closes the task |
 | `Ctrl + Shift + M` | Selected task(s) | Opens the **Move** popover: the Inbox, areas, projects and their headings in sidebar order, with the task's current place ticked. Typing filters it (a project's name finds its headings too); `Enter` or a click files the task at the end of the chosen one. Dragging a task onto the sidebar's Inbox, an area or a project does the same, and onto Today or Someday schedules it; dragging a project onto an area files it there. The sidebar scrolls while a dragged item is held near its edge |
 | `Enter` | Checklist item | Opens a field for a new item directly below; `Enter` again saves it and opens the next. `Escape` leaves the checklist, with the task still open |
 | `Up` / `Down` | Checklist item | Goes to the item above or below; `Ctrl + Up` / `Ctrl + Down` move the item |
