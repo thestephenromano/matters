@@ -512,3 +512,133 @@ pub(crate) fn moved_heading(tx: &Transaction<'_>, id: &str) -> Result<Vec<Comman
     commands.extend(refile_in_order(tx, &tasks)?);
     Ok(commands)
 }
+
+/// Where tag `id` goes among its siblings: after the one before it by key.
+pub(crate) fn tag_anchor(tx: &Transaction<'_>, id: &str) -> Result<Anchor> {
+    Ok(after(previous(
+        tx,
+        "SELECT t.id FROM tags t, tags me WHERE me.id = ?1 AND t.id != me.id
+           AND t.parent_id IS me.parent_id AND t.sort_order < me.sort_order
+         ORDER BY t.sort_order DESC LIMIT 1",
+        &[&id],
+    )?))
+}
+
+/// Tags whose parent changed, each nested where its row says, in key
+/// order among its new siblings.
+pub(crate) fn tags_nested(tx: &Transaction<'_>, ids: &[String]) -> Result<Vec<Command>> {
+    let mut rows = Vec::new();
+    for id in ids {
+        let (parent, key): (Option<String>, f64) = tx.query_row(
+            "SELECT parent_id, sort_order FROM tags WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        rows.push((key, id, parent));
+    }
+    rows.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut commands = Vec::new();
+    for (_, id, parent) in rows {
+        commands.push(Command::MoveTag {
+            id: id.clone(),
+            parent,
+            at: tag_anchor(tx, id)?,
+        });
+    }
+    Ok(commands)
+}
+
+/// A tag given to or taken off an item, when that changed anything.
+pub(crate) fn link(changed: bool, item: &str, tag: &str, present: bool) -> Vec<Command> {
+    if !changed {
+        return Vec::new();
+    }
+    vec![Command::Link {
+        item: item.into(),
+        tag: tag.into(),
+        present,
+    }]
+}
+
+/// Every entity Empty Trash deletes, its cascades included: trashed tasks
+/// and those inside trashed projects or areas, with their checklist items;
+/// trashed projects and those in trashed areas, with their headings; and
+/// trashed areas.
+pub(crate) fn trashed_entities(tx: &Transaction<'_>) -> Result<Vec<String>> {
+    use super::trash::{ANY_TRASHED_PROJECT, ANY_TRASHED_TASK, TRASHED_AREA};
+    let sql = format!(
+        "SELECT id FROM tasks WHERE {ANY_TRASHED_TASK}
+         UNION SELECT id FROM checklist_items WHERE task_id IN (SELECT id FROM tasks WHERE {ANY_TRASHED_TASK})
+         UNION SELECT id FROM projects WHERE {ANY_TRASHED_PROJECT}
+         UNION SELECT id FROM headings WHERE project_id IN (SELECT id FROM projects WHERE {ANY_TRASHED_PROJECT})
+         UNION SELECT id FROM areas WHERE {TRASHED_AREA}"
+    );
+    let mut stmt = tx.prepare(&sql)?;
+    let ids = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
+/// A new task, its checklist and its tags, as stored, as commands.
+pub(crate) fn created_task_with_children(tx: &Transaction<'_>, id: &str) -> Result<Vec<Command>> {
+    let task = tx.query_row(
+        &format!(
+            "SELECT {} FROM tasks WHERE id = ?1",
+            super::db::TASK_COLUMNS
+        ),
+        params![id],
+        Database::map_task_row,
+    )?;
+    let mut commands = create_task(tx, &task)?;
+    let items = task_ids(
+        tx,
+        "SELECT id FROM checklist_items WHERE task_id = ?1 ORDER BY sort_order",
+        id,
+    )?;
+    for item in items {
+        let item = tx.query_row(
+            "SELECT id, task_id, title, is_completed, sort_order, created_at, updated_at
+             FROM checklist_items WHERE id = ?1",
+            params![item],
+            Database::map_checklist_row,
+        )?;
+        commands.extend(create_checklist_item(tx, &item)?);
+    }
+    for tag in task_ids(tx, "SELECT tag_id FROM task_tags WHERE task_id = ?1", id)? {
+        commands.extend(link(true, id, &tag, true));
+    }
+    Ok(commands)
+}
+
+/// A task turned into a project: the project with its tags, its new tasks,
+/// and the task and its checklist gone for good (`gone`). A concurrent edit
+/// to the old task elsewhere is dropped, as for Empty Trash.
+pub(crate) fn converted(
+    tx: &Transaction<'_>,
+    project: &str,
+    new_tasks: &[String],
+    gone: &[String],
+) -> Result<Vec<Command>> {
+    let row = tx.query_row(
+        &format!(
+            "SELECT {} FROM projects WHERE id = ?1",
+            super::db::PROJECT_COLUMNS
+        ),
+        params![project],
+        Database::map_project_row,
+    )?;
+    let mut commands = create_project(tx, &row)?;
+    for tag in task_ids(
+        tx,
+        "SELECT tag_id FROM project_tags WHERE project_id = ?1",
+        project,
+    )? {
+        commands.extend(link(true, project, &tag, true));
+    }
+    for task in new_tasks {
+        commands.extend(created_task_with_children(tx, task)?);
+    }
+    commands.push(Command::Purge { ids: gone.to_vec() });
+    Ok(commands)
+}

@@ -504,6 +504,11 @@ impl Document {
                 let tags = self.doc.get_tree(TAGS);
                 let parent = parent.as_deref().map(|p| self.tag(p)).transpose()?;
                 self.place(&tags, node, parent, anchor, true)?;
+                // Nesting a tag elsewhere is an edit of it, as in the rows.
+                tags.get_meta(node)
+                    .map_err(engine)?
+                    .insert("updated_at", at)
+                    .map_err(engine)?;
                 return Ok(());
             }
             Command::DeleteTag { id } => {

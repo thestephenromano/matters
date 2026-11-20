@@ -17,31 +17,43 @@ impl Database {
     /// parent is refused, and nothing is added.
     pub fn add_tag(&self, tag: &mut Tag) -> Result<()> {
         tag.name = clean_name(&tag.name)?;
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            check_name_free(&tx, &tag.name, None)?;
-            if let Some(parent) = &tag.parent_id {
-                get_tag(&tx, parent)?;
-            }
-            tag.sort_order = tx.query_row(
-                "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tags",
-                [],
-                |r| r.get(0),
-            )?;
-            tx.execute(
-                &format!("INSERT INTO tags ({TAG_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
-                params![
-                    tag.id,
-                    tag.name,
-                    tag.parent_id,
-                    tag.sort_order,
-                    tag.created_at,
-                    tag.updated_at
-                ],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+        let at = tag.updated_at;
+        self.write(
+            at,
+            |tx| {
+                check_name_free(tx, &tag.name, None)?;
+                if let Some(parent) = &tag.parent_id {
+                    get_tag(tx, parent)?;
+                }
+                tag.sort_order = tx.query_row(
+                    "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tags",
+                    [],
+                    |r| r.get(0),
+                )?;
+                tx.execute(
+                    &format!("INSERT INTO tags ({TAG_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
+                    params![
+                        tag.id,
+                        tag.name,
+                        tag.parent_id,
+                        tag.sort_order,
+                        tag.created_at,
+                        tag.updated_at
+                    ],
+                )?;
+                Ok(tag.clone())
+            },
+            |tx, tag| {
+                Ok(vec![crate::crdt::Command::CreateTag {
+                    id: tag.id.clone(),
+                    name: tag.name.clone(),
+                    parent: tag.parent_id.clone(),
+                    at: super::sync::tag_anchor(tx, &tag.id)?,
+                    created_at: tag.created_at,
+                }])
+            },
+        )
+        .map(|_| ())
     }
 
     pub fn get_tag(&self, id: &str) -> Result<Option<Tag>> {
@@ -77,88 +89,113 @@ impl Database {
     /// [`Self::add_tag`] (it may change only in case).
     pub fn rename_tag(&self, id: &str, name: &str) -> Result<()> {
         let name = clean_name(name)?;
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            get_tag(&tx, id)?;
-            check_name_free(&tx, &name, Some(id))?;
-            let now = crate::clock::now_millis();
-            tx.execute(
-                "UPDATE tags SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                params![name, now, id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                get_tag(tx, id)?;
+                check_name_free(tx, &name, Some(id))?;
+                tx.execute(
+                    "UPDATE tags SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![name, now, id],
+                )?;
+                Ok(())
+            },
+            |_, ()| {
+                Ok(vec![crate::crdt::Command::RenameTag {
+                    id: id.into(),
+                    name: name.clone(),
+                }])
+            },
+        )
     }
 
     /// Nest a tag under `parent`, or make it top-level (`None`). A tag can't
     /// be nested under itself or any tag nested under it.
     pub fn set_tag_parent(&self, id: &str, parent: Option<&str>) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            get_tag(&tx, id)?;
-            if let Some(parent) = parent {
-                get_tag(&tx, parent)?;
-                if descendants_and_self(&tx, id)?.iter().any(|d| d == parent) {
-                    return Err(MattersError::Validation(format!(
-                        "tag '{id}' can't be nested under itself or a tag inside it"
-                    )));
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                get_tag(tx, id)?;
+                if let Some(parent) = parent {
+                    get_tag(tx, parent)?;
+                    if descendants_and_self(tx, id)?.iter().any(|d| d == parent) {
+                        return Err(MattersError::Validation(format!(
+                            "tag '{id}' can't be nested under itself or a tag inside it"
+                        )));
+                    }
                 }
-            }
-            let now = crate::clock::now_millis();
-            tx.execute(
-                "UPDATE tags SET parent_id = ?1, updated_at = ?2 WHERE id = ?3",
-                params![parent, now, id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+                tx.execute(
+                    "UPDATE tags SET parent_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![parent, now, id],
+                )?;
+                Ok(())
+            },
+            |tx, ()| super::sync::tags_nested(tx, &[id.to_string()]),
+        )
     }
 
     /// Delete a tag. Every task, project and area that had it keeps
     /// everything else; only the tag goes. Tags nested under it move up to
     /// its parent.
     pub fn delete_tag(&self, id: &str) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let tag = get_tag(&tx, id)?;
-            let now = crate::clock::now_millis();
-            tx.execute(
-                "UPDATE tags SET parent_id = ?1, updated_at = ?2 WHERE parent_id = ?3",
-                params![tag.parent_id, now, id],
-            )?;
-            for (table, _) in [
-                Tagged::Task("").table(),
-                Tagged::Project("").table(),
-                Tagged::Area("").table(),
-            ] {
+        let now = crate::clock::now_millis();
+        self.write(
+            now,
+            |tx| {
+                let tag = get_tag(tx, id)?;
+                let children = {
+                    let mut stmt = tx.prepare("SELECT id FROM tags WHERE parent_id = ?1")?;
+                    let ids = stmt
+                        .query_map(params![id], |r| r.get(0))?
+                        .collect::<rusqlite::Result<Vec<String>>>()?;
+                    ids
+                };
                 tx.execute(
-                    &format!("DELETE FROM {table} WHERE tag_id = ?1"),
-                    params![id],
+                    "UPDATE tags SET parent_id = ?1, updated_at = ?2 WHERE parent_id = ?3",
+                    params![tag.parent_id, now, id],
                 )?;
-            }
-            tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
-            tx.commit()?;
-            Ok(())
-        })
+                for (table, _) in [
+                    Tagged::Task("").table(),
+                    Tagged::Project("").table(),
+                    Tagged::Area("").table(),
+                ] {
+                    tx.execute(
+                        &format!("DELETE FROM {table} WHERE tag_id = ?1"),
+                        params![id],
+                    )?;
+                }
+                tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+                Ok(children)
+            },
+            |tx, children| {
+                let mut commands = vec![crate::crdt::Command::DeleteTag { id: id.into() }];
+                commands.extend(super::sync::tags_nested(tx, children)?);
+                Ok(commands)
+            },
+        )
+        .map(|_| ())
     }
 
     /// Give `item` the tag `tag_id`; giving it a tag it has changes nothing.
     /// The item and the tag must exist.
     pub fn add_tag_to(&self, item: Tagged<'_>, tag_id: &str) -> Result<()> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            check_item(&tx, item)?;
-            get_tag(&tx, tag_id)?;
-            let (table, column) = item.table();
-            let (_, _, item_id) = item.item();
-            tx.execute(
-                &format!("INSERT OR IGNORE INTO {table} ({column}, tag_id) VALUES (?1, ?2)"),
-                params![item_id, tag_id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+        let (_, _, item_id) = item.item();
+        self.write(
+            crate::clock::now_millis(),
+            |tx| {
+                check_item(tx, item)?;
+                get_tag(tx, tag_id)?;
+                let (table, column) = item.table();
+                Ok(tx.execute(
+                    &format!("INSERT OR IGNORE INTO {table} ({column}, tag_id) VALUES (?1, ?2)"),
+                    params![item_id, tag_id],
+                )? > 0)
+            },
+            |_, added| Ok(super::sync::link(*added, item_id, tag_id, true)),
+        )
+        .map(|_| ())
     }
 
     /// Take the tag `tag_id` off `item`; removing a tag it hasn't got
@@ -166,13 +203,17 @@ impl Database {
     pub fn remove_tag_from(&self, item: Tagged<'_>, tag_id: &str) -> Result<()> {
         let (table, column) = item.table();
         let (_, _, item_id) = item.item();
-        self.with_conn_mut(|conn| {
-            conn.execute(
-                &format!("DELETE FROM {table} WHERE {column} = ?1 AND tag_id = ?2"),
-                params![item_id, tag_id],
-            )?;
-            Ok(())
-        })
+        self.write(
+            crate::clock::now_millis(),
+            |tx| {
+                Ok(tx.execute(
+                    &format!("DELETE FROM {table} WHERE {column} = ?1 AND tag_id = ?2"),
+                    params![item_id, tag_id],
+                )? > 0)
+            },
+            |_, removed| Ok(super::sync::link(*removed, item_id, tag_id, false)),
+        )
+        .map(|_| ())
     }
 
     /// The tags given to each of `task_ids` itself, in tag-list order, for

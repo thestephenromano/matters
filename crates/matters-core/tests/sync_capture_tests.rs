@@ -99,6 +99,37 @@ fn check(db: &Database) {
         .map(|t| db.get_task(&t.id).unwrap().unwrap())
         .collect();
     assert_eq!(lists(rows), lists(s.tasks.clone()));
+
+    // Tags in the tag list's order, and every assignment.
+    let mut tags = db.list_tags().unwrap();
+    let mut engine_tags = s.tags.clone();
+    let order = |t: &matters_core::Tag| (t.parent_id.clone(), t.id.clone());
+    assert_eq!(
+        tags.iter().map(order).collect::<Vec<_>>(),
+        engine_tags.iter().map(order).collect::<Vec<_>>()
+    );
+    for (row, tag) in tags.iter_mut().zip(engine_tags.iter_mut()) {
+        row.sort_order = 0.0;
+        tag.sort_order = 0.0;
+    }
+    assert_eq!(tags, engine_tags);
+    let links: std::collections::BTreeSet<(String, String)> = db
+        .with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT task_id, tag_id FROM task_tags UNION ALL
+                 SELECT project_id, tag_id FROM project_tags UNION ALL
+                 SELECT area_id, tag_id FROM area_tags",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    let engine_links: std::collections::BTreeSet<(String, String)> = s
+        .links
+        .iter()
+        .map(|(_, item, tag)| (item.clone(), tag.clone()))
+        .collect();
+    assert_eq!(links, engine_links);
 }
 
 fn id(n: u128) -> String {
@@ -690,4 +721,73 @@ fn reordering_looks_only_at_true_siblings() {
     }
     ordering::place_checklist_item(&db, &id(32), Some(&id(33))).unwrap();
     check(&db);
+}
+
+#[test]
+fn tags_empty_trash_and_task_actions_keep_the_engine_equal() {
+    use matters_core::{Tag, Tagged};
+    let db = synced();
+    db.add_area(&mut Area::new(id(1), "Home", 0.0)).unwrap();
+    db.add_project(&mut Project::new(id(2), "Garden", 0.0))
+        .unwrap();
+    db.add_heading(&mut Heading::new(id(3), id(2), "h", 0.0))
+        .unwrap();
+    for (n, project) in [(10, None), (11, Some(id(2))), (12, None), (13, Some(id(2)))] {
+        let mut task = Task::new(id(n), format!("t{n}"), 0.0);
+        task.project_id = project;
+        db.add_task(&mut task).unwrap();
+    }
+    db.add_checklist_item(&mut ChecklistItem::new(id(20), id(10), "a", 0.0))
+        .unwrap();
+    db.add_checklist_item(&mut ChecklistItem::new(id(21), id(10), "b", 0.0))
+        .unwrap();
+    db.set_checklist_item_done(&id(21), true).unwrap();
+    for (n, name, parent) in [
+        (30, "Work", None),
+        (31, "Calls", Some(id(30))),
+        (32, "Home", None),
+    ] {
+        db.add_tag(&mut Tag::new(id(n), name, parent)).unwrap();
+    }
+    db.add_tag(&mut Tag::new(id(33), "Errands", Some(id(31))))
+        .unwrap();
+    db.rename_tag(&id(32), "House").unwrap();
+    db.set_tag_parent(&id(32), Some(&id(30))).unwrap();
+    db.add_tag_to(Tagged::Task(&id(10)), &id(31)).unwrap();
+    db.add_tag_to(Tagged::Task(&id(10)), &id(31)).unwrap(); // already
+    db.add_tag_to(Tagged::Project(&id(2)), &id(32)).unwrap();
+    db.add_tag_to(Tagged::Area(&id(1)), &id(30)).unwrap();
+    db.add_tag_to(Tagged::Task(&id(12)), &id(30)).unwrap();
+    db.remove_tag_from(Tagged::Task(&id(12)), &id(30)).unwrap();
+    db.remove_tag_from(Tagged::Task(&id(12)), &id(30)).unwrap(); // gone
+    check(&db);
+    db.delete_tag(&id(31)).unwrap(); // Errands moves up to Work
+    check(&db);
+
+    let copy = db.duplicate_task(&id(10)).unwrap();
+    check(&db);
+    assert!(db
+        .engine_snapshot()
+        .unwrap()
+        .unwrap()
+        .tasks
+        .iter()
+        .any(|t| t.id == copy));
+    let project = db.convert_task_to_project(&id(10)).unwrap();
+    check(&db);
+    let s = db.engine_snapshot().unwrap().unwrap();
+    assert!(s.tombstones.contains(&id(10)) && s.tombstones.contains(&id(20)));
+    assert!(s.projects.iter().any(|p| p.id == project));
+
+    db.trash_task(&id(12)).unwrap();
+    db.trash_project(&id(2)).unwrap();
+    assert_eq!(db.empty_trash().unwrap(), 3);
+    check(&db);
+    let s = db.engine_snapshot().unwrap().unwrap();
+    for gone in [id(12), id(2), id(3), id(11), id(13)] {
+        assert!(s.tombstones.contains(&gone), "{gone}");
+    }
+    let before = journal(&db);
+    assert_eq!(db.empty_trash().unwrap(), 0);
+    assert_eq!(journal(&db), before, "nothing to empty: nothing journalled");
 }
