@@ -900,3 +900,17 @@ fn a_merged_tag_hands_its_children_to_the_keeper() {
     assert_eq!(calls.parent_id, Some(id(120)));
     assert_eq!(s.tags.len(), 2);
 }
+
+#[test]
+fn the_smaller_uuid_keeps_a_shared_tag_name_whatever_the_order() {
+    let (mut a, _) = pair();
+    // The larger UUID comes first in the tree.
+    a.apply(&[tag(141, "Same", None), tag(140, "same", None)], 20)
+        .unwrap();
+    let s = a.project().unwrap();
+    assert_eq!(s.tags.len(), 1);
+    assert_eq!(
+        (s.tags[0].id.clone(), s.tags[0].name.as_str()),
+        (id(140), "same")
+    );
+}

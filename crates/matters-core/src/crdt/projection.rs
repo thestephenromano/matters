@@ -416,16 +416,14 @@ fn project_tags(
         }
         found.push((id, parent, value));
     }
+    // Visiting IDs in order, the first to claim a name keeps it.
+    let mut by_id: Vec<&(String, Option<String>, Value)> = found.iter().collect();
+    by_id.sort_by(|x, y| x.0.cmp(&y.0));
     let mut owner: BTreeMap<String, String> = BTreeMap::new();
-    for (id, _, value) in &found {
+    for (id, _, value) in by_id {
         owner
             .entry(text(value, "name")?.to_lowercase())
-            .and_modify(|o| {
-                if id < o {
-                    *o = id.clone();
-                }
-            })
-            .or_insert(id.clone());
+            .or_insert_with(|| id.clone());
     }
     let mut merged = BTreeMap::new();
     for (id, _, value) in &found {
