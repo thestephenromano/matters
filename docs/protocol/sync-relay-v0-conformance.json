@@ -1,0 +1,129 @@
+{
+  "contract": "docs/SYNC_SERVICE_CONTRACT.md",
+  "version": 0,
+  "notation": "Each scenario runs against a fresh route with devices A and B in its roster and C not in it. Records are named; r1' has r1's record ID and different bytes. Sequences and generations are compared by name: g0 is the route's generation at provisioning, g1 a new one. 'any' accepts any value. A 'restart' step kills the relay process; 'restore' restores the database from a backup taken at the named step and runs the restore procedure.",
+  "scenarios": [
+    {
+      "name": "duplicate-upload-returns-original-receipt",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201, "sequence": 1, "generation": "g0"}},
+        {"as": "A", "append": "r1", "expect": {"status": 200, "sequence": 1, "generation": "g0"}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1"], "complete": true}},
+        {"as": "B", "hints_received_for": 1, "expect": {"count_at_most": 1}}
+      ]
+    },
+    {
+      "name": "same-id-different-bytes-is-a-permanent-conflict",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201, "sequence": 1}},
+        {"as": "A", "append": "r1'", "expect": {"status": 409, "code": "record-conflict", "retry": false, "digest": "digest(r1)"}},
+        {"as": "B", "append": "r1'", "expect": {"status": 422, "code": "context-mismatch"}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1"]}}
+      ],
+      "note": "B's upload of A's record ID is refused earlier, because its signer is not B; a conflict never overwrites."
+    },
+    {
+      "name": "context-mismatch-is-refused-before-storage",
+      "steps": [
+        {"as": "A", "append": "r-other-collection", "expect": {"status": 422, "code": "context-mismatch"}},
+        {"as": "A", "append": "r-path-id-differs", "expect": {"status": 422, "code": "context-mismatch"}},
+        {"as": "A", "append": "r-signed-by-B", "expect": {"status": 422, "code": "context-mismatch"}},
+        {"as": "A", "append": "r-unknown-suite", "expect": {"status": 422, "code": "unsupported-suite"}},
+        {"as": "A", "fetch": {"after": null}, "expect": {"records": []}}
+      ]
+    },
+    {
+      "name": "ack-survives-restart-and-unacked-retry-is-idempotent",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201, "sequence": 1}},
+        {"restart": true},
+        {"as": "A", "append": "r1", "expect": {"status": 200, "sequence": 1}},
+        {"as": "A", "append": "r2", "crash": "after-commit-before-response", "expect": {"status": "connection-lost"}},
+        {"restart": true},
+        {"as": "A", "append": "r2", "expect": {"status": 200, "sequence": 2}},
+        {"as": "A", "append": "r3", "crash": "before-commit", "expect": {"status": "connection-lost"}},
+        {"restart": true},
+        {"as": "A", "append": "r3", "expect": {"status": 201, "sequence": 3}}
+      ]
+    },
+    {
+      "name": "reconnect-resumes-from-cursor",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201}},
+        {"as": "A", "append": "r2", "expect": {"status": 201}},
+        {"as": "B", "fetch": {"after": null, "limit": 1}, "expect": {"records": ["r1"], "complete": false, "save_cursor": "c1"}},
+        {"as": "B", "reconnect": true},
+        {"as": "B", "fetch": {"after": "c1"}, "expect": {"records": ["r2"], "complete": true}}
+      ]
+    },
+    {
+      "name": "pagination-captures-a-high-water-mark",
+      "steps": [
+        {"as": "A", "append": ["r1", "r2", "r3"], "expect": {"status": 201}},
+        {"as": "B", "fetch": {"after": null, "limit": 2}, "expect": {"records": ["r1", "r2"], "high-water": 3, "complete": false, "save_cursor": "c2"}},
+        {"as": "A", "append": "r4", "expect": {"status": 201, "sequence": 4}},
+        {"as": "B", "fetch": {"after": "c2", "limit": 2}, "expect": {"records": ["r3", "r4"], "high-water": 4, "complete": true}}
+      ],
+      "note": "The second fetch captures a new high-water mark of 4. Within one fetch, a record appended after the capture is never returned."
+    },
+    {
+      "name": "restore-changes-the-generation",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201, "sequence": 1, "generation": "g0"}},
+        {"backup": "b1"},
+        {"as": "A", "append": "r2", "expect": {"status": 201, "sequence": 2}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1", "r2"], "save_cursor": "c2"}},
+        {"restore": "b1"},
+        {"as": "B", "fetch": {"after": "c2"}, "expect": {"status": 410, "code": "generation-changed", "generation": "g1"}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1"], "generation": "g1"}},
+        {"as": "A", "append": "r2", "expect": {"status": 201, "generation": "g1"}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1", "r2"]}}
+      ],
+      "note": "r2 was acknowledged and lost by the restore; A re-uploads it after the generation change."
+    },
+    {
+      "name": "sessions-are-device-and-roster-bound",
+      "steps": [
+        {"as": "C", "session": true, "expect": {"status": 403, "code": "not-a-member"}},
+        {"as": "A", "session": {"signature": "by-B"}, "expect": {"status": 401, "code": "unauthenticated"}},
+        {"as": "A", "session": {"challenge": "reused"}, "expect": {"status": 401, "code": "unauthenticated"}},
+        {"as": "A", "token": "expired", "append": "r1", "expect": {"status": 401, "code": "session-expired"}},
+        {"as": "A", "token": "for-other-route", "append": "r1", "expect": {"status": 401, "code": "unauthenticated"}}
+      ]
+    },
+    {
+      "name": "a-removed-device-loses-upload-rights",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201}},
+        {"as": "A", "put_authority": "membership-removing-B", "expect": {"status": 201}},
+        {"as": "B", "append": "rB", "expect": {"status": 403, "code": "revoked"}},
+        {"as": "B", "session": true, "expect": {"status": 403, "code": "not-a-member"}}
+      ]
+    },
+    {
+      "name": "quota-and-rate-limits-are-distinct",
+      "config": {"max_records_per_route": 1, "rate_limit": "configured"},
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201}},
+        {"as": "A", "append": "r2", "expect": {"status": 507, "code": "quota-exhausted", "retry": false}},
+        {"as": "A", "fetch": {"after": null}, "expect": {"records": ["r1"]}},
+        {"as": "A", "burst": "over-rate-limit", "expect": {"status": 429, "code": "rate-limited", "retry": true, "retry-after-ms": "any"}}
+      ]
+    },
+    {
+      "name": "unknown-version-fails-closed",
+      "steps": [
+        {"as": "A", "raw_path": "/v1/routes/{route}/records", "expect": {"status": 404, "code": "unsupported-version"}}
+      ]
+    },
+    {
+      "name": "export-import-preserves-bytes-and-changes-generation",
+      "steps": [
+        {"as": "A", "append": ["r1", "r2"], "expect": {"status": 201}},
+        {"operator": "export", "save": "e1"},
+        {"operator": "import", "from": "e1", "into": "second-relay"},
+        {"as": "B", "relay": "second-relay", "fetch": {"after": null}, "expect": {"records": ["r1", "r2"], "bytes_equal": true, "generation": "not g0"}}
+      ]
+    }
+  ]
+}

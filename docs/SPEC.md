@@ -299,7 +299,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_trashed ON tasks(trashed_at);
 
 Sync must preserve offline SQLite operation and use post-quantum end-to-end encryption, including device enrollment, sharing and recovery. Matters will be the first customer of a sync client and service that can later serve other applications, with managed and self-hosted deployment options. Task semantics remain in the application domain.
 
-The [encrypted sync design](SYNC_DESIGN.md) records the security contract, proposed key lifecycle, adoption alternatives and evaluation gates. The CRDT engine is Loro 1.18, adopted for integration ([ADR 0001](decisions/0001-crdt-adoption.md)). The post-quantum record and key-distribution stack is approved for prototype evaluation ([ADR 0002](decisions/0002-post-quantum-sync.md)), and the service components remain to be selected. This is planned functionality.
+The [encrypted sync design](SYNC_DESIGN.md) records the security contract, proposed key lifecycle, adoption alternatives and evaluation gates. The CRDT engine is Loro 1.18, adopted for integration ([ADR 0001](decisions/0001-crdt-adoption.md)). The post-quantum record and key-distribution stack is approved for prototype evaluation ([ADR 0002](decisions/0002-post-quantum-sync.md)), and the relay contract and components are recorded in the [service contract](SYNC_SERVICE_CONTRACT.md) and [ADR 0003](decisions/0003-relay-components.md). This is planned functionality.
 
 ---
 
