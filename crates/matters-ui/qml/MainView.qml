@@ -40,6 +40,41 @@ Item {
     // Completed is offered then.
     readonly property bool logsByHand: controller.logPolicy === "daily" || controller.logPolicy === "manually"
 
+    // Opens a URL with the desktop's handler. Tests replace it, so nothing
+    // is launched.
+    property var openExternally: url => Qt.openUrlExternally(url)
+
+    // Open a link from a task's notes (#63): web and mail links at once,
+    // anything else (a file, another program's scheme, no scheme at all)
+    // only once the user agrees.
+    function openLink(url: string) {
+        const scheme = (/^([a-z][a-z0-9+.-]*):/i.exec(url) || ["", ""])[1].toLowerCase();
+        if (["http", "https", "mailto"].indexOf(scheme) >= 0)
+            openExternally(url);
+        else
+            openLinkDialog.ask(url);
+    }
+
+    // Where in Markdown `source` its formatted text `shown` (a prefix of
+    // what the formatted view shows) ends: each shown character is matched
+    // to the next equal one in the source, skipping the Markdown syntax
+    // between them; one the source hasn't is skipped. Line breaks match
+    // any whitespace.
+    function sourcePosition(source: string, shown: string): int {
+        let at = 0;
+        for (let i = 0; i < shown.length; ++i) {
+            const c = shown[i];
+            const blank = /\s/.test(c) || c === "\u2029" || c === "\u2028";
+            let j = at;
+            while (j < source.length && !(blank ? /\s/.test(source[j]) : source[j] === c))
+                ++j;
+            // Not in the source (a list's bullet, say): skip it.
+            if (j < source.length)
+                at = j + 1;
+        }
+        return at;
+    }
+
     // The fixed views, in sidebar order; Quick Find finds them by name too.
     readonly property var fixedViews: [
         { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: "#339AF0" },
@@ -2791,6 +2826,17 @@ Item {
                                                 }
                                             }
 
+                                            // The task has notes, while the row is closed.
+                                            Icon {
+                                                objectName: "notesMarker"
+                                                visible: taskRow.notes.trim() !== "" && !taskRow.isExpanded
+                                                name: "notes"
+                                                size: 14
+                                                color: root.colTextSecondary
+                                                Accessible.role: Accessible.StaticText
+                                                Accessible.name: "Has notes"
+                                            }
+
                                             // Checklist progress, while the row is closed.
                                             Rectangle {
                                                 objectName: "checklistBadge"
@@ -2928,14 +2974,62 @@ Item {
                                                 // it, unseen, the next time the list takes the focus.
                                                 onVisibleChanged: if (!visible) focus = false
                                                 Layout.fillWidth: true
-                                                // Grows with what is written.
-                                                Layout.preferredHeight: Math.max(44, contentHeight + topPadding + bottomPadding)
+                                                // Not being edited, notes with text show it
+                                                // formatted (#63).
+                                                readonly property bool rendered: !activeFocus && text.trim() !== ""
+                                                // Grows with what is written, or with how it
+                                                // is shown.
+                                                Layout.preferredHeight: Math.max(44, (rendered ? notesView.contentHeight : contentHeight) + topPadding + bottomPadding)
                                                 placeholderText: "Notes"
                                                 font.pixelSize: 13
-                                                color: root.colTextPrimary
+                                                // The source is unseen under its formatted view.
+                                                color: rendered ? "transparent" : root.colTextPrimary
+                                                selectionColor: rendered ? "transparent" : palette.highlight
                                                 wrapMode: TextArea.Wrap
                                                 leftPadding: 0
                                                 background: null
+
+                                                // The notes formatted as Markdown (CommonMark,
+                                                // with GitHub's extensions, which link bare
+                                                // URLs). A click on a link opens it; anywhere
+                                                // else it edits the notes, with the caret where
+                                                // the click was.
+                                                TextEdit {
+                                                    id: notesView
+                                                    objectName: "notesView"
+                                                    visible: notesInput.rendered
+                                                    x: notesInput.leftPadding
+                                                    y: notesInput.topPadding
+                                                    width: notesInput.width - notesInput.leftPadding - notesInput.rightPadding
+                                                    textFormat: TextEdit.MarkdownText
+                                                    text: notesInput.text
+                                                    readOnly: true
+                                                    activeFocusOnPress: false
+                                                    selectByMouse: false
+                                                    wrapMode: TextEdit.Wrap
+                                                    font.pixelSize: 13
+                                                    color: root.colTextPrimary
+                                                    Accessible.role: Accessible.StaticText
+                                                    Accessible.name: "Notes: " + getText(0, length)
+
+                                                    MouseArea {
+                                                        objectName: "notesViewMouse"
+                                                        anchors.fill: parent
+                                                        cursorShape: notesView.linkAt(mouseX, mouseY) !== "" ? Qt.PointingHandCursor : Qt.IBeamCursor
+                                                        hoverEnabled: true
+                                                        onClicked: mouse => {
+                                                            const link = notesView.linkAt(mouse.x, mouse.y);
+                                                            if (link !== "") {
+                                                                root.openLink(link);
+                                                                return;
+                                                            }
+                                                            const at = notesView.positionAt(mouse.x, mouse.y);
+                                                            const shown = notesView.getText(0, at);
+                                                            notesInput.forceActiveFocus(Qt.MouseFocusReason);
+                                                            notesInput.cursorPosition = root.sourcePosition(notesInput.text, shown);
+                                                        }
+                                                    }
+                                                }
 
                                                 function save() {
                                                     saveTimer.stop();
@@ -3349,6 +3443,44 @@ Item {
                 }
             }
         }
+    }
+
+    // Asks before opening a link that isn't a web or mail link (#63).
+    Dialog {
+        id: openLinkDialog
+        objectName: "openLinkDialog"
+        title: "Open this link?"
+        modal: true
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 420
+        property string url: ""
+
+        function ask(link: string) {
+            url = link;
+            open();
+        }
+
+        Label {
+            objectName: "openLinkUrl"
+            width: parent.width
+            wrapMode: Text.WrapAnywhere
+            text: openLinkDialog.url
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                objectName: "confirmOpenLink"
+                text: "Open"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                text: "Cancel"
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+        onAccepted: root.openExternally(url)
+        onClosed: taskListView.forceActiveFocus()
     }
 
     // Preferences (#72): this device's settings. Each takes effect at once.
