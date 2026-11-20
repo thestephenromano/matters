@@ -463,3 +463,25 @@ fn only_a_deleted_heading_or_checklist_item_can_be_created_again() {
     assert!(db.create_checklist_item(&item).is_err());
     check(&db);
 }
+
+#[test]
+fn undoing_a_heading_deletion_leaves_tasks_that_moved_away() {
+    let db = synced();
+    db.add_project(&mut Project::new(id(1), "p", 0.0)).unwrap();
+    db.add_heading(&mut Heading::new(id(2), id(1), "h", 0.0))
+        .unwrap();
+    for n in [10, 11] {
+        let mut task = Task::new(id(n), format!("t{n}"), 0.0);
+        Home::Project {
+            project: id(1),
+            heading: Some(id(2)),
+        }
+        .apply(&mut task);
+        db.add_task(&mut task).unwrap();
+    }
+    let deleted = db.delete_heading(&id(2)).unwrap();
+    db.set_task_home(&id(11), &Home::Inbox).unwrap();
+    db.restore_heading(&deleted).unwrap();
+    check(&db);
+    assert_eq!(db.get_task(&id(11)).unwrap().unwrap().project_id, None);
+}
