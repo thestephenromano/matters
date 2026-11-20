@@ -33,6 +33,14 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+# Build tools of crabgrind, which libcrux-secrets uses only under
+# cfg(valgrind_ct_test), a constant-time test configuration Matters never
+# builds, so neither ships. Approved 2026-11-20 (#36); any other crate with
+# these licenses is still refused.
+exceptions = [
+    { crate = "bindgen", allow = ["BSD-3-Clause"] },
+    { crate = "libloading", allow = ["ISC"] },
+]
 
 [bans]
 # Duplicate versions are reported, not refused: they come and go with
