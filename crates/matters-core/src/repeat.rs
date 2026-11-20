@@ -68,6 +68,10 @@ pub struct RepeatRule {
     pub paused: bool,
 }
 
+/// More periods than any rule has: the calendar's days, from year 1 to
+/// 9999, are fewer.
+const MOST_PERIODS: u32 = 4_000_000;
+
 fn weekday(n: i8) -> Option<Weekday> {
     Weekday::from_monday_one_offset(n).ok()
 }
@@ -119,6 +123,13 @@ impl RepeatRule {
     /// that matches no day (the 31st of every twelfth month from April)
     /// has none, found by reaching the calendar's end.
     pub fn dates(&self) -> impl Iterator<Item = Date> + '_ {
+        self.dates_within(MOST_PERIODS)
+    }
+
+    /// [`Self::dates`] from at most the first `most` periods (days, weeks,
+    /// months or years of the rule's interval). The scan stops there even
+    /// if the calendar goes on, so it always ends.
+    pub fn dates_within(&self, most: u32) -> impl Iterator<Item = Date> + '_ {
         let mut period = 0u32;
         let mut pending: std::vec::IntoIter<Date> = Vec::new().into_iter();
         std::iter::from_fn(move || loop {
@@ -127,6 +138,9 @@ impl RepeatRule {
                     return None;
                 }
                 return Some(date);
+            }
+            if period >= most {
+                return None;
             }
             let (first_day, candidates) = self.period(period)?;
             if self.until.is_some_and(|until| first_day > until) {

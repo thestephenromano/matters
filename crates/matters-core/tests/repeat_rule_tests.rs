@@ -138,6 +138,22 @@ fn daylight_saving_never_moves_an_occurrence() {
 }
 
 #[test]
+fn the_scan_stops_after_its_periods() {
+    let daily = rule(1, Frequency::Daily, date(2026, 11, 21));
+    assert_eq!(
+        daily.dates_within(2).collect::<Vec<_>>(),
+        [date(2026, 11, 21), date(2026, 11, 22)]
+    );
+    assert_eq!(daily.dates_within(0).next(), None);
+    // The full scan reaches the calendar's end.
+    let late = rule(1, Frequency::Daily, date(9999, 12, 30));
+    assert_eq!(
+        late.dates().collect::<Vec<_>>(),
+        [date(9999, 12, 30), date(9999, 12, 31)]
+    );
+}
+
+#[test]
 fn a_rule_that_never_matches_has_no_dates() {
     // The 31st of every twelfth month from April: April has no 31st.
     let never = rule(12, Frequency::MonthlyOnDay { day: 31 }, date(2026, 4, 1));
@@ -217,6 +233,15 @@ fn after_completion_counts_from_the_day_it_was_done() {
         ..after(Frequency::Daily, 3)
     };
     assert_eq!(ending.after_completed(done), None, "past its end");
+    let on_the_end = RepeatRule {
+        until: Some(date(2026, 2, 3)),
+        ..after(Frequency::Daily, 3)
+    };
+    assert_eq!(
+        on_the_end.after_completed(done),
+        Some(date(2026, 2, 3)),
+        "its last day is still in"
+    );
 }
 
 #[test]
