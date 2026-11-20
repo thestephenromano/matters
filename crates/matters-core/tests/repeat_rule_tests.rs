@@ -102,6 +102,42 @@ fn rules_that_cant_be_used_are_refused() {
 }
 
 #[test]
+fn daylight_saving_never_moves_an_occurrence() {
+    // Occurrences are calendar dates: the days the clocks change (8 March
+    // and 1 November 2026 in New York, 29 March and 25 October in Europe)
+    // are days like any other.
+    let daily = rule(1, Frequency::Daily, date(2026, 3, 6));
+    let march: Vec<Date> = daily.dates().take(4).collect();
+    assert_eq!(
+        march,
+        [
+            date(2026, 3, 6),
+            date(2026, 3, 7),
+            date(2026, 3, 8),
+            date(2026, 3, 9)
+        ]
+    );
+    let sundays = rule(1, Frequency::Weekly { days: vec![7] }, date(2026, 10, 18));
+    let autumn: Vec<Date> = sundays.dates().take(3).collect();
+    assert_eq!(
+        autumn,
+        [date(2026, 10, 18), date(2026, 10, 25), date(2026, 11, 1)]
+    );
+    let last_sunday = rule(
+        1,
+        Frequency::MonthlyOnWeekday {
+            nth: -1,
+            weekday: 7,
+        },
+        date(2026, 3, 1),
+    );
+    assert_eq!(
+        last_sunday.dates().take(2).collect::<Vec<_>>(),
+        [date(2026, 3, 29), date(2026, 4, 26)]
+    );
+}
+
+#[test]
 fn a_rule_that_never_matches_has_no_dates() {
     // The 31st of every twelfth month from April: April has no 31st.
     let never = rule(12, Frequency::MonthlyOnDay { day: 31 }, date(2026, 4, 1));
