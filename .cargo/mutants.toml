@@ -2,6 +2,15 @@
 #
 # Each exclusion is a mutant that cannot change behaviour, with the reason.
 # Names are matched without line numbers, so they survive edits elsewhere.
+
+# The least time a mutant's tests get before it counts as hung. The time is
+# otherwise set from the unmutated run, which runs alone. CI tests four
+# mutants at once, so builds overlap test runs, and tests that write SQLite
+# files to disk slowed past that limit: mutants that every test catches
+# within seconds when run alone (all of undo.rs on #180) were reported as
+# timeouts. A real hang still fails, after two minutes.
+minimum_test_timeout = 120
+
 exclude_re = [
     # Schedule::parse_typed answers "" and "today" itself, as Matters' own
     # words, rather than leaving them to `interim`. Without these arms
