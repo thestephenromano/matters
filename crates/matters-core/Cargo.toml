@@ -15,6 +15,8 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "6.0"
+# The per-device settings file (#72).
+toml = "1.2"
 # Typed dates in the When picker ("tomorrow", "fri", "in 3 days"); decided on #59.
 interim = { version = "0.2.2", features = ["jiff_0_2"] }
 

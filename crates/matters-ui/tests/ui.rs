@@ -30,6 +30,9 @@ fn main() {
     std::env::set_var("MATTERS_REDUCE_MOTION", if motion { "0" } else { "1" });
     let db = matters_core::Database::open_in_memory().expect("open in-memory database");
     matters_ui::install_database(db);
+    // Settings live in memory only: the tests never read or write the
+    // user's file.
+    matters_ui::install_settings(None, None);
     matters_ui::init_qml();
 
     let source_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/qml");

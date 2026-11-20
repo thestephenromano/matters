@@ -1,5 +1,5 @@
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
-use matters_core::Database;
+use matters_core::{Database, SettingsFile};
 
 fn main() {
     // Read before the application starts: the user's explicit style choice.
@@ -18,6 +18,14 @@ fn main() {
         }
     };
     matters_ui::install_database(db);
+    // This device's settings (#72). An unreadable file gives the defaults,
+    // and the app says so once it is up.
+    match SettingsFile::in_config_dir() {
+        Ok(file) => matters_ui::install_settings(Some(file), None),
+        Err(err) => {
+            matters_ui::install_settings(None, Some(format!("Your settings can't be kept: {err}")))
+        }
+    }
     matters_ui::init_qml();
 
     let mut app = QGuiApplication::new();

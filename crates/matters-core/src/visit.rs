@@ -6,23 +6,50 @@
 //! with its new status, until the user leaves the view (SPEC §3, "Completing
 //! a task"). Any other change that removes a task from the view, such as
 //! rescheduling, trashing or putting it back, takes effect immediately.
+//!
+//! That is the default policy for moving finished tasks to the Logbook
+//! (`LogPolicy::WhenLeaving`, #67). Under the others a visit keeps nothing
+//! ([`Visit::keep_ticked`]): a ticked task leaves at once, or stays because
+//! the view's query still lists it until it is logged.
 
 use std::collections::HashSet;
 
 use crate::domain::{Task, View};
 use crate::error::Result;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Visit {
     view: Option<View>,
     /// Tasks kept in the list because their completion status changed during
     /// this visit.
     kept: HashSet<String>,
+    /// Whether ticked tasks are kept at all.
+    keeps_ticked: bool,
+}
+
+impl Default for Visit {
+    fn default() -> Self {
+        Self {
+            view: None,
+            kept: HashSet::new(),
+            keeps_ticked: true,
+        }
+    }
 }
 
 impl Visit {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether tasks ticked (or unticked) during a visit stay in place until
+    /// the user leaves (the default, `LogPolicy::keeps_ticked`). Turned off,
+    /// the tasks kept so far go at the next `rows` call.
+    pub fn keep_ticked(&mut self, keep: bool) {
+        self.keeps_ticked = keep;
+        if !keep {
+            self.kept.clear();
+        }
     }
 
     /// The user navigated (to another view, or to the same one again): the
@@ -50,6 +77,10 @@ impl Visit {
         if self.view.as_ref() != Some(view) {
             self.view = Some(view.clone());
             self.kept.clear();
+            return Ok(members);
+        }
+
+        if !self.keeps_ticked {
             return Ok(members);
         }
 

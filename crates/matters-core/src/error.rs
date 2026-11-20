@@ -14,6 +14,9 @@ pub enum MattersError {
     #[error("No per-user data directory could be determined (is HOME set?)")]
     NoDataDir,
 
+    #[error("No per-user configuration directory could be determined (is HOME set?)")]
+    NoConfigDir,
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -30,7 +30,7 @@ Item {
             // clicks, and opening it again does nothing.
             for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
                                 "emptyTrashDialog", "quickFindDialog", "movePopup",
-                                "finishProjectDialog", "tagsDialog"]) {
+                                "finishProjectDialog", "tagsDialog", "preferencesDialog"]) {
                 const popup = findChild(view, name);
                 if (popup)
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
@@ -1000,6 +1000,121 @@ Item {
             headedBy("finish-me", "Today");
         }
 
+        // ---- When completed tasks are logged (#67, #72) ---------------------
+
+        // Choose a Logbook policy in Preferences, by keyboard: Ctrl+, opens
+        // it on the current choice; Tab and Shift+Tab move through the
+        // choices; Space chooses.
+        function chooseLogPolicy(key) {
+            const dialog = findChild(view, "preferencesDialog");
+            focusList();
+            keySequence("Ctrl+,");
+            tryVerify(() => dialog.opened, 1000, "Ctrl+, opens Preferences");
+            const current = findChild(dialog.contentItem, "logPolicy-" + controller.logPolicy);
+            tryVerify(() => current.activeFocus, 1000, "the current choice has the focus");
+            const order = ["when-leaving", "immediately", "daily", "manually"];
+            const steps = order.indexOf(key) - order.indexOf(controller.logPolicy);
+            for (let i = 0; i < Math.abs(steps); ++i)
+                keyClick(Qt.Key_Tab, steps > 0 ? Qt.NoModifier : Qt.ShiftModifier);
+            const wanted = findChild(dialog.contentItem, "logPolicy-" + key);
+            if (steps !== 0) {
+                verify(wanted.activeFocus, "Tab reaches " + key);
+                keyClick(Qt.Key_Space);
+            }
+            tryCompare(controller, "logPolicy", key);
+            verify(wanted.checked);
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !dialog.visible, 2000);
+        }
+
+        function test_completed_tasks_leave_at_once_when_chosen() {
+            try {
+                chooseLogPolicy("immediately");
+                const row = addToToday("lg-now");
+                const other = addToToday("lg-stays");
+                controller.toggleTask(row.taskId);
+                waitForNoRow("lg-now");
+                verify(indexOf("lg-stays") >= 0, "the open task stays");
+                verify(!findChild(view, "logCompletedButton").visible, "nothing waits to be logged");
+            } finally {
+                controller.chooseLogPolicy("when-leaving");
+            }
+        }
+
+        function test_completed_tasks_wait_for_log_completed_when_chosen() {
+            try {
+                chooseLogPolicy("manually");
+                const row = addToToday("lg-manual");
+                controller.toggleTask(row.taskId);
+                // Still listed, done, across navigation; not in the Logbook.
+                controller.selectView("logbook");
+                waitForNoRow("lg-manual");
+                controller.selectView("today");
+                verify(waitForRow("lg-manual").done, "shown done");
+                const before = controller.todayCount;
+
+                const button = findChild(view, "logCompletedButton");
+                verify(button.visible);
+                keySequence("Ctrl+Shift+L");
+                waitForNoRow("lg-manual");
+                compare(controller.todayCount, before, "the badge counted open tasks only");
+                controller.selectView("logbook");
+                waitForRow("lg-manual");
+
+                // The button does the same.
+                controller.selectView("today");
+                const again = addToToday("lg-manual-2");
+                controller.toggleTask(again.taskId);
+                verify(waitForRow("lg-manual-2").done);
+                mouseClick(button);
+                waitForNoRow("lg-manual-2");
+            } finally {
+                controller.chooseLogPolicy("when-leaving");
+            }
+        }
+
+        function test_completed_tasks_stay_until_the_day_ends_when_chosen() {
+            try {
+                chooseLogPolicy("daily");
+                const row = addToToday("lg-daily");
+                controller.toggleTask(row.taskId);
+                controller.selectView("inbox");
+                controller.selectView("today");
+                verify(waitForRow("lg-daily").done, "still listed after leaving");
+                keySequence("Ctrl+Shift+L");
+                waitForNoRow("lg-daily");
+            } finally {
+                controller.chooseLogPolicy("when-leaving");
+            }
+        }
+
+        function test_choosing_a_policy_never_brings_back_logged_tasks() {
+            try {
+                const row = addToToday("lg-already");
+                controller.toggleTask(row.taskId);
+                controller.selectView("inbox");
+                controller.selectView("today");
+                waitForNoRow("lg-already");
+                chooseLogPolicy("manually");
+                controller.selectView("today");
+                settle();
+                verify(rowFor("lg-already") === null, "finished before the choice: logged");
+
+                // Back to the default, ticking keeps a task only until leaving.
+                chooseLogPolicy("when-leaving");
+                const kept = addToToday("lg-default");
+                controller.toggleTask(kept.taskId);
+                settle();
+                verify(rowFor("lg-default") !== null, "kept while the list is open");
+                verify(!findChild(view, "logCompletedButton").visible);
+                controller.selectView("inbox");
+                controller.selectView("today");
+                waitForNoRow("lg-default");
+            } finally {
+                controller.chooseLogPolicy("when-leaving");
+            }
+        }
+
         // ---- Areas (#15) -----------------------------------------------------
 
         // Depth-first search of the visual tree under `item`.
@@ -1518,6 +1633,21 @@ Item {
         }
 
         // ---- Typing to find (#66) ---------------------------------------------
+
+        // `/` opens Quick Find as Ctrl+K does: on the last search, selected,
+        // not searching for "/".
+        function test_slash_opens_quick_find() {
+            const dialog = findChild(view, "quickFindDialog");
+            const input = findChild(view, "searchInput");
+            input.text = "tq-slash-last";
+            focusList();
+            keyClick("/");
+            tryVerify(() => dialog.opened, 1000, "/ opens Quick Find");
+            compare(input.text, "tq-slash-last", "the last search, not a slash");
+            compare(input.selectedText, "tq-slash-last", "selected, so typing replaces it");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !dialog.visible, 2000);
+        }
 
         function test_typing_on_the_list_searches_for_what_was_typed() {
             const dialog = findChild(view, "quickFindDialog");

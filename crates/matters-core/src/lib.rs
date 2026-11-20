@@ -4,6 +4,7 @@ pub mod error;
 pub mod list_diff;
 pub mod ordering;
 pub mod query;
+pub mod settings;
 pub mod storage;
 pub mod visit;
 
@@ -17,5 +18,6 @@ pub use query::{
     heading_section_key, logbook_section_key, project_section_key, ListRow, ProjectView,
     QueryEngine, QuickFindResult, TodayView, UpcomingGroup, ViewCounts,
 };
+pub use settings::{LogPolicy, LogbookSettings, Settings, SettingsFile};
 pub use storage::Database;
 pub use visit::Visit;

@@ -36,6 +36,10 @@ Item {
         }
     }
 
+    // Whether finished tasks wait in their lists to be logged (#67): Log
+    // Completed is offered then.
+    readonly property bool logsByHand: controller.logPolicy === "daily" || controller.logPolicy === "manually"
+
     // The fixed views, in sidebar order; Quick Find finds them by name too.
     readonly property var fixedViews: [
         { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: "#339AF0" },
@@ -1070,6 +1074,20 @@ Item {
                     }
 
                     ToolButton {
+                        objectName: "preferencesButton"
+                        icon.width: 16
+                        Accessible.name: "Preferences"
+                        contentItem: Icon {
+                            name: "settings"
+                            size: 16
+                            color: root.colTextSecondary
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Preferences (Ctrl+,)"
+                        onClicked: preferencesDialog.open()
+                    }
+
+                    ToolButton {
                         objectName: "newContainerButton"
                         icon.width: 16
                         contentItem: Icon {
@@ -1493,6 +1511,16 @@ Item {
                         visible: controller.currentView === "project" && controller.currentProjectStatus === "open"
                             && controller.currentProjectProgress >= 1
                         onClicked: root.askFinishProject("completed")
+                    }
+
+                    // Finished tasks waiting in a list go to the Logbook
+                    // (#67).
+                    Button {
+                        objectName: "logCompletedButton"
+                        text: "Log Completed"
+                        visible: root.logsByHand
+                            && ["inbox", "today", "upcoming", "anytime", "someday"].indexOf(controller.currentView) >= 0
+                        onClicked: controller.logCompleted()
                     }
 
                     Button {
@@ -3323,6 +3351,65 @@ Item {
         }
     }
 
+    // Preferences (#72): this device's settings. Each takes effect at once.
+    Dialog {
+        id: preferencesDialog
+        objectName: "preferencesDialog"
+        title: "Preferences"
+        modal: true
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 420
+        standardButtons: Dialog.Close
+        // The keyboard starts on the current choice.
+        onOpened: (logPolicyGroup.checkedButton ?? whenLeavingButton).forceActiveFocus(Qt.TabFocusReason)
+        onClosed: taskListView.forceActiveFocus()
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 4
+
+            Label {
+                text: "Move completed tasks to the Logbook"
+                font.bold: true
+            }
+
+            ButtonGroup {
+                id: logPolicyGroup
+            }
+
+            RadioButton {
+                id: whenLeavingButton
+                objectName: "logPolicy-when-leaving"
+                text: "When I leave the list"
+                ButtonGroup.group: logPolicyGroup
+                checked: controller.logPolicy === "when-leaving"
+                onClicked: controller.chooseLogPolicy("when-leaving")
+            }
+            RadioButton {
+                objectName: "logPolicy-immediately"
+                text: "Immediately"
+                ButtonGroup.group: logPolicyGroup
+                checked: controller.logPolicy === "immediately"
+                onClicked: controller.chooseLogPolicy("immediately")
+            }
+            RadioButton {
+                objectName: "logPolicy-daily"
+                text: "At the end of the day"
+                ButtonGroup.group: logPolicyGroup
+                checked: controller.logPolicy === "daily"
+                onClicked: controller.chooseLogPolicy("daily")
+            }
+            RadioButton {
+                objectName: "logPolicy-manually"
+                text: "When I choose Log Completed (Ctrl+Shift+L)"
+                ButtonGroup.group: logPolicyGroup
+                checked: controller.logPolicy === "manually"
+                onClicked: controller.chooseLogPolicy("manually")
+            }
+        }
+    }
+
     // New Project Dialog
     Dialog {
         id: emptyTrashDialog
@@ -3603,6 +3690,15 @@ Item {
     Shortcut {
         sequence: "/"
         onActivated: quickFindDialog.open()
+    }
+    Shortcut {
+        sequence: "Ctrl+,"
+        onActivated: preferencesDialog.open()
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+L"
+        enabled: root.logsByHand
+        onActivated: controller.logCompleted()
     }
     Shortcut {
         sequence: "F9"
