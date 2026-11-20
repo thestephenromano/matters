@@ -40,6 +40,17 @@ Item {
     // Completed is offered then.
     readonly property bool logsByHand: controller.logPolicy === "daily" || controller.logPolicy === "manually"
 
+    // The fixed views, in sidebar order; Quick Find finds them by name too.
+    readonly property var fixedViews: [
+        { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: "#339AF0" },
+        { id: "today", title: "Today", icon: "today", count: controller.todayCount, color: "#FCC419" },
+        { id: "upcoming", title: "Upcoming", icon: "upcoming", count: controller.upcomingCount, color: "#FF6B6B" },
+        { id: "anytime", title: "Anytime", icon: "anytime", count: controller.anytimeCount, color: "#20C997" },
+        { id: "someday", title: "Someday", icon: "someday", count: controller.somedayCount, color: "#FAB005" },
+        { id: "logbook", title: "Logbook", icon: "logbook", count: controller.logbookCount, color: "#51CF66" },
+        { id: "trash", title: "Trash", icon: "trash", count: 0, color: "#868E96" }
+    ]
+
     // Every tag, parents before children, with its depth (#57).
     readonly property var allTags: {
         try {
@@ -192,24 +203,32 @@ Item {
     // Navigating clears it; choosing one reloads the list.
     property string tagFilter: ""
     onTagFilterChanged: Qt.callLater(root.reloadTasks)
+    // The tag the next visit starts narrowed to (a tag chosen in Quick
+    // Find), instead of the whole list.
+    property string nextTagFilter: ""
 
-    // The tags the current list can be narrowed to.
+    // The tags the current list can be narrowed to, and the chosen one even
+    // if no task in the list has it, so it can be seen and unchosen.
     readonly property var presentTags: {
+        let present = [];
         try {
-            return JSON.parse(taskModel.presentTagsJson);
-        } catch (e) {
-            return [];
-        }
+            present = JSON.parse(taskModel.presentTagsJson);
+        } catch (e) {}
+        if (tagFilter !== "" && !present.some(t => t.id === tagFilter))
+            present = present.concat(allTags.filter(t => t.id === tagFilter).map(t => ({ id: t.id, name: t.name, depth: 0 })));
+        return present;
     }
 
     function reloadTasks() {
         // A new visit (navigation) starts with nothing selected, and the
-        // whole list: the tag filter clears (#58).
+        // whole list: the tag filter clears (#58), unless Quick Find chose
+        // the tag the visit is for.
         if (controller.visit !== loadedVisit) {
             loadedVisit = controller.visit;
             taskListView.selectedTaskId = "";
             newBelowId = "";
-            tagFilter = "";
+            tagFilter = nextTagFilter;
+            nextTagFilter = "";
         }
         // A project or area view loads the tasks of that project or area.
         const container = controller.currentView === "area" ? controller.currentAreaId : controller.currentProjectId;
@@ -953,15 +972,7 @@ Item {
                     spacing: 2
 
                     Repeater {
-                        model: [
-                            { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: "#339AF0" },
-                            { id: "today", title: "Today", icon: "today", count: controller.todayCount, color: "#FCC419" },
-                            { id: "upcoming", title: "Upcoming", icon: "upcoming", count: controller.upcomingCount, color: "#FF6B6B" },
-                            { id: "anytime", title: "Anytime", icon: "anytime", count: controller.anytimeCount, color: "#20C997" },
-                            { id: "someday", title: "Someday", icon: "someday", count: controller.somedayCount, color: "#FAB005" },
-                            { id: "logbook", title: "Logbook", icon: "logbook", count: controller.logbookCount, color: "#51CF66" },
-                            { id: "trash", title: "Trash", icon: "trash", count: 0, color: "#868E96" }
-                        ]
+                        model: root.fixedViews
 
                         delegate: Rectangle {
                             id: navItem
@@ -2268,7 +2279,12 @@ Item {
                                 taskListView.forceActiveFocus();
                                 break;
                             default:
-                                return;
+                                // Typing a name searches for it (#66): any
+                                // printable key opens Quick Find with it.
+                                if (!root.isTyped(event.text))
+                                    return;
+                                root.findTyped(event.text);
+                                break;
                             }
                             event.accepted = true;
                         }
@@ -2637,6 +2653,10 @@ Item {
                                                         text = taskRow.title;
                                                 }
                                                 onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
+                                                // Hidden (the task closed), it gives up the focus: the
+                                                // row is a focus scope and would hand the keys back to
+                                                // it, unseen, the next time the list takes the focus.
+                                                onVisibleChanged: if (!visible) focus = false
                                                 // Enter goes on to the notes.
                                                 Keys.onReturnPressed: notesInput.forceActiveFocus()
                                                 Keys.onEnterPressed: notesInput.forceActiveFocus()
@@ -2854,6 +2874,9 @@ Item {
                                                 font.pixelSize: 14
                                                 color: root.colTextPrimary
                                                 clip: true
+                                                // Hidden, it gives up the focus (as the
+                                                // title and notes do).
+                                                onVisibleChanged: if (!visible) focus = false
 
                                                 Text {
                                                     anchors.fill: parent
@@ -2900,6 +2923,10 @@ Item {
                                                 objectName: "notesInput"
                                                 // Editing a task's notes selects that task.
                                                 onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
+                                                // Hidden (the task closed), it gives up the focus: the
+                                                // row is a focus scope and would hand the keys back to
+                                                // it, unseen, the next time the list takes the focus.
+                                                onVisibleChanged: if (!visible) focus = false
                                                 Layout.fillWidth: true
                                                 // Grows with what is written.
                                                 Layout.preferredHeight: Math.max(44, contentHeight + topPadding + bottomPadding)
@@ -3114,14 +3141,58 @@ Item {
     // QUICK FIND POPUP DIALOG (Ctrl+K)
     // =========================================================================
 
-    // Open Quick Find result `index`: an area or project opens its view; a
-    // task opens the view that holds it, with the task open and in view.
+    // Whether `text`, a key's text, is something typed: printable, not a
+    // control character (Tab, Enter, Backspace, Delete, Escape).
+    function isTyped(text: string): bool {
+        if (text.length === 0)
+            return false;
+        const code = text.charCodeAt(0);
+        return code >= 0x20 && code !== 0x7f;
+    }
+
+    // Open Quick Find searching for `text`, typed on the list (#66). Keys
+    // typed before it has opened add to the search.
+    function findTyped(text: string) {
+        if (quickFindDialog.visible) {
+            searchInput.insert(searchInput.cursorPosition, text);
+            return;
+        }
+        quickFindDialog.typed = true;
+        searchInput.text = text;
+        quickFindDialog.open();
+        searchInput.forceActiveFocus();
+    }
+
+    // What Quick Find lists for `text`: the fixed views named like it, the
+    // areas and projects found, the tags named like it, then the tasks
+    // found (#66). A name matches when it contains the text, in either
+    // case.
+    function findResults(text: string, found: var): var {
+        if (text === "")
+            return [];
+        const typed = text.toLowerCase();
+        const named = name => name.toLowerCase().indexOf(typed) >= 0;
+        const views = fixedViews.filter(v => named(v.title)).map(v => ({ kind: "view", id: v.id, title: v.title, icon: v.icon, color: v.color }));
+        const tags = allTags.filter(t => named(t.name)).map(t => ({ kind: "tag", id: t.id, title: t.name }));
+        const lists = found.filter(r => r.kind !== "task");
+        const tasks = found.filter(r => r.kind === "task");
+        return views.concat(lists, tags, tasks);
+    }
+
+    // Open Quick Find result `index`: a view, area or project opens it; a
+    // tag opens Anytime narrowed to it; a task opens the view that holds
+    // it, with the task open and in view.
     function openSearchResult(index) {
         const results = searchResultsList.model;
         if (index < 0 || index >= results.length)
             return;
         const result = results[index];
-        if (result.kind === "area") {
+        if (result.kind === "view") {
+            controller.selectView(result.id);
+        } else if (result.kind === "tag") {
+            root.nextTagFilter = result.id;
+            controller.selectView("anytime");
+        } else if (result.kind === "area") {
             controller.selectArea(result.id);
         } else if (result.kind === "project") {
             controller.selectProject(result.id);
@@ -3142,10 +3213,17 @@ Item {
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        // The last search is kept, selected, so typing starts a new one.
+        // Opened by typing on the list: the search is what was typed.
+        property bool typed: false
+        // The last search is kept, selected, so typing starts a new one;
+        // after typing on the list, typing goes on after it.
         onOpened: {
             searchInput.forceActiveFocus();
-            searchInput.selectAll();
+            if (typed)
+                searchInput.deselect();
+            else
+                searchInput.selectAll();
+            typed = false;
         }
         onClosed: taskListView.forceActiveFocus()
 
@@ -3163,7 +3241,7 @@ Item {
                 id: searchInput
                 objectName: "searchInput"
                 Layout.fillWidth: true
-                placeholderText: "Quick Find across all tasks, projects, and areas..."
+                placeholderText: "Find lists, areas, projects, tags and tasks..."
                 font.pixelSize: 15
                 focus: true
                 onTextChanged: {
@@ -3185,11 +3263,11 @@ Item {
                 Layout.fillHeight: true
                 clip: true
                 model: {
+                    let found = [];
                     try {
-                        return JSON.parse(controller.searchResultsJson);
-                    } catch (e) {
-                        return [];
-                    }
+                        found = JSON.parse(controller.searchResultsJson);
+                    } catch (e) {}
+                    return root.findResults(searchInput.text, found);
                 }
 
                 delegate: Rectangle {
@@ -3198,13 +3276,16 @@ Item {
                     required property var modelData
                     required property int index
                     readonly property string kind: modelData.kind
+                    // What the result is, as its row and screen readers say:
+                    // nothing for a task.
+                    readonly property string kindName: ({ view: "List", area: "Area", project: "Project", tag: "Tag" })[kind] ?? ""
                     width: searchResultsList.width
                     height: 36
                     radius: 6
                     color: resultItem.ListView.isCurrentItem ? root.colSidebarActive
                         : resMouse.containsMouse ? root.colSidebarHover : "transparent"
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: (kind === "area" ? "Area: " : kind === "project" ? "Project: " : "") + modelData.title
+                    Accessible.name: (kindName !== "" ? kindName + ": " : "") + modelData.title
 
                     RowLayout {
                         anchors.fill: parent
@@ -3212,17 +3293,22 @@ Item {
                         anchors.rightMargin: 10
                         spacing: 8
 
-                        // An area or project shows its sidebar icon; a task,
-                        // an empty checkbox like its row.
+                        // A view, area or project shows its sidebar icon, a
+                        // tag the tag icon; a task, an empty checkbox like
+                        // its row.
                         Item {
                             Layout.preferredWidth: 16
                             Layout.preferredHeight: 16
                             Icon {
                                 anchors.centerIn: parent
                                 visible: resultItem.kind !== "task"
-                                name: resultItem.kind === "area" ? "area" : "project"
+                                name: resultItem.kind === "view" ? resultItem.modelData.icon
+                                    : resultItem.kind === "project" ? "project"
+                                    : resultItem.kind
                                 size: 16
-                                color: resultItem.kind === "area" ? root.colTextSecondary : root.colAccent
+                                color: resultItem.kind === "view" ? resultItem.modelData.color
+                                    : resultItem.kind === "project" ? root.colAccent
+                                    : root.colTextSecondary
                             }
                             Rectangle {
                                 anchors.centerIn: parent
@@ -3247,7 +3333,7 @@ Item {
                         Text {
                             objectName: "searchResultKind"
                             visible: resultItem.kind !== "task"
-                            text: resultItem.kind === "area" ? "Area" : "Project"
+                            text: resultItem.kindName
                             font.pixelSize: 11
                             color: root.colTextSecondary
                         }

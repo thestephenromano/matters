@@ -75,7 +75,7 @@ The sidebar provides access to the foundational GTD buckets:
 
 Below them, the sidebar lists the projects with no area, then each area with its projects. Everything there is arranged by its grip: areas among themselves, and a project within its area, to a place in another area, or out of every area. A project dropped on an area's own row goes last in that area.
 
-Above any list, a tag bar offers the tags its tasks have, their own and those of their projects and areas, with the tags those are nested under. Choosing one narrows the list to the tasks (and listed projects) with that tag, a parent tag including the tags under it; choosing it again or **All** shows everything. Narrowing never reorders the list, and navigating clears it.
+Above any list, a tag bar offers the tags its tasks have, their own and those of their projects and areas, with the tags those are nested under. Choosing one narrows the list to the tasks (and listed projects) with that tag, a parent tag including the tags under it; choosing it again or **All** shows everything. Narrowing never reorders the list, and navigating clears it. A tag chosen in Quick Find opens Anytime already narrowed to it, and the tag bar shows a chosen tag even when no task in the list has it.
 
 ### 1. Inbox
 * Capture zone for incoming thoughts and to-dos.
@@ -169,7 +169,8 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Up` / `Down` | Checklist item | Goes to the item above or below; `Ctrl + Up` / `Ctrl + Down` move the item |
 | `Ctrl + .` | Checklist item | Ticks or unticks the item |
 | `Backspace` | Empty checklist item | Deletes the item and goes to the one above; the Undo notice brings it back |
-| `Ctrl + K` or `/` | Anywhere | Opens **Quick Find** (instant fuzzy search across all items) |
+| `Ctrl + K` or `/` | Anywhere | Opens **Quick Find**: the lists (Inbox, Today and the other fixed views), areas, projects, tags and open tasks whose names contain what is typed, in that order. `Up`/`Down` pick one and `Enter` opens it (the first, unless another is picked): a list, area or project opens; a tag opens Anytime narrowed to it; a task opens the list that holds it, with the task open |
+| Typing a character other than `/` | Task list | Opens Quick Find searching for what is typed, so any list is a few keystrokes away. Keys typed into a title, notes, checklist or tag field stay there |
 | `Ctrl + N` | Anywhere | Creates a new task in the current view |
 | `Ctrl + ,` | Anywhere | Opens **Preferences** on the current choice; `Tab` and `Space` choose another, and each takes effect at once |
 | `Ctrl + Shift + L` | Anywhere, when finished tasks wait to be logged | **Log Completed**: the finished tasks still in their lists move to the Logbook |
@@ -312,7 +313,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_trashed ON tasks(trashed_at);
 
 Sync must preserve offline SQLite operation and use post-quantum end-to-end encryption, including device enrollment, sharing and recovery. Matters will be the first customer of a sync client and service that can later serve other applications, with managed and self-hosted deployment options. Task semantics remain in the application domain.
 
-The [encrypted sync design](SYNC_DESIGN.md) records the security contract, proposed key lifecycle, adoption alternatives and evaluation gates. The CRDT engine is Loro 1.18, adopted for integration ([ADR 0001](decisions/0001-crdt-adoption.md)). The post-quantum record and key-distribution stack is approved for prototype evaluation ([ADR 0002](decisions/0002-post-quantum-sync.md)), and the service components remain to be selected. This is planned functionality.
+The [encrypted sync design](SYNC_DESIGN.md) records the security contract, proposed key lifecycle, adoption alternatives and evaluation gates. The CRDT engine is Loro 1.18, adopted for integration ([ADR 0001](decisions/0001-crdt-adoption.md)). The post-quantum record and key-distribution stack is approved for prototype evaluation ([ADR 0002](decisions/0002-post-quantum-sync.md)), and the relay contract and components are recorded in the [service contract](SYNC_SERVICE_CONTRACT.md) and [ADR 0003](decisions/0003-relay-components.md). This is planned functionality.
 
 ---
 
@@ -328,7 +329,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [x] **Done:** inline task expansion. Title, notes, checklist, When and deadline are edited in place; a closed row shows how much of its checklist is done.
 - [x] **Done:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find, `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) and `Ctrl+Shift+M` (Move popover) work, for one selected task at a time (several: #64).
 - [x] **Done:** project progress, as a pie beside the project's title that fills as its tasks are done.
-- [x] **Done:** Quick Find popover. Finds areas, projects and tasks, and opens the one chosen.
+- [x] **Done:** Quick Find popover. Finds lists, areas, projects, tags and tasks, and opens the one chosen; typing on the task list opens it with what was typed.
 - [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.
 
 ### Post-MVP (v0.2+)
