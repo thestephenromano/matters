@@ -1517,6 +1517,180 @@ Item {
             verify(row.isExpanded, "the task is open");
         }
 
+        // ---- Typing to find (#66) ---------------------------------------------
+
+        function test_typing_on_the_list_searches_for_what_was_typed() {
+            const dialog = findChild(view, "quickFindDialog");
+            const input = findChild(view, "searchInput");
+            focusList();
+            typeText("Logb");
+            tryVerify(() => dialog.opened, 1000, "a typed letter opens Quick Find");
+            compare(input.text, "Logb", "every key typed is in the search, the first too");
+            const results = findChild(view, "searchResults");
+            tryVerify(() => results.count > 0);
+            compare(results.itemAtIndex(0).kind, "view");
+            compare(findChild(results.itemAtIndex(0), "searchResultKind").text, "List");
+            keyClick(Qt.Key_Return);
+            tryCompare(controller, "currentView", "logbook");
+            tryVerify(() => !dialog.visible, 1000, "Quick Find closes");
+            tryVerify(() => list.activeFocus, 1000, "focus goes back to the list");
+
+            // Ctrl+K still starts afresh, with the last search selected.
+            keySequence("Ctrl+K");
+            tryVerify(() => dialog.opened, 1000);
+            compare(input.selectedText, "Logb");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !dialog.visible, 2000);
+        }
+
+        function test_every_list_opens_by_typing_part_of_its_name_and_enter() {
+            const area = controller.createArea("tq-plover-area");
+            controller.createProject("tq-plover-project");
+            const project = projectIdOf("tq-plover-project");
+            const dialog = findChild(view, "quickFindDialog");
+            const typed = [["nbo", "inbox"], ["TOD", "today"], ["pcom", "upcoming"],
+                           ["nyti", "anytime"], ["omed", "someday"], ["ogbo", "logbook"],
+                           ["rash", "trash"]];
+            for (const [text, id] of typed) {
+                controller.selectView(id === "today" ? "inbox" : "today");
+                focusList();
+                typeText(text);
+                tryVerify(() => dialog.opened, 1000, text + " opens Quick Find");
+                keyClick(Qt.Key_Return);
+                tryCompare(controller, "currentView", id, 1000, text + " opens " + id);
+                tryVerify(() => !dialog.visible, 2000);
+            }
+
+            focusList();
+            typeText("plover-ar");
+            tryVerify(() => dialog.opened, 1000);
+            keyClick(Qt.Key_Return);
+            tryCompare(controller, "currentView", "area");
+            compare(controller.currentAreaId, area);
+            tryVerify(() => !dialog.visible, 2000);
+
+            focusList();
+            typeText("plover-pr");
+            tryVerify(() => dialog.opened, 1000);
+            keyClick(Qt.Key_Return);
+            tryCompare(controller, "currentView", "project");
+            compare(controller.currentProjectId, project);
+            tryVerify(() => !dialog.visible, 2000);
+        }
+
+        function test_a_tag_found_opens_anytime_narrowed_to_it() {
+            // Anytime lists tasks filed in an area or project.
+            const area = controller.createArea("tq-heron-area");
+            const tag = controller.createTag("tq-heron", "");
+            controller.selectArea(area);
+            controller.addTask("tq-heron-task");
+            controller.addTask("tq-untagged-task");
+            controller.addTag("task", waitForRow("tq-heron-task").taskId, tag);
+            controller.selectView("today");
+
+            focusList();
+            typeText("tq-her");
+            const dialog = findChild(view, "quickFindDialog");
+            tryVerify(() => dialog.opened, 1000);
+            const results = findChild(view, "searchResults");
+            tryVerify(() => results.count === 3, 1000, "the tag, the area and the task named like it");
+            const kinds = [];
+            for (let i = 0; i < results.count; ++i)
+                kinds.push(results.itemAtIndex(i).kind);
+            compare(kinds, ["area", "tag", "task"], "areas and projects, then tags, then tasks");
+            compare(findChild(results.itemAtIndex(1), "searchResultKind").text, "Tag");
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Return);
+
+            tryCompare(controller, "currentView", "anytime");
+            tryCompare(view, "tagFilter", tag);
+            waitForRow("tq-heron-task");
+            waitForNoRow("tq-untagged-task");
+            verify(filterChip("tq-heron").chosen, "the tag bar shows the tag chosen");
+
+            // Navigating clears it as usual.
+            controller.selectView("anytime");
+            waitForRow("tq-untagged-task");
+            compare(view.tagFilter, "");
+        }
+
+        function test_a_chosen_tag_no_task_has_still_shows_in_the_tag_bar() {
+            const tag = controller.createTag("tq-unused-egret", "");
+            focusList();
+            typeText("unused-egr");
+            const dialog = findChild(view, "quickFindDialog");
+            tryVerify(() => dialog.opened, 1000);
+            keyClick(Qt.Key_Return);
+            tryCompare(view, "tagFilter", tag);
+            tryVerify(() => filterChip("tq-unused-egret") !== null, 1000);
+            verify(filterChip("tq-unused-egret").chosen);
+            compare(list.count, 0, "nothing has the tag");
+
+            tryVerify(() => !dialog.visible, 2000, "Quick Find has closed");
+            clickFilter("tq-unused-egret");
+            tryCompare(view, "tagFilter", "");
+        }
+
+        // A closed task's editors give up the focus: the list, taking it
+        // back, must not hand typed keys to an editor no one can see.
+        function test_keys_typed_after_a_task_closes_never_reach_its_editors() {
+            const dialog = findChild(view, "quickFindDialog");
+            for (const editor of ["notesInput", "titleInput"]) {
+                const row = addToToday("tq-closed-" + editor);
+                expandRow(row);
+                const input = findChild(row, editor);
+                mouseClick(input);
+                verify(input.activeFocus);
+                const before = input.text;
+
+                // Closed some other way than Escape, as by opening another.
+                list.expandedTaskId = "";
+                tryVerify(() => !input.visible, 1000);
+                focusList();
+                verify(!input.activeFocus, editor + " gave up the focus");
+                keyClick("q");
+                tryVerify(() => dialog.opened, 1000, "the key went to the list");
+                compare(input.text, before, editor + " is unchanged");
+                keyClick(Qt.Key_Escape);
+                tryVerify(() => !dialog.visible, 2000);
+            }
+        }
+
+        function test_typing_in_editors_never_opens_quick_find() {
+            const dialog = findChild(view, "quickFindDialog");
+            const row = addToToday("tq-editors");
+            expandRow(row);
+
+            const notes = findChild(row, "notesInput");
+            mouseClick(notes);
+            verify(notes.activeFocus);
+            typeText("notes kept");
+            compare(notes.text, "notes kept");
+
+            const title = findChild(row, "titleInput");
+            mouseClick(title);
+            verify(title.activeFocus);
+            typeText("x");
+            compare(title.text.replace("x", ""), "tq-editors", "typed into the title");
+
+            const tags = findChild(row, "tagInput");
+            mouseClick(tags);
+            verify(tags.activeFocus);
+            typeText("zq");
+            compare(tags.text, "zq");
+            keyClick(Qt.Key_Escape);
+
+            keySequence("Ctrl+N");
+            const add = findChild(view, "newTaskInput");
+            verify(add.activeFocus);
+            typeText("tq-added");
+            compare(add.text, "tq-added");
+            keyClick(Qt.Key_Escape);
+
+            wait(50);
+            verify(!dialog.visible, "Quick Find stayed closed");
+        }
+
         // ---- Headings (#22) -----------------------------------------------------
 
         // Each row's heading id ("" above the headings), as listed, with an
