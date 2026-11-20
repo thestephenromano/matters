@@ -1634,6 +1634,21 @@ Item {
 
         // ---- Typing to find (#66) ---------------------------------------------
 
+        // `/` opens Quick Find as Ctrl+K does: on the last search, selected,
+        // not searching for "/".
+        function test_slash_opens_quick_find() {
+            const dialog = findChild(view, "quickFindDialog");
+            const input = findChild(view, "searchInput");
+            input.text = "tq-slash-last";
+            focusList();
+            keyClick("/");
+            tryVerify(() => dialog.opened, 1000, "/ opens Quick Find");
+            compare(input.text, "tq-slash-last", "the last search, not a slash");
+            compare(input.selectedText, "tq-slash-last", "selected, so typing replaces it");
+            keyClick(Qt.Key_Escape);
+            tryVerify(() => !dialog.visible, 2000);
+        }
+
         function test_typing_on_the_list_searches_for_what_was_typed() {
             const dialog = findChild(view, "quickFindDialog");
             const input = findChild(view, "searchInput");
