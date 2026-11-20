@@ -1,4 +1,5 @@
 pub mod db;
+mod repeats;
 pub mod schema;
 pub(crate) mod sync;
 mod tags;

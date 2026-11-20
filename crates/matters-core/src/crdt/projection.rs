@@ -290,6 +290,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
                     }
                     Some(_) => return Err(invalid("task under a checklist item")),
                 };
+                let occurrence: Option<(String, Date)> = optional_json(v, "occurrence")?;
                 out.tasks.push(Task {
                     id: n.id.clone(),
                     area_id,
@@ -302,6 +303,9 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
                     is_someday: someday,
                     deadline: json(v, "deadline")?,
                     reminder: optional_json(v, "reminder")?.flatten(),
+                    repeat: optional_json(v, "repeat")?.flatten(),
+                    series: occurrence.as_ref().map(|(series, _)| series.clone()),
+                    occurrence: occurrence.map(|(_, date)| date),
                     status,
                     completed_at,
                     trashed_at: json(v, "trashed_at")?,

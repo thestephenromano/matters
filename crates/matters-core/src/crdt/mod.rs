@@ -118,6 +118,20 @@ pub enum Command {
         id: String,
         time: Option<jiff::civil::Time>,
     },
+    /// A task's repeat rule (#61): set on the newest occurrence of a
+    /// series, cleared when it passes the rule on.
+    SetRepeat {
+        id: String,
+        rule: Option<crate::repeat::RepeatRule>,
+    },
+    /// The series a task's occurrence belongs to and the date it was for
+    /// (#61). Written in the commit that creates a generated occurrence, so
+    /// projection can tell one from a task made by hand.
+    SetOccurrence {
+        id: String,
+        series: String,
+        date: Date,
+    },
     /// Status, finish time and the "closed by its project" mark change
     /// together, so they can never disagree.
     SetStatus {
@@ -542,7 +556,9 @@ impl Document {
             | Command::SetSchedule { id, .. }
             | Command::SetDeadline { id, .. }
             | Command::SetStatus { id, .. } => (id, Kind::has_notes),
-            Command::SetReminder { id, .. } => (id, |k| k == Kind::Task),
+            Command::SetReminder { id, .. }
+            | Command::SetRepeat { id, .. }
+            | Command::SetOccurrence { id, .. } => (id, |k| k == Kind::Task),
             Command::SetTrashed { id, .. } => {
                 (id, |k| matches!(k, Kind::Area | Kind::Project | Kind::Task))
             }
@@ -575,6 +591,10 @@ impl Document {
             } => put(&meta, "schedule", &(start_date, evening, someday))?,
             Command::SetDeadline { deadline, .. } => put(&meta, "deadline", deadline)?,
             Command::SetReminder { time, .. } => put(&meta, "reminder", time)?,
+            Command::SetRepeat { rule, .. } => put(&meta, "repeat", rule)?,
+            Command::SetOccurrence { series, date, .. } => {
+                put(&meta, "occurrence", &(series, date))?
+            }
             Command::SetStatus {
                 status,
                 completed_at,

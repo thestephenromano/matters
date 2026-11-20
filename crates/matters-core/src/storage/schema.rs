@@ -161,6 +161,16 @@ CREATE TABLE IF NOT EXISTS area_tags (
 CREATE INDEX IF NOT EXISTS idx_area_tags_tag ON area_tags(tag_id);
 "#;
 
+/// v11: repeating tasks (#61). The newest occurrence of a series carries the
+/// rule (`repeat_rule`, JSON); every occurrence names its series (its first
+/// occurrence's id) and the date it was for.
+pub const MIGRATION_V11: &str = r#"
+ALTER TABLE tasks ADD COLUMN repeat_rule TEXT;
+ALTER TABLE tasks ADD COLUMN repeat_series TEXT;
+ALTER TABLE tasks ADD COLUMN repeat_date TEXT;
+CREATE INDEX IF NOT EXISTS idx_tasks_repeat_series ON tasks(repeat_series);
+"#;
+
 /// v10: reminders (#60). A task's reminder is a local time of day on its
 /// start date. `reminder_deliveries` is this device's record of the
 /// reminders it has shown, by task and local date and time, so each is shown

@@ -49,6 +49,16 @@ pub struct Task {
     /// reminder due (`crate::reminders`).
     #[serde(default)]
     pub reminder: Option<Time>,
+    /// The repeat rule, on the newest occurrence of a repeating task (#61,
+    /// `crate::repeat`); `None` on every other task.
+    #[serde(default)]
+    pub repeat: Option<crate::repeat::RepeatRule>,
+    /// The series a repeating task's occurrence belongs to (its first
+    /// occurrence's id), and the date this occurrence was for.
+    #[serde(default)]
+    pub series: Option<String>,
+    #[serde(default)]
+    pub occurrence: Option<Date>,
     pub status: Status,
     pub completed_at: Option<i64>,
     /// When the task was moved to the Trash; `None` while it is not trashed.
@@ -81,6 +91,9 @@ impl Task {
             is_someday: false,
             deadline: None,
             reminder: None,
+            repeat: None,
+            series: None,
+            occurrence: None,
             status: Status::Open,
             completed_at: None,
             trashed_at: None,
