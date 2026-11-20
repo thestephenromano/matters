@@ -81,6 +81,11 @@ pub struct RestoreStats {
 /// Reachable only with the `local-outbox` feature (see `lib.rs`).
 pub trait LocalOutbox {
     fn actor(&self) -> u64;
+    /// The store marker this composition writes: [`ATOMIC_FORMAT`], or
+    /// [`SHARED_ATOMIC_FORMAT`] when the store also receives.
+    fn format(&self) -> &'static str {
+        ATOMIC_FORMAT
+    }
     fn check_owner(&self, tx: &Transaction<'_>) -> Result<()>;
     fn enqueue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()>;
     /// Request IDs whose intents a retired writer left unsealed, oldest
@@ -91,7 +96,12 @@ pub trait LocalOutbox {
     /// its request produced when re-run as this writer.
     fn reissue(&self, tx: &Transaction<'_>, record: &Record) -> Result<()>;
 }
-pub const ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/2";
+/// Marker of an integrated sender store.
+pub const ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/1";
+/// Marker of an integrated store that also applies received records. Code
+/// that knows only [`ATOMIC_FORMAT`] would treat its accepted remote journal
+/// rows as a standalone inbox, so it must refuse the store.
+pub const SHARED_ATOMIC_FORMAT: &str = "matters-sync-atomic-outbox/2";
 /// How long an integrated store's connections wait for another short write
 /// on the same file (a seal or an acknowledgement) before failing.
 pub const INTEGRATED_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -398,9 +408,13 @@ impl Replica {
     /// through this transaction and returns only newly accepted remote records.
     /// They share the local journal/projection commit and never enter the outbox.
     #[cfg(feature = "local-outbox")]
+    ///
+    /// `before_commit` runs after every write of the pass is staged, just
+    /// before the commit; an error from it rolls the pass back.
     pub fn apply_authenticated(
         &mut self,
         prepare: impl FnOnce(&Transaction<'_>, &LoroDoc) -> Result<(LoroDoc, Vec<Record>)>,
+        before_commit: impl FnOnce() -> Result<()>,
         fault: Fault,
     ) -> Result<()> {
         let outbox = self
@@ -423,6 +437,7 @@ impl Replica {
             )?;
         }
         write_projection(&tx, &state)?;
+        before_commit()?;
         if fault == Fault::BeforeCommit {
             return Err(invalid("injected failure before receive commit"));
         }
@@ -830,8 +845,12 @@ fn initialize(
         tx.execute_batch("INSERT OR IGNORE INTO inbox(id,bytes,status,reason) SELECT id,bytes,'received','restoring admission status' FROM journal WHERE outgoing=0;")?;
     }
     let outbox = setup.map(|setup| setup(&tx, exists)).transpose()?;
+    let format = match &outbox {
+        Some(outbox) => outbox.format(),
+        None => "matters-sync-prototype/2",
+    };
     tx.execute("INSERT INTO prototype_meta VALUES ('format',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [if integrated { ATOMIC_FORMAT } else { "matters-sync-prototype/2" }])?;
+        [format])?;
     tx.commit()?;
     Ok(outbox)
 }
@@ -845,7 +864,8 @@ fn validate_format(conn: &Connection, integrated: bool) -> Result<bool> {
         |r| r.get::<_, String>(0),
     );
     let valid = if integrated {
-        matches!(marker.as_deref(), Ok(ATOMIC_FORMAT))
+        // The participant checks that the marker matches its receive mode.
+        matches!(marker.as_deref(), Ok(ATOMIC_FORMAT | SHARED_ATOMIC_FORMAT))
     } else {
         matches!(
             marker.as_deref(),

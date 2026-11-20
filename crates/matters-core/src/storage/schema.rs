@@ -127,9 +127,3 @@ ALTER TABLE tasks ADD COLUMN today_order REAL NOT NULL DEFAULT 0;
 pub const MIGRATION_V6: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_checklist_items_task ON checklist_items(task_id, sort_order);
 "#;
-
-/// v7: tasks that finishing their project closed are marked, so reopening
-/// the project reopens exactly those (#55). Only a closed task is marked.
-pub const MIGRATION_V7: &str = r#"
-ALTER TABLE tasks ADD COLUMN closed_by_project INTEGER NOT NULL DEFAULT 0;
-"#;

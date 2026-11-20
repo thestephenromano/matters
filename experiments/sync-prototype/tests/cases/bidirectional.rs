@@ -1,5 +1,6 @@
 use super::*;
 use crate::atomic_sender::{batch, Sender};
+use crate::encrypted_inbox::MERGE_CONFLICT;
 use crate::encrypted_outbox::{Binding, Delivery};
 use matters_sync_prototype::Fault;
 
@@ -598,5 +599,191 @@ fn bidirectional_process_exit_boundaries() -> TestResult<()> {
             })?;
         assert_eq!(incoming, 1);
     }
+    Ok(())
+}
+
+// Review follow-up (#150): budgets are charged where work is created, so a
+// pass that applies already retained work never runs out of capacity.
+
+impl Lab {
+    /// Seal and acknowledge `side`'s work without delivering it anywhere.
+    fn author(&mut self, side: usize, edits: usize) -> TestResult<()> {
+        for n in 0..edits {
+            self.peer(side)
+                .execute(&insert(&format!("{side}:{n} ")), Fault::None)?;
+            self.seal_all(side)?;
+            let mut delivery = Delivery::open(self.path(side), &binding(&self.s, side), false)?;
+            for record in delivery.pending()? {
+                delivery.acknowledge(record.id, |_| Ok(()))?;
+            }
+        }
+        Ok(())
+    }
+    fn retained(&self, side: usize, table: &str) -> TestResult<i64> {
+        Ok(Connection::open(self.path(side))?.query_row(
+            &format!("SELECT count(*) FROM {table}"),
+            [],
+            |r| r.get(0),
+        )?)
+    }
+}
+
+#[test]
+fn the_shared_receive_budget_counts_local_and_remote_rows_where_they_arrive() -> TestResult<()> {
+    let mut lab = Lab::new()?;
+    lab.bootstrap_task()?;
+    // B: one remote row and 20 local ones; A authors 12 more.
+    lab.author(1, 20)?;
+    lab.process(1)?;
+    for n in 0..12 {
+        lab.peer(0)
+            .execute(&insert(&format!("a{n} ")), Fault::None)?;
+    }
+    lab.seal_all(0)?;
+    let records = Delivery::open(lab.path(0), &binding(&lab.s, 0), true)?.pending()?;
+    assert_eq!(records.len(), 12);
+    let mut refused = None;
+    for (n, record) in records.iter().enumerate() {
+        let next = lab.peer(1).receive_cursor()? + 1;
+        if let Err(e) = lab
+            .peer(1)
+            .receive_record(GENERATION, next, &record.bytes, okay)
+        {
+            refused = Some((n, e.to_string()));
+            break;
+        }
+    }
+    // 1 + 11 remote and 20 local rows fill the 32-row budget exactly.
+    let (n, reason) = refused.expect("remote receipt past the shared budget");
+    assert_eq!(n, 11);
+    assert!(reason.contains("capacity"), "{reason}");
+    assert_eq!(lab.peer(1).receive_cursor()?, 12);
+
+    // A full budget refuses new local work, not application.
+    let before = lab.counts(1)?;
+    let refused = lab.peer(1).execute(&insert("over budget"), Fault::None);
+    assert!(refused.is_err());
+    assert_eq!(lab.counts(1)?, before);
+    lab.process(1)?;
+    assert_eq!(lab.retained(1, "received_records")?, 32);
+    assert!(lab
+        .peer(1)
+        .received_entries()?
+        .iter()
+        .all(|r| r.status == "applied"));
+    Ok(())
+}
+
+#[test]
+fn a_full_writer_budget_refuses_a_new_writer_and_never_blocks_application() -> TestResult<()> {
+    let mut lab = Lab::new()?;
+    lab.bootstrap_task()?;
+    let mut refused = None;
+    for _ in 0..40 {
+        if let Err(e) = lab.reopen(1) {
+            refused = Some(e.to_string());
+            break;
+        }
+        lab.process(1)?;
+    }
+    let reason = refused.expect("a new writer past the writer budget");
+    assert!(reason.contains("capacity"), "{reason}");
+    // The refused open left no writer behind, and every retained
+    // announcement fits the budget.
+    assert_eq!(
+        lab.retained(1, "writers")?,
+        lab.retained(1, "writer_receipts")? - 1
+    );
+    assert_eq!(lab.retained(1, "writer_receipts")?, 32);
+    Ok(())
+}
+
+#[test]
+fn a_shared_merge_conflict_is_recorded_and_stops_application_without_restaging() -> TestResult<()> {
+    let mut lab = Lab::new()?;
+    lab.peer(0).execute(&request(), Fault::None)?;
+    lab.seal_all(0)?;
+    lab.deliver(0, 1, false)?;
+    crate::encrypted_inbox::force_merge_conflict(true);
+    let first = lab.process(1);
+    crate::encrypted_inbox::force_merge_conflict(false);
+    assert!(first.unwrap_err().to_string().contains(MERGE_CONFLICT));
+    assert_eq!(
+        lab.peer(1).merge_conflict()?.as_deref(),
+        Some(MERGE_CONFLICT)
+    );
+
+    crate::encrypted_inbox::take_work();
+    let again = lab.process(1);
+    assert!(again.unwrap_err().to_string().contains(MERGE_CONFLICT));
+    assert_eq!(crate::encrypted_inbox::take_work().stagings, 0);
+    assert_eq!(lab.counts(1)?, (0, 0, 0));
+    // Local work continues on the last good state.
+    lab.peer(1).execute(&request(), Fault::None)?;
+    Ok(())
+}
+
+#[test]
+fn a_failed_shared_write_never_reaches_the_before_apply_point() -> TestResult<()> {
+    for target in ["journal", "projection"] {
+        let mut lab = Lab::new()?;
+        lab.peer(0).execute(&request(), Fault::None)?;
+        lab.seal_all(0)?;
+        lab.deliver(0, 1, false)?;
+        Connection::open(lab.path(1))?.execute_batch(&format!(
+            "CREATE TRIGGER reject_apply BEFORE INSERT ON {target} BEGIN SELECT RAISE(ABORT,'injected'); END;"
+        ))?;
+        let mut points = vec![];
+        let result =
+            lab.peers[1]
+                .as_mut()
+                .unwrap()
+                .process_incoming(&lab.keys[1], Fault::None, |p| {
+                    points.push(p);
+                    Ok(())
+                });
+        assert!(result.is_err(), "{target}");
+        assert!(
+            !points.contains(&Point::BeforeApply),
+            "{target}: {points:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_sender_only_store_keeps_the_first_atomic_marker() -> TestResult<()> {
+    let s = setup();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sender.db");
+    let open = || {
+        Sender::open(
+            &path,
+            binding(&s, 0),
+            rng,
+            |m| Ok(sign(m, &s.a)?),
+            |_| Ok(()),
+        )
+    };
+    open()?.execute(&request(), Fault::None)?;
+    let db = Connection::open(&path)?;
+    db.execute(
+        "UPDATE prototype_meta SET value='matters-sync-atomic-outbox/1' WHERE key='format'",
+        [],
+    )?;
+    open()?;
+    let marker: String = db.query_row(
+        "SELECT value FROM prototype_meta WHERE key='format'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(marker, "matters-sync-atomic-outbox/1");
+    let lab = Lab::new()?;
+    let marker: String = Connection::open(lab.path(0))?.query_row(
+        "SELECT value FROM prototype_meta WHERE key='format'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(marker, "matters-sync-atomic-outbox/2");
     Ok(())
 }

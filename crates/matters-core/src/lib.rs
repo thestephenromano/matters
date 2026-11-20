@@ -10,12 +10,12 @@ pub mod visit;
 pub use clock::{local_today, DayTracker};
 pub use domain::{
     Area, ChecklistItem, ChecklistProgress, DateOrder, DeadlineStatus, DeletedHeading, Heading,
-    Home, Outcome, Project, ProjectProgress, Schedule, Status, Task, View,
+    Home, Project, ProjectProgress, Schedule, Status, Task, View,
 };
 pub use error::{MattersError, Result};
 pub use query::{
-    heading_section_key, logbook_section_key, ListRow, ProjectView, QueryEngine, QuickFindResult,
-    TodayView, UpcomingGroup, ViewCounts,
+    heading_section_key, ListRow, ProjectView, QueryEngine, QuickFindResult, TodayView,
+    UpcomingGroup, ViewCounts,
 };
 pub use storage::Database;
 pub use visit::Visit;
