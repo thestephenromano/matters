@@ -1,0 +1,39 @@
+# Bidirectional single-store experiment
+
+Status: bounded two-device simulation under #35/#36/#39. Each simulated device has its own signing/key-establishment keys, authenticated epoch-key envelope, writer incarnation, engine actor, SQLite file and durable receive cursor. They share the approved collection membership and document. No real network, relay or application migration is enabled.
+
+## Adopted components and local boundary
+
+Reuse the existing SQLite/rusqlite transaction boundary, Loro adapter, authenticated inbox, transactional outbox and post-quantum record composition. The maintainer approved this next slice and explicitly requested the second-device simulation. No new library, transport, broker or cryptographic construction is introduced. [SQLite transactions](https://www.sqlite.org/lang_transaction.html) supply single-writer serialization and rollback; the [atomic sender](SYNC_ATOMIC_SENDER.md) and [durable receive](SYNC_DURABLE_RECEIVE.md) supply the existing save and admission contracts.
+
+`Sender::open_bidirectional` pins the incoming configuration to the outgoing route, document, membership manifest, epoch and member identity. Configured initial writers are empty; actual signed announcements are durably retained and admitted. The mode cannot be added to or removed from an existing sender store. Standalone inbox and plaintext replica opens refuse the shared store. The combined format is `matters-sync-atomic-outbox/2`; the inbox format is `matters-encrypted-inbox/3`. Earlier markers are refused; no migration is provided.
+
+Each device uses one WAL/FULL database. Local commands still commit their receipt, engine update, projection and outgoing intent together. Incoming ciphertext and cursor commit in a receipt transaction before application. Processing runs the existing authentication, chain, writer-history, decryption, actor-range and causal-domain admission rules inside a replica-owned transaction. Newly accepted remote updates enter the same journal as local changes with `outgoing=0`. Their verdicts, writer admissions and task projection commit together. In-memory document/index/projection and authority cache advance only after commit. Incoming changes never enqueue outgoing work.
+
+The common receive algorithm is extracted once for both the standalone inbox and this composition. The shared replica's journal/checkpoint is authoritative for engine state; standalone inbox snapshots are not loaded or written in shared mode. `Inbox::process` and `Inbox::projection` refuse direct use on a shared handle. The private sender wrapper invokes the shared transaction path, and its projection comes from the replica. Participant/callback code and local SQL access remain trusted test support behind the existing feature gate.
+
+## Local history, echoes and signed contradictions
+
+Chain validation must see the device's own sealed records as well as incoming ones. Before processing, the transaction retains committed local announcements and exact sealed bytes in the receive ledger. Local rows use the negative durable intent sequence; remote rows use the positive stream position. This local namespace never advances the remote cursor. These namespaces share the existing bounded receive capacity.
+
+Locally retained records pass the same signature and history checks. Their decrypted bytes must equal the durable local intent, their actor range/dependencies must already be present in the shared document, and their causal domain state must be valid. They advance the authenticated chain head without importing their operations again or appending another journal row. Exact echoes are duplicates of that retained copy. Remote records still face the existing overlap checks; the local exception is available only for bytes taken from the local sealed/intents join.
+
+Signed conflicts continue to preserve accepted state and evidence. If processing observes a fork in this device's own lineage, it commits a sticky local freeze flag with those verdicts. New state-changing commands and new content sealing are refused; existing request receipts, projections, sealed-byte retrieval and delivery remain available. Reopen may create an empty signed writer handoff, but cannot clear the freeze or resume content authorship. Another member can continue contributing. No reconciliation or rollback of previously accepted operations is implied.
+
+## Recovery ordering rule
+
+Receipt is allowed at any time. **Incoming application waits until every local intent has committed ciphertext.** This is a local sealing prerequisite, not a requirement to upload or obtain a remote ACK: both offline devices can seal their concurrent work before applying each other's updates.
+
+This preserves the recovery assumption from #144. A stranded local request can have accepted remote history before it, but none after it. On restart the existing re-issue path rebuilds that prior history and re-runs only the unsealed local suffix under the fresh actor. Pending incoming bytes remain in the ledger until the re-issued intents are sealed. Positional commands therefore run against their original preceding history rather than being silently replayed after a remote edit. The replica also checks the journal invariant directly and refuses recovery if an accepted remote row follows a stranded request.
+
+The simulation covers an earlier remote edit, a later local unsealed notes insert, receipt of a concurrent remote insert, checkpoint/restart/re-issue, sealing and final convergence. It also injects an invalid interleaved journal to witness refusal without rewriting the retained intent. Authentication never relies on simulated delivery order or on the relay's claims.
+
+## Simulation and assurance
+
+The harness maintains independent A and B stores and derives each device's epoch-key handle by verifying its own recipient envelope. It exchanges exact committed ciphertext and signed controls through an in-process delivery harness. Simulated receipt acknowledgements follow durable ciphertext retention, independently of later application. A targeted trace records public device IDs, actor IDs, database names, local/remote/intent counts and the final fixture projection; it contains no secret key material.
+
+Scenarios cover A creating a task, B receiving and editing it, A receiving that edit, both restarting, and A editing again; concurrent notes; reversed and duplicate deliveries; own-record echoes; delayed causal input; forged signatures; SQL rejection at receive verdict, remote journal and projection writes; deferred-foreign-key COMMIT failure; lost application acknowledgement; stale-owner fencing; configuration/mode mismatch; recovery ordering; and signed forks that freeze one device while the other continues. Four additional subprocess exits bracket receipt and shared application commits. The execution record binds the source, oracle checks, targeted guard removals and executed suites.
+
+The existing 32-record/control inbox fixture budgets include local history and remote deliveries; they are not production retention policies. Capacity exhaustion is explicit and does not delete retained data. The existing outbox budget, wire caps, local plaintext storage and staging/resource limits still apply. This simulation establishes neither hostile-import resource bounds nor network, cross-target, performance, power/media-loss or production-security properties.
+
+One document and fixed membership/key epoch remain the scope. Real transport and authenticated remote ACKs, membership changes/revocation, secret storage, fork reconciliation, storage compaction, UI command capture, migration and independent security review remain separate gates.

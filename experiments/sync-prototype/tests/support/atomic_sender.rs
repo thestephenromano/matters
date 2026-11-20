@@ -1,9 +1,10 @@
 //! Single-file domain + outbox experiment. Keys stay with trusted callbacks.
+use crate::encrypted_inbox::{Config, Entry, Inbox, Point as InPoint};
 use crate::encrypted_outbox::{
     Binding, Composition, Outbox, Point, RecoveryIntent, Stored, Writer,
 };
 use crate::record_chain::Id;
-use crate::support::Message;
+use crate::support::{EpochKey, Message};
 use matters_sync_prototype::{
     wire, Fault, LocalOutbox, Projection, Record, Replica, Request, Result,
 };
@@ -57,6 +58,7 @@ impl LocalOutbox for Participant {
 pub struct Sender {
     replica: Replica,
     outbox: Outbox,
+    inbox: Option<Inbox>,
 }
 impl Sender {
     pub fn open(
@@ -66,11 +68,61 @@ impl Sender {
         sign: impl FnOnce(&Message) -> Result<Vec<u8>>,
         hook: impl FnMut(Point) -> Result<()>,
     ) -> Result<Self> {
+        Self::open_inner(path, binding, None, random, sign, hook)
+    }
+    pub fn open_bidirectional(
+        path: &Path,
+        binding: Binding,
+        config: Config,
+        random: impl FnMut() -> Result<Id>,
+        sign: impl FnOnce(&Message) -> Result<Vec<u8>>,
+        hook: impl FnMut(Point) -> Result<()>,
+    ) -> Result<Self> {
+        let authority = config.authority()?;
+        if !config.writers.is_empty()
+            || config.route.app != binding.application
+            || config.route.tenant != binding.tenant
+            || config.route.collection != binding.collection
+            || config.document != binding.document
+            || authority.manifest().as_slice() != binding.manifest
+            || authority.epoch()? != binding.epoch
+            || !authority
+                .members()?
+                .iter()
+                .any(|m| m.id.as_slice() == binding.author)
+        {
+            return Err(matters_sync_prototype::invalid(
+                "sender/receiver authority binding mismatch",
+            ));
+        }
+        Self::open_inner(path, binding, Some(config), random, sign, hook)
+    }
+    fn open_inner(
+        path: &Path,
+        binding: Binding,
+        config: Option<Config>,
+        random: impl FnMut() -> Result<Id>,
+        sign: impl FnOnce(&Message) -> Result<Vec<u8>>,
+        hook: impl FnMut(Point) -> Result<()>,
+    ) -> Result<Self> {
         let mut writer = None;
         let hook = std::cell::RefCell::new(hook);
         let replica = Replica::open_with_outbox(
             path,
             |tx, exists| {
+                let has_inbox: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='inbox_meta')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if exists && has_inbox != config.is_some() {
+                    return Err(matters_sync_prototype::invalid(
+                        "cannot change sender receive mode",
+                    ));
+                }
+                if let Some(config) = &config {
+                    Inbox::initialize_shared(tx, config)?;
+                }
                 let next = Outbox::start_writer(
                     tx,
                     &binding,
@@ -88,7 +140,71 @@ impl Sender {
             || hook.borrow_mut()(Point::AfterWriterCommit),
         )?;
         let outbox = Outbox::attach(path, binding, writer.expect("setup committed"))?;
-        Ok(Self { replica, outbox })
+        let inbox = config
+            .map(|config| Inbox::attach(path, config))
+            .transpose()?;
+        Ok(Self {
+            replica,
+            outbox,
+            inbox,
+        })
+    }
+    pub fn receive_writer(
+        &mut self,
+        bytes: &[u8],
+        hook: impl FnMut(InPoint) -> Result<()>,
+    ) -> Result<()> {
+        self.inbox
+            .as_mut()
+            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
+            .receive_writer(bytes, hook)
+    }
+    pub fn receive_record(
+        &mut self,
+        generation: Id,
+        sequence: i64,
+        bytes: &[u8],
+        hook: impl FnMut(InPoint) -> Result<()>,
+    ) -> Result<()> {
+        self.inbox
+            .as_mut()
+            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
+            .receive(generation, sequence, bytes, hook)
+    }
+    pub fn receive_cursor(&self) -> Result<i64> {
+        self.inbox
+            .as_ref()
+            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
+            .cursor()
+    }
+    pub fn received_entries(&self) -> Result<Vec<Entry>> {
+        self.inbox
+            .as_ref()
+            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
+            .entries()
+    }
+    pub fn process_incoming(
+        &mut self,
+        key: &EpochKey,
+        fault: Fault,
+        mut hook: impl FnMut(InPoint) -> Result<()>,
+    ) -> Result<()> {
+        let inbox = self
+            .inbox
+            .as_mut()
+            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?;
+        let mut admitted = None;
+        self.replica.apply_authenticated(
+            |tx, doc| {
+                let prepared = inbox.prepare_shared(tx, key, doc)?;
+                admitted = Some(prepared.admitted);
+                hook(InPoint::BeforeApply)?;
+                Ok((prepared.doc, prepared.imports))
+            },
+            fault,
+        )?;
+        inbox.publish(admitted.expect("prepare completed"));
+        hook(InPoint::AfterApply)
     }
     pub fn execute(&mut self, request: &Request, fault: Fault) -> Result<Record> {
         self.replica.execute_with_fault(request, fault)

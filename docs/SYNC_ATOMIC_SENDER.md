@@ -26,7 +26,7 @@ A request producing no new engine operations retains its journal receipt but cre
 
 ## Opening, sealing and restart
 
-The dedicated `matters-sync-atomic-outbox/1` marker distinguishes this composition from earlier standalone stores, and `outbox_meta` records it as `atomic`, so a standalone open that raced the creation still cannot take the writer. Initial schema, outbox binding, fresh writer and signed root/handoff commit in one transaction; the `AfterWriterCommit` point follows that commit directly, before the rest of the open can fail. A writer orphaned by such a failure is an empty link in the signed handoff chain. The existing `matters-encrypted-outbox/3` tables remain within that file. Existing standalone, app and foreign databases are refused; this is not a migration.
+The dedicated `matters-sync-atomic-outbox/2` marker distinguishes this composition from earlier standalone stores, and `outbox_meta` records it as `atomic`, so a standalone open that raced the creation still cannot take the writer. Initial schema, outbox binding, fresh writer and signed root/handoff commit in one transaction; the `AfterWriterCommit` point follows that commit directly, before the rest of the open can fail. A writer orphaned by such a failure is an empty link in the signed handoff chain. The existing `matters-encrypted-outbox/3` tables remain within that file. Existing standalone, app and foreign databases are refused; this is not a migration.
 
 The Loro document uses the actor allocated with the signed writer. Reopen restores the domain journal/checkpoint and allocates a fresh writer through the reviewed handoff path. Older handles are fenced before local commits, sealing, projection rebuilds and checkpoints. Retrying a previously accepted request can still return its retained receipt without performing a write.
 
@@ -43,3 +43,7 @@ The integration suite covers saved edits through encryption and receiver project
 Retained plaintext, request bodies, projections, journals and backups are unencrypted at rest. This keeps the existing 16 in-flight intent fixture capacity (acknowledged intents do not count) and 1 MiB exported-payload limit. Connections to the combined file wait up to one second for another short write (a seal or acknowledgement) instead of failing at once; it does not bound staging memory, arbitrary commands, retained request receipts or lifetime storage growth. Tests establish process-crash behavior on the recorded host, not power/media/host-loss durability, hostile-import safety or production security.
 
 Membership/key epochs and the document stay fixed. Dynamic membership, secret storage, reconciliation, bidirectional authenticated writes in the same local database, production retention, UI command capture, migration, service APIs, cross-target execution, performance measurement and independent security review remain open.
+
+## Bidirectional composition
+
+[Bidirectional single-store receive](SYNC_BIDIRECTIONAL.md) now composes the authenticated inbox with the same journal and projection. It uses a separately pinned receive mode. Local intents must be sealed before incoming application; raw receipt can proceed while they wait. The sender-only mode and the disabled plaintext receive path remain available as described above. Production migration and UI integration remain open.

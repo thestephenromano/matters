@@ -7,16 +7,16 @@ use crate::support::{
 use loro::{EncodedBlobMode, ExportMode, LoroDoc, ID};
 use matters_sync_prototype::{
     causal_past_verdict, has_user_schema, invalid as error, project_document, wire, Projection,
-    Result,
+    Record, Result,
 };
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
 
-const FORMAT: &str = "matters-encrypted-inbox/2";
+const FORMAT: &str = "matters-encrypted-inbox/3";
 // Chosen fixture budget: at most 32 wire records (~32 MiB), plus projections,
 // SQLite overhead and staged engine state. Not a hostile-import memory bound.
 pub const MAX_RECORDS: i64 = 32;
@@ -120,6 +120,12 @@ pub struct Inbox {
     /// ordinals are immutable once committed, so only later ones are replayed.
     /// Updated only after the processing transaction commits.
     admitted: (i64, Authority),
+    integrated: bool,
+}
+pub(super) struct Prepared {
+    pub doc: LoroDoc,
+    pub imports: Vec<Record>,
+    pub admitted: (i64, Authority),
 }
 impl Inbox {
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
@@ -135,39 +141,14 @@ impl Inbox {
         conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         validate_database(&tx, &binding)?;
-        // Successful signature facts depend on retained bytes and immutable
-        // admitted actor/key bindings. Retirement eligibility is checked afresh;
-        // missing writer admissions remain retryable. The engine snapshot always commits together with the
-        // application ordinals and projection it reflects.
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS inbox_meta (
-            singleton INTEGER PRIMARY KEY CHECK(singleton=1), format TEXT NOT NULL,
-            binding BLOB NOT NULL, cursor INTEGER NOT NULL, projection TEXT,
-            conflict TEXT, engine BLOB,
-            CHECK((projection IS NULL) <> (conflict IS NULL)));
-            CREATE TABLE IF NOT EXISTS inbox (
-            sequence INTEGER PRIMARY KEY, bytes BLOB NOT NULL, status TEXT NOT NULL,
-            reason TEXT NOT NULL, applied INTEGER UNIQUE,
-            record_id_conflict INTEGER NOT NULL DEFAULT 0, auth TEXT,
-            record_id BLOB, incarnation BLOB, previous BLOB, digest BLOB, actor BLOB CHECK(actor IS NULL OR length(actor)=8));
-            CREATE TABLE IF NOT EXISTS writer_receipts (
-            id INTEGER PRIMARY KEY, digest BLOB NOT NULL UNIQUE, bytes BLOB NOT NULL,
-            status TEXT NOT NULL, reason TEXT NOT NULL, admitted INTEGER UNIQUE);",
-        )?;
-        tx.execute(
-            "INSERT OR IGNORE INTO inbox_meta VALUES (1,?1,?2,0,?3,NULL,NULL)",
-            params![
-                FORMAT,
-                binding,
-                serde_json::to_string(&Projection::default())?
-            ],
-        )?;
+        initialize_tables(&tx, &binding, false)?;
         tx.commit()?;
         Ok(Self {
             conn,
             config,
             admitted: (0, base.clone()),
             base,
+            integrated: false,
         })
     }
     /// Persist exact signed control bytes before attempting admission. This
@@ -183,27 +164,9 @@ impl Inbox {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let digest = hash(bytes);
-        let old: Option<Vec<u8>> = tx
-            .query_row(
-                "SELECT bytes FROM writer_receipts WHERE digest=?1",
-                [digest.as_slice()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(old) = old {
-            return if old == bytes {
-                Ok(())
-            } else {
-                Err(error("control digest conflict"))
-            };
+        if !retain_writer(&tx, bytes)? {
+            return Ok(());
         }
-        let count: i64 = tx.query_row("SELECT count(*) FROM writer_receipts", [], |r| r.get(0))?;
-        if count >= MAX_RECORDS {
-            return Err(error("writer receipt capacity"));
-        }
-        tx.execute("INSERT INTO writer_receipts(digest,bytes,status,reason) VALUES (?1,?2,'waiting','unprocessed')",
-            params![digest.as_slice(), bytes])?;
         hook(Point::BeforeWriterReceipt)?;
         tx.commit()?;
         hook(Point::AfterWriterReceipt)
@@ -224,6 +187,9 @@ impl Inbox {
     /// The committed view of accepted records, or an error naming
     /// `MERGE_CONFLICT` when their merge has no valid projection.
     pub fn projection(&self) -> Result<Projection> {
+        if self.integrated {
+            return Err(error("shared projection is owned by the replica"));
+        }
         match self.merge_conflict()? {
             Some(reason) => Err(error(&reason)),
             None => {
@@ -263,7 +229,7 @@ impl Inbox {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let old: Option<Vec<u8>> = tx
             .query_row(
-                "SELECT bytes FROM inbox WHERE sequence=?1",
+                "SELECT bytes FROM received_records WHERE sequence=?1",
                 [sequence],
                 |r| r.get(0),
             )
@@ -283,7 +249,7 @@ impl Inbox {
             return Err(error("receive gap or retained-record capacity"));
         }
         tx.execute(
-            "INSERT INTO inbox(sequence,bytes,status,reason) VALUES (?1,?2,'waiting','unprocessed')",
+            "INSERT INTO received_records(sequence,bytes,status,reason) VALUES (?1,?2,'waiting','unprocessed')",
             params![sequence, bytes],
         )?;
         tx.execute(
@@ -303,314 +269,526 @@ impl Inbox {
         key: &EpochKey,
         mut hook: impl FnMut(Point) -> Result<()>,
     ) -> Result<()> {
-        // A key for another route, manifest or epoch is an operational error.
-        self.base.check_epoch_key(key)?;
-        let document = self.config.document;
-        let context = self.config.route.content(&document);
+        if self.integrated {
+            return Err(error("shared inbox requires the replica transaction"));
+        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let admitted = admit_receipts(&tx, document, self.admitted.clone())?;
-        let authority = &admitted.1;
-        let histories = authority.writer_histories(document);
-        let mut rows = rows(&tx)?;
-        for row in &mut rows {
-            // A member-signed record waiting for its writer is re-authenticated
-            // only once that writer has been admitted.
-            let retry = match row.auth.as_ref() {
-                None => true,
-                Some(Err(reason)) if reason == WRITER_ADMISSION => {
-                    wire::parse(&row.entry.bytes, context)
-                        .is_ok_and(|p| histories.contains_key(p.header.incarnation))
-                }
-                Some(_) => false,
-            };
-            if retry {
-                count(|w| w.authentications += 1);
-                row.auth = Some(
-                    match authority.authenticate_history(
-                        &row.entry.bytes,
-                        key,
-                        &self.config.document,
-                    ) {
-                        Ok(v) => {
-                            let h = v.parsed().header;
-                            Ok(Facts {
-                                record_id: *h.record_id,
-                                incarnation: *h.incarnation,
-                                previous: h.previous.copied(),
-                                digest: hash(&row.entry.bytes),
-                                actor: v.actor(),
-                            })
-                        }
-                        Err(Error::MissingWriter) => Err(WRITER_ADMISSION.into()),
-                        Err(e) => Err(format!("authentication:{e}")),
-                    },
-                );
-            }
+        let prepared = prepare_on(
+            &tx,
+            &self.config,
+            &self.base,
+            self.admitted.clone(),
+            key,
+            None,
+            &BTreeMap::new(),
+        )?;
+        hook(Point::BeforeApply)?;
+        tx.commit()?;
+        self.admitted = prepared.admitted;
+        hook(Point::AfterApply)
+    }
+    pub(super) fn initialize_shared(tx: &Transaction<'_>, config: &Config) -> Result<()> {
+        let binding = config.binding()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='inbox_meta')",
+            [],
+            |r| r.get(0),
+        )?;
+        if exists {
+            validate_binding(tx, &binding, true)?;
         }
-
-        // Claims are gathered from every authenticated record before any
-        // decryption or import: a valid competing signature remains fork
-        // evidence even if its payload cannot be applied.
-        let mut first_copy: BTreeMap<Hash, i64> = BTreeMap::new();
-        let mut first_claim: BTreeMap<Id, Id> = BTreeMap::new();
-        let mut successors: BTreeMap<(Id, Option<Hash>), Hash> = BTreeMap::new();
-        let mut frozen = BTreeSet::new();
-        let mut shared_ids = BTreeSet::new();
-        let mut candidates = Vec::new();
-        for (index, row) in rows.iter_mut().enumerate() {
-            let facts = match row.auth.as_ref().expect("authenticated above") {
-                Ok(facts) => facts.clone(),
-                Err(reason) => {
-                    if reason == WRITER_ADMISSION {
-                        // The signature is verified; only the writer binding is
-                        // unknown. A refused competing handoff is never
-                        // admitted, so content in a frozen lineage is a fork.
-                        let frozen = wire::parse(&row.entry.bytes, context)
-                            .is_ok_and(|p| authority.lineage_frozen(document, p.header.author));
-                        if frozen {
-                            row.entry.status = "fork".into();
-                            row.entry.reason = "frozen-writer-lineage".into();
-                        } else {
-                            row.entry.status = "waiting".into();
-                            row.entry.reason = reason.clone();
-                        }
-                    } else {
-                        reject(&mut row.entry, reason);
+        initialize_tables(tx, &binding, true)
+    }
+    pub(super) fn attach(path: &Path, config: Config) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        validate_binding(&conn, &config.binding()?, true)?;
+        let base = config.authority()?;
+        conn.busy_timeout(matters_sync_prototype::INTEGRATED_BUSY_TIMEOUT)?;
+        conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+        Ok(Self {
+            conn,
+            config,
+            admitted: (0, base.clone()),
+            base,
+            integrated: true,
+        })
+    }
+    pub(super) fn prepare_shared(
+        &self,
+        tx: &Transaction<'_>,
+        key: &EpochKey,
+        doc: &LoroDoc,
+    ) -> Result<Prepared> {
+        if !self.integrated {
+            return Err(error("shared inbox required"));
+        }
+        // Receipt may proceed while local work is unsealed. Application may
+        // not: a remote journal row must never follow a stranded local request.
+        let unsealed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM intents WHERE NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq))", [], |r| r.get(0))?;
+        if unsealed {
+            return Err(error("seal local intents before applying incoming records"));
+        }
+        let mut controls = tx.prepare("SELECT announcement FROM writers ORDER BY seq")?;
+        for bytes in controls.query_map([], |r| r.get::<_, Vec<u8>>(0))? {
+            retain_writer(tx, &bytes?)?;
+        }
+        let mut stmt = tx.prepare("SELECT intents.seq,sealed.bytes,intents.plaintext FROM intents JOIN sealed ON sealed.intent=intents.seq ORDER BY intents.seq")?;
+        let mut local_plain = BTreeMap::new();
+        for row in stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+            ))
+        })? {
+            let (seq, bytes, plain) = row?;
+            let saved: Option<Vec<u8>> = tx
+                .query_row(
+                    "SELECT bytes FROM received_records WHERE sequence=?1",
+                    [-seq],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(saved) = saved {
+                if saved != bytes {
+                    return Err(error("local receipt changed"));
+                }
+            } else {
+                if rows(tx)?.len() >= MAX_RECORDS as usize {
+                    return Err(error("receive capacity"));
+                }
+                tx.execute("INSERT INTO received_records(sequence,bytes,status,reason) VALUES (?1,?2,'waiting','local-sealed')", params![-seq, bytes])?;
+            }
+            local_plain.insert(-seq, plain);
+        }
+        let prepared = prepare_on(
+            tx,
+            &self.config,
+            &self.base,
+            self.admitted.clone(),
+            key,
+            Some(doc),
+            &local_plain,
+        )?;
+        let encoded: Vec<u8> = tx.query_row(
+            "SELECT binding FROM outbox_meta WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
+        let binding: crate::encrypted_outbox::Binding = serde_json::from_slice(&encoded)?;
+        let author: Hash = binding.author.as_slice().try_into()?;
+        let frozen = prepared
+            .admitted
+            .1
+            .lineage_frozen(self.config.document, &author)
+            || rows(tx)?
+                .iter()
+                .any(|r| r.entry.sequence < 0 && r.entry.status == "fork");
+        if frozen {
+            tx.execute("UPDATE inbox_meta SET local_frozen=1 WHERE singleton=1", [])?;
+        }
+        Ok(prepared)
+    }
+    pub(super) fn publish(&mut self, admitted: (i64, Authority)) {
+        self.admitted = admitted;
+    }
+}
+fn initialize_tables(tx: &Transaction<'_>, binding: &[u8], integrated: bool) -> Result<()> {
+    // Successful signature facts depend on retained bytes and immutable
+    // admitted actor/key bindings. Retirement eligibility is checked afresh;
+    // missing writer admissions remain retryable. The engine snapshot always commits together with the
+    // application ordinals and projection it reflects.
+    tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS inbox_meta (
+            singleton INTEGER PRIMARY KEY CHECK(singleton=1), format TEXT NOT NULL,
+            binding BLOB NOT NULL, integrated INTEGER NOT NULL, cursor INTEGER NOT NULL, projection TEXT,
+            conflict TEXT, engine BLOB, local_frozen INTEGER NOT NULL DEFAULT 0,
+            CHECK((projection IS NULL) <> (conflict IS NULL)));
+            CREATE TABLE IF NOT EXISTS received_records (
+            sequence INTEGER PRIMARY KEY, bytes BLOB NOT NULL, status TEXT NOT NULL,
+            reason TEXT NOT NULL, applied INTEGER UNIQUE,
+            record_id_conflict INTEGER NOT NULL DEFAULT 0, auth TEXT,
+            record_id BLOB, incarnation BLOB, previous BLOB, digest BLOB, actor BLOB CHECK(actor IS NULL OR length(actor)=8));
+            CREATE TABLE IF NOT EXISTS writer_receipts (
+            id INTEGER PRIMARY KEY, digest BLOB NOT NULL UNIQUE, bytes BLOB NOT NULL,
+            status TEXT NOT NULL, reason TEXT NOT NULL, admitted INTEGER UNIQUE);",
+        )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO inbox_meta VALUES (1,?1,?2,?3,0,?4,NULL,NULL,0)",
+        params![
+            FORMAT,
+            binding,
+            integrated,
+            serde_json::to_string(&Projection::default())?
+        ],
+    )?;
+    Ok(())
+}
+fn retain_writer(tx: &Transaction<'_>, bytes: &[u8]) -> Result<bool> {
+    if bytes.len() > MAX_CONTROL {
+        return Err(error("writer control exceeds input budget"));
+    }
+    let digest = hash(bytes);
+    let old: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT bytes FROM writer_receipts WHERE digest=?1",
+            [digest.as_slice()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(old) = old {
+        return if old == bytes {
+            Ok(false)
+        } else {
+            Err(error("control digest conflict"))
+        };
+    }
+    let count: i64 = tx.query_row("SELECT count(*) FROM writer_receipts", [], |r| r.get(0))?;
+    if count >= MAX_RECORDS {
+        return Err(error("writer receipt capacity"));
+    }
+    tx.execute("INSERT INTO writer_receipts(digest,bytes,status,reason) VALUES (?1,?2,'waiting','unprocessed')",
+            params![digest.as_slice(), bytes])?;
+    Ok(true)
+}
+fn prepare_on(
+    tx: &Transaction<'_>,
+    config: &Config,
+    base: &Authority,
+    cached: (i64, Authority),
+    key: &EpochKey,
+    initial: Option<&LoroDoc>,
+    local_plain: &BTreeMap<i64, Vec<u8>>,
+) -> Result<Prepared> {
+    // A key for another route, manifest or epoch is an operational error.
+    base.check_epoch_key(key)?;
+    let document = config.document;
+    let context = config.route.content(&document);
+    let admitted = admit_receipts(tx, document, cached)?;
+    let authority = &admitted.1;
+    let histories = authority.writer_histories(document);
+    let mut rows = rows(tx)?;
+    for row in &mut rows {
+        // A member-signed record waiting for its writer is re-authenticated
+        // only once that writer has been admitted.
+        let retry = match row.auth.as_ref() {
+            None => true,
+            Some(Err(reason)) if reason == WRITER_ADMISSION => {
+                wire::parse(&row.entry.bytes, context)
+                    .is_ok_and(|p| histories.contains_key(p.header.incarnation))
+            }
+            Some(_) => false,
+        };
+        if retry {
+            count(|w| w.authentications += 1);
+            row.auth = Some(
+                match authority.authenticate_history(&row.entry.bytes, key, &config.document) {
+                    Ok(v) => {
+                        let h = v.parsed().header;
+                        Ok(Facts {
+                            record_id: *h.record_id,
+                            incarnation: *h.incarnation,
+                            previous: h.previous.copied(),
+                            digest: hash(&row.entry.bytes),
+                            actor: v.actor(),
+                        })
                     }
-                    continue;
+                    Err(Error::MissingWriter) => Err(WRITER_ADMISSION.into()),
+                    Err(e) => Err(format!("authentication:{e}")),
+                },
+            );
+        }
+    }
+
+    // Claims are gathered from every authenticated record before any
+    // decryption or import: a valid competing signature remains fork
+    // evidence even if its payload cannot be applied.
+    let mut first_copy: BTreeMap<Hash, i64> = BTreeMap::new();
+    let mut first_claim: BTreeMap<Id, Id> = BTreeMap::new();
+    let mut successors: BTreeMap<(Id, Option<Hash>), Hash> = BTreeMap::new();
+    let mut frozen = BTreeSet::new();
+    let mut shared_ids = BTreeSet::new();
+    let mut candidates = Vec::new();
+    for (index, row) in rows.iter_mut().enumerate() {
+        let facts = match row.auth.as_ref().expect("authenticated above") {
+            Ok(facts) => facts.clone(),
+            Err(reason) => {
+                if reason == WRITER_ADMISSION {
+                    // The signature is verified; only the writer binding is
+                    // unknown. A refused competing handoff is never
+                    // admitted, so content in a frozen lineage is a fork.
+                    let frozen = wire::parse(&row.entry.bytes, context)
+                        .is_ok_and(|p| authority.lineage_frozen(document, p.header.author));
+                    if frozen {
+                        row.entry.status = "fork".into();
+                        row.entry.reason = "frozen-writer-lineage".into();
+                    } else {
+                        row.entry.status = "waiting".into();
+                        row.entry.reason = reason.clone();
+                    }
+                } else {
+                    reject(&mut row.entry, reason);
                 }
-            };
-            if let Some(first) = first_copy.get(&facts.digest) {
-                if row.entry.applied.is_some() {
-                    return Err(error("duplicate in accepted journal"));
-                }
-                row.entry.status = "duplicate".into();
-                row.entry.reason = format!("duplicate-of:{first}");
                 continue;
             }
-            first_copy.insert(facts.digest, row.entry.sequence);
-            if successors
-                .insert((facts.incarnation, facts.previous), facts.digest)
-                .is_some()
-            {
+        };
+        if let Some(first) = first_copy.get(&facts.digest) {
+            if row.entry.applied.is_some() {
+                return Err(error("duplicate in accepted journal"));
+            }
+            row.entry.status = "duplicate".into();
+            row.entry.reason = format!("duplicate-of:{first}");
+            continue;
+        }
+        first_copy.insert(facts.digest, row.entry.sequence);
+        if successors
+            .insert((facts.incarnation, facts.previous), facts.digest)
+            .is_some()
+        {
+            frozen.insert(facts.incarnation);
+        }
+        match first_claim.get(&facts.record_id) {
+            // One signer, two different records under one ID: equivocation.
+            Some(incarnation) if *incarnation == facts.incarnation => {
                 frozen.insert(facts.incarnation);
             }
-            match first_claim.get(&facts.record_id) {
-                // One signer, two different records under one ID: equivocation.
-                Some(incarnation) if *incarnation == facts.incarnation => {
-                    frozen.insert(facts.incarnation);
-                }
-                // Different signers: either writer (or the relay) could be the
-                // one at fault, so neither chain is frozen. The full header is
-                // in each record's key derivation, so no key is shared.
-                Some(_) => {
-                    shared_ids.insert(facts.record_id);
-                }
-                None => {
-                    first_claim.insert(facts.record_id, facts.incarnation);
-                }
+            // Different signers: either writer (or the relay) could be the
+            // one at fault, so neither chain is frozen. The full header is
+            // in each record's key derivation, so no key is shared.
+            Some(_) => {
+                shared_ids.insert(facts.record_id);
             }
-            candidates.push((index, facts));
-        }
-
-        // Retirement eligibility is mutable; cached signature facts are not.
-        // Re-evaluate closing prefixes and device freezes on every pass.
-        let gates = history_gates(&histories, &candidates, &frozen)?;
-        for (_, facts) in &candidates {
-            if gates
-                .frozen_devices
-                .contains(&histories[&facts.incarnation].device)
-            {
-                frozen.insert(facts.incarnation);
+            None => {
+                first_claim.insert(facts.record_id, facts.incarnation);
             }
         }
-        // Closing heads only advance to their signed value (a record past one
-        // freezes the device above), so eligibility is monotonic in a pass.
-        let mut eligible: BTreeSet<Id> = BTreeSet::new();
+        candidates.push((index, facts));
+    }
 
-        let mut doc = LoroDoc::new();
-        let engine: Option<Vec<u8>> =
-            tx.query_row("SELECT engine FROM inbox_meta WHERE singleton=1", [], |r| {
-                r.get(0)
-            })?;
+    // Retirement eligibility is mutable; cached signature facts are not.
+    // Re-evaluate closing prefixes and device freezes on every pass.
+    let gates = history_gates(&histories, &candidates, &frozen)?;
+    for (_, facts) in &candidates {
+        if gates
+            .frozen_devices
+            .contains(&histories[&facts.incarnation].device)
+        {
+            frozen.insert(facts.incarnation);
+        }
+    }
+    // Closing heads only advance to their signed value (a record past one
+    // freezes the device above), so eligibility is monotonic in a pass.
+    let mut eligible: BTreeSet<Id> = BTreeSet::new();
+
+    let mut doc = initial.map(LoroDoc::fork).unwrap_or_default();
+    let engine: Option<Vec<u8>> =
+        tx.query_row("SELECT engine FROM inbox_meta WHERE singleton=1", [], |r| {
+            r.get(0)
+        })?;
+    if initial.is_none() {
         if let Some(snapshot) = engine {
             doc.import(&snapshot)?;
         }
-        let mut heads = BTreeMap::new();
-        let mut accepted: Vec<_> = candidates
-            .iter()
-            .filter_map(|(i, f)| rows[*i].entry.applied.map(|n| (n, *i, f)))
-            .collect();
-        accepted.sort_by_key(|(n, ..)| *n);
-        let mut ordinal = 0;
-        for (n, _, facts) in &accepted {
-            if facts.previous != heads.get(&facts.incarnation).copied() {
-                return Err(error("accepted chain mismatch"));
-            }
-            heads.insert(facts.incarnation, facts.digest);
-            ordinal += 1;
-            if *n != ordinal {
-                return Err(error("accepted order gap"));
-            }
+    }
+    let mut imports = Vec::new();
+    let mut heads = BTreeMap::new();
+    let mut accepted: Vec<_> = candidates
+        .iter()
+        .filter_map(|(i, f)| rows[*i].entry.applied.map(|n| (n, *i, f)))
+        .collect();
+    accepted.sort_by_key(|(n, ..)| *n);
+    let mut ordinal = 0;
+    for (n, _, facts) in &accepted {
+        if facts.previous != heads.get(&facts.incarnation).copied() {
+            return Err(error("accepted chain mismatch"));
         }
-        if accepted.len() != rows.iter().filter(|r| r.entry.applied.is_some()).count() {
-            return Err(error("accepted journal authentication failed"));
+        heads.insert(facts.incarnation, facts.digest);
+        ordinal += 1;
+        if *n != ordinal {
+            return Err(error("accepted order gap"));
         }
-        if ordinal > 0 && doc.oplog_vv().is_empty() {
-            return Err(error("accepted engine state missing"));
-        }
+    }
+    if accepted.len() != rows.iter().filter(|r| r.entry.applied.is_some()).count() {
+        return Err(error("accepted journal authentication failed"));
+    }
+    if ordinal > 0 && doc.oplog_vv().is_empty() {
+        return Err(error("accepted engine state missing"));
+    }
 
-        let mut plain: BTreeMap<usize, std::result::Result<Vec<u8>, ()>> = BTreeMap::new();
-        // Payload rejections depend only on the record and its causal past, so
-        // an earlier call's verdict stands; fork evidence still overrides it.
-        let mut settled: BTreeSet<usize> = candidates
-            .iter()
-            .map(|(i, _)| *i)
-            .filter(|i| rows[*i].entry.status == "quarantined")
-            .collect();
-        // Fixed-point drain: a later delivery may satisfy an earlier causal gap.
-        loop {
-            let mut progress = false;
-            for (index, facts) in &candidates {
-                let row = &mut rows[*index].entry;
-                if frozen.contains(&facts.incarnation) {
-                    row.status = "fork".into();
-                    row.reason = "signed-chain-or-record-id-conflict".into();
-                    continue;
-                }
-                if row.applied.is_some() {
-                    row.status = "applied".into();
-                    row.reason.clear();
-                    continue;
-                }
-                if settled.contains(index) {
-                    continue;
-                }
-                if !eligible.contains(&facts.incarnation) {
-                    if !gates.chains[&facts.incarnation]
-                        .iter()
-                        .all(|(previous, closing)| heads.get(previous).copied() == *closing)
-                    {
-                        row.status = "waiting".into();
-                        row.reason = CLOSING_HISTORY.into();
-                        continue;
-                    }
-                    eligible.insert(facts.incarnation);
-                }
-                if facts.previous != heads.get(&facts.incarnation).copied() {
-                    row.status = "waiting".into();
-                    row.reason = "predecessor-not-applied".into();
-                    continue;
-                }
-                let row = &mut rows[*index].entry;
-                if !plain.contains_key(index) {
-                    plain.insert(*index, decrypt(authority, &document, &row.bytes, key)?);
-                }
-                let Ok(bytes) = &plain[index] else {
-                    // The epoch key handle can only hold the key its signed
-                    // epoch commits to (#112), so authenticated-decryption
-                    // failure is a verdict on the record.
-                    reject(row, "authenticated-decryption");
-                    settled.insert(*index);
-                    continue;
-                };
-                match stage(&doc, bytes, facts.actor)? {
-                    Stage::Ready(staged) => {
-                        doc = staged;
-                        ordinal += 1;
-                        row.applied = Some(ordinal);
-                        row.status = "applied".into();
-                        row.reason.clear();
-                        heads.insert(facts.incarnation, facts.digest);
-                        progress = true;
-                    }
-                    Stage::Waiting => {
-                        row.status = "waiting".into();
-                        row.reason = "causal-dependency".into();
-                    }
-                    Stage::Rejected(reason) => {
-                        reject(row, reason);
-                        settled.insert(*index);
-                    }
-                }
-            }
-            if !progress {
-                break;
-            }
-        }
-        // Explicitly distinguish descendants of retained bad/forked records from
-        // records whose predecessors have simply not arrived.
-        let blocked: BTreeSet<Hash> = rows
-            .iter()
-            .filter(|r| matches!(r.entry.status.as_str(), "quarantined" | "fork"))
-            .map(|r| hash(&r.entry.bytes))
-            .collect();
+    let mut plain: BTreeMap<usize, std::result::Result<Vec<u8>, ()>> = BTreeMap::new();
+    // Payload rejections depend only on the record and its causal past, so
+    // an earlier call's verdict stands; fork evidence still overrides it.
+    let mut settled: BTreeSet<usize> = candidates
+        .iter()
+        .map(|(i, _)| *i)
+        .filter(|i| rows[*i].entry.status == "quarantined")
+        .collect();
+    // Fixed-point drain: a later delivery may satisfy an earlier causal gap.
+    loop {
+        let mut progress = false;
         for (index, facts) in &candidates {
             let row = &mut rows[*index].entry;
-            row.record_id_conflict = shared_ids.contains(&facts.record_id);
-            if row.status == "waiting" && facts.previous.is_some_and(|p| blocked.contains(&p)) {
-                row.reason = BLOCKED.into();
+            if frozen.contains(&facts.incarnation) {
+                row.status = "fork".into();
+                row.reason = "signed-chain-or-record-id-conflict".into();
+                continue;
             }
-            // A closed predecessor whose complete signed prefix holds a
-            // rejected record can never reach its closing head: the handoff
-            // chains through it exactly as a same-writer successor would.
-            if row.status == "waiting"
-                && row.reason == CLOSING_HISTORY
-                && gates.chains[&facts.incarnation]
+            if row.applied.is_some() {
+                row.status = "applied".into();
+                row.reason.clear();
+                continue;
+            }
+            if settled.contains(index) {
+                continue;
+            }
+            if !eligible.contains(&facts.incarnation) {
+                if !gates.chains[&facts.incarnation]
                     .iter()
-                    .any(|(previous, _)| {
-                        gates
-                            .prefixes
-                            .get(previous)
-                            .is_some_and(|prefix| !prefix.is_disjoint(&blocked))
-                    })
-            {
-                row.reason = BLOCKED.into();
+                    .all(|(previous, closing)| heads.get(previous).copied() == *closing)
+                {
+                    row.status = "waiting".into();
+                    row.reason = CLOSING_HISTORY.into();
+                    continue;
+                }
+                eligible.insert(facts.incarnation);
+            }
+            if facts.previous != heads.get(&facts.incarnation).copied() {
+                row.status = "waiting".into();
+                row.reason = "predecessor-not-applied".into();
+                continue;
+            }
+            let row = &mut rows[*index].entry;
+            if !plain.contains_key(index) {
+                plain.insert(*index, decrypt(authority, &document, &row.bytes, key)?);
+            }
+            let Ok(bytes) = &plain[index] else {
+                // The epoch key handle can only hold the key its signed
+                // epoch commits to (#112), so authenticated-decryption
+                // failure is a verdict on the record.
+                reject(row, "authenticated-decryption");
+                settled.insert(*index);
+                continue;
+            };
+            let local = local_plain.get(&row.sequence);
+            if local.is_some_and(|saved| saved != bytes) {
+                return Err(error(
+                    "sealed local payload differs from its durable intent",
+                ));
+            }
+            match stage(&doc, bytes, facts.actor, local.is_some())? {
+                Stage::Ready(staged) => {
+                    doc = staged;
+                    if local.is_none() {
+                        imports.push(Record {
+                            id: format!(
+                                "authenticated:{}",
+                                facts
+                                    .digest
+                                    .iter()
+                                    .map(|b| format!("{b:02x}"))
+                                    .collect::<String>()
+                            ),
+                            bytes: bytes.clone(),
+                        });
+                    }
+                    ordinal += 1;
+                    row.applied = Some(ordinal);
+                    row.status = "applied".into();
+                    row.reason.clear();
+                    heads.insert(facts.incarnation, facts.digest);
+                    progress = true;
+                }
+                Stage::Waiting => {
+                    row.status = "waiting".into();
+                    row.reason = "causal-dependency".into();
+                }
+                Stage::Rejected(reason) => {
+                    reject(row, reason);
+                    settled.insert(*index);
+                }
             }
         }
-        for row in &rows {
-            let facts = row.auth.as_ref().and_then(|a| a.as_ref().ok());
-            tx.execute(
-                "UPDATE inbox SET status=?1,reason=?2,applied=?3,record_id_conflict=?4,
+        if !progress {
+            break;
+        }
+    }
+    // Explicitly distinguish descendants of retained bad/forked records from
+    // records whose predecessors have simply not arrived.
+    let blocked: BTreeSet<Hash> = rows
+        .iter()
+        .filter(|r| matches!(r.entry.status.as_str(), "quarantined" | "fork"))
+        .map(|r| hash(&r.entry.bytes))
+        .collect();
+    for (index, facts) in &candidates {
+        let row = &mut rows[*index].entry;
+        row.record_id_conflict = shared_ids.contains(&facts.record_id);
+        if row.status == "waiting" && facts.previous.is_some_and(|p| blocked.contains(&p)) {
+            row.reason = BLOCKED.into();
+        }
+        // A closed predecessor whose complete signed prefix holds a
+        // rejected record can never reach its closing head: the handoff
+        // chains through it exactly as a same-writer successor would.
+        if row.status == "waiting"
+            && row.reason == CLOSING_HISTORY
+            && gates.chains[&facts.incarnation]
+                .iter()
+                .any(|(previous, _)| {
+                    gates
+                        .prefixes
+                        .get(previous)
+                        .is_some_and(|prefix| !prefix.is_disjoint(&blocked))
+                })
+        {
+            row.reason = BLOCKED.into();
+        }
+    }
+    for row in &rows {
+        let facts = row.auth.as_ref().and_then(|a| a.as_ref().ok());
+        tx.execute(
+            "UPDATE received_records SET status=?1,reason=?2,applied=?3,record_id_conflict=?4,
                  auth=?5,record_id=?6,incarnation=?7,previous=?8,digest=?9,actor=?10
                  WHERE sequence=?11",
-                params![
-                    row.entry.status,
-                    row.entry.reason,
-                    row.entry.applied,
-                    row.entry.record_id_conflict,
-                    match &row.auth {
-                        Some(Ok(_)) => "ok",
-                        Some(Err(reason)) => reason.as_str(),
-                        None => return Err(error("unauthenticated row")),
-                    },
-                    facts.map(|f| f.record_id.to_vec()),
-                    facts.map(|f| f.incarnation.to_vec()),
-                    facts.and_then(|f| f.previous.map(|p| p.to_vec())),
-                    facts.map(|f| f.digest.to_vec()),
-                    facts.map(|f| f.actor.to_le_bytes().to_vec()),
-                    row.entry.sequence,
-                ],
-            )?;
-        }
-        // Accepted records were each valid in their own causal past, and the
-        // merged engine state does not depend on application order. Its
-        // projection, or the absence of one, is therefore the same everywhere.
-        let (projection, conflict) = match project_document(&doc) {
-            Ok(view) => (Some(serde_json::to_string(&view)?), None),
-            Err(_) => (None, Some(MERGE_CONFLICT)),
-        };
+            params![
+                row.entry.status,
+                row.entry.reason,
+                row.entry.applied,
+                row.entry.record_id_conflict,
+                match &row.auth {
+                    Some(Ok(_)) => "ok",
+                    Some(Err(reason)) => reason.as_str(),
+                    None => return Err(error("unauthenticated row")),
+                },
+                facts.map(|f| f.record_id.to_vec()),
+                facts.map(|f| f.incarnation.to_vec()),
+                facts.and_then(|f| f.previous.map(|p| p.to_vec())),
+                facts.map(|f| f.digest.to_vec()),
+                facts.map(|f| f.actor.to_le_bytes().to_vec()),
+                row.entry.sequence,
+            ],
+        )?;
+    }
+    // Accepted records were each valid in their own causal past, and the
+    // merged engine state does not depend on application order. Its
+    // projection, or the absence of one, is therefore the same everywhere.
+    let (projection, conflict) = match project_document(&doc) {
+        Ok(view) => (Some(serde_json::to_string(&view)?), None),
+        Err(_) => (None, Some(MERGE_CONFLICT)),
+    };
+    if initial.is_none() {
         tx.execute(
             "UPDATE inbox_meta SET projection=?1,conflict=?2,engine=?3 WHERE singleton=1",
             params![projection, conflict, doc.export(ExportMode::Snapshot)?],
         )?;
-        hook(Point::BeforeApply)?;
-        tx.commit()?;
-        self.admitted = admitted;
-        hook(Point::AfterApply)
+    } else if conflict.is_some() {
+        return Err(error(MERGE_CONFLICT));
     }
+    Ok(Prepared {
+        doc,
+        imports,
+        admitted,
+    })
 }
 /// Authenticated decryption; only an authenticated handle can decrypt.
 fn decrypt(
@@ -627,14 +805,25 @@ fn decrypt(
 }
 fn validate_database(conn: &Connection, binding: &[u8]) -> Result<()> {
     if has_user_schema(conn)? {
-        let saved = conn.query_row(
-            "SELECT format,binding FROM inbox_meta WHERE singleton=1",
-            [],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)),
-        );
-        if !matches!(saved, Ok((ref format, ref old)) if format == FORMAT && old == binding) {
-            return Err(error("foreign database or changed inbox binding"));
-        }
+        validate_binding(conn, binding, false)?;
+    }
+    Ok(())
+}
+fn validate_binding(conn: &Connection, binding: &[u8], integrated: bool) -> Result<()> {
+    let saved = conn.query_row(
+        "SELECT format,binding,integrated FROM inbox_meta WHERE singleton=1",
+        [],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, bool>(2)?,
+            ))
+        },
+    );
+    if !matches!(saved, Ok((ref format, ref old, mode)) if format == FORMAT && old == binding && mode == integrated)
+    {
+        return Err(error("incompatible inbox database or binding"));
     }
     Ok(())
 }
@@ -654,7 +843,7 @@ struct Row {
 fn rows(conn: &Connection) -> Result<Vec<Row>> {
     let mut stmt = conn.prepare(
         "SELECT sequence,bytes,status,reason,applied,record_id_conflict,auth,
-         record_id,incarnation,previous,digest,actor FROM inbox ORDER BY sequence",
+         record_id,incarnation,previous,digest,actor FROM received_records ORDER BY sequence",
     )?;
     let rows = stmt.query_map([], |r| {
         let auth: Option<String> = r.get(6)?;
@@ -713,7 +902,7 @@ enum Stage {
     Rejected(&'static str),
 }
 /// Every rejection here is a property of the record and its causal past alone.
-fn stage(doc: &LoroDoc, plain: &[u8], actor: u64) -> Result<Stage> {
+fn stage(doc: &LoroDoc, plain: &[u8], actor: u64, retained_local: bool) -> Result<Stage> {
     let meta = match LoroDoc::decode_import_blob_meta(plain, true) {
         Ok(m) => m,
         Err(_) => return Ok(Stage::Rejected("engine-format")),
@@ -731,6 +920,22 @@ fn stage(doc: &LoroDoc, plain: &[u8], actor: u64) -> Result<Stage> {
     }
     let current = doc.oplog_vv();
     let counter = current.get(&actor).copied().unwrap_or(0);
+    if retained_local {
+        if end > counter
+            || !meta
+                .start_frontiers
+                .iter()
+                .all(|id| current.includes_id(id))
+        {
+            return Err(error("durable local update missing from shared document"));
+        }
+        if let Some(reason) =
+            causal_past_verdict(doc, &meta.partial_start_vv, &meta.partial_end_vv)?
+        {
+            return Err(error(format!("invalid durable local update: {reason}")));
+        }
+        return Ok(Stage::Ready(doc.fork()));
+    }
     if start < counter {
         return Ok(Stage::Rejected("actor-overlap"));
     }

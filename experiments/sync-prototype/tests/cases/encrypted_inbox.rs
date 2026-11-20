@@ -832,3 +832,6 @@ mod lifecycle;
 
 #[path = "atomic_sender.rs"]
 mod atomic_sender_cases;
+
+#[path = "bidirectional.rs"]
+mod bidirectional;

@@ -12,6 +12,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "experiments/sync-prototype/evidence/record-contract-2026-11-18.json"
 REQUIRED = {
+    "docs/SYNC_BIDIRECTIONAL.md",
+    "experiments/sync-prototype/tests/cases/bidirectional.rs",
     "docs/SYNC_ATOMIC_SENDER.md",
     "experiments/sync-prototype/tests/support/atomic_sender.rs",
     "experiments/sync-prototype/tests/cases/atomic_sender.rs",
