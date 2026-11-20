@@ -613,6 +613,9 @@ Item {
         function openMenuOn(row) {
             const menu = findChild(view, "taskMenu");
             tryVerify(() => !menu.visible, 2000, "the last menu has closed");
+            // In view, so the click reaches it.
+            list.positionViewAtIndex(indexOf(row.title), ListView.Contain);
+            settle();
             mouseClick(row, row.width / 2, 16, Qt.RightButton);
             tryVerify(() => menu.opened, 1000, "a right click opens the task's menu");
             return menu;
@@ -2729,7 +2732,9 @@ Item {
             clickWhenShown(findChild(dialog, "cancelOpenTasks"));
             tryCompare(controller, "currentProjectStatus", "canceled");
             compare(findChild(view, "projectStatusLabel").text, "Canceled");
-            waitForNoRow("cx-1"); // a project lists its canceled tasks nowhere
+            // The project lists its canceled task, finished like a completed
+            // one (#65).
+            tryCompare(waitForRow("cx-1"), "status", "canceled");
             controller.selectView("logbook");
             let row = null;
             tryVerify(() => (row = logbookProject("cancel-proj")) !== null, 2000);
