@@ -163,8 +163,21 @@ pub mod qobject {
             title: &QString,
             below_id: &QString,
         ) -> QString;
+        /// Tick an open task done; reopen a completed or canceled one.
         #[qinvokable]
         fn toggle_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Cancel a task: finished without being done (#65). A canceled
+        /// task is reopened by `toggle_task`.
+        #[qinvokable]
+        fn cancel_task(self: Pin<&mut AppController>, task_id: &QString);
+        /// Copy a task just below itself, open, with its details and
+        /// checklist (#65); returns the copy's id, or an empty string.
+        #[qinvokable]
+        fn duplicate_task(self: Pin<&mut AppController>, task_id: &QString) -> QString;
+        /// Turn an open task into a project of its checklist and open the
+        /// project (#65); returns its id, or an empty string.
+        #[qinvokable]
+        fn convert_task_to_project(self: Pin<&mut AppController>, task_id: &QString) -> QString;
         /// Move a task to the Trash (recoverable until the Trash is emptied).
         #[qinvokable]
         fn trash_task(self: Pin<&mut AppController>, task_id: &QString);
@@ -1175,8 +1188,8 @@ impl qobject::AppController {
         let id = String::from(task_id);
         let db = &self.db;
         let result = db.get_task(&id).and_then(|task| match task {
-            Some(task) if task.status == Status::Completed => db.uncomplete_task(&id),
-            Some(_) => db.complete_task(&id),
+            Some(task) if task.status == Status::Open => db.complete_task(&id),
+            Some(_) => db.uncomplete_task(&id),
             None => Ok(()),
         });
         self.finish(result);
@@ -1185,6 +1198,37 @@ impl qobject::AppController {
     pub fn trash_task(self: Pin<&mut Self>, task_id: &QString) {
         let result = self.db.trash_task(&String::from(task_id));
         self.finish(result);
+    }
+
+    pub fn cancel_task(self: Pin<&mut Self>, task_id: &QString) {
+        let result = self.db.cancel_task(&String::from(task_id));
+        self.finish(result);
+    }
+
+    pub fn duplicate_task(self: Pin<&mut Self>, task_id: &QString) -> QString {
+        match self.db.duplicate_task(&String::from(task_id)) {
+            Ok(copy) => {
+                self.finish(Ok(()));
+                QString::from(copy.as_str())
+            }
+            Err(err) => {
+                self.finish(Err(err));
+                QString::default()
+            }
+        }
+    }
+
+    pub fn convert_task_to_project(self: Pin<&mut Self>, task_id: &QString) -> QString {
+        match self.db.convert_task_to_project(&String::from(task_id)) {
+            Ok(project) => {
+                self.set_view(View::Project(project.clone()));
+                QString::from(project.as_str())
+            }
+            Err(err) => {
+                self.finish(Err(err));
+                QString::default()
+            }
+        }
     }
 
     pub fn restore_task(self: Pin<&mut Self>, task_id: &QString) {
