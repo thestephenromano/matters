@@ -28,6 +28,25 @@ impl Status {
     }
 }
 
+/// How something finished: the closed [`Status`]es. Finishing a project
+/// takes one for the project and one for its open tasks
+/// ([`crate::Database::finish_project`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Outcome {
+    Completed,
+    Canceled,
+}
+
+impl From<Outcome> for Status {
+    fn from(outcome: Outcome) -> Self {
+        match outcome {
+            Outcome::Completed => Status::Completed,
+            Outcome::Canceled => Status::Canceled,
+        }
+    }
+}
+
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
