@@ -454,14 +454,19 @@ Item {
 
     property point projectDragPos
 
+    function beginProjectDrag(id) {
+        dragProjectId = id;
+        projectDrop = null;
+    }
+
+    // A project is dragged anywhere in the sidebar (#164): among the projects
+    // with no area, within its area, or to a place in another area; dropped
+    // on an area's own row, it goes last in that area (#54).
     function updateProjectDrag(scenePos) {
         projectDragPos = scenePos;
-        const projects = projectsList.model;
-        const from = projects.findIndex(p => p.id === dragProjectId);
-        // Dropped on an area, the project is filed there (#54).
-        sidebarDrop = from < 0 ? null : sidebarTargetAt(scenePos, ["area"]);
-        projectDrop = from < 0 || sidebarDrop ? null
-            : dropSlot(projectsList, from, row => projects[row].id, row => false, scenePos);
+        sidebarDrop = sidebarTargetAt(scenePos, ["area"]);
+        projectDrop = sidebarDrop ? null
+            : sidebarSlot(sidebarRows(["projectItem", "areaProjectItem"]), dragProjectId, scenePos);
     }
 
     function endProjectDrag() {
@@ -474,7 +479,83 @@ Item {
         if (target && id !== "")
             controller.setProjectArea(id, target.id);
         else if (drop && id !== "")
-            controller.placeProject(id, drop.afterId);
+            controller.placeProjectInArea(id, drop.group, drop.afterId);
+    }
+
+    // Areas are dragged among themselves (#164), by the grip on their row;
+    // the drop line goes between whole areas, projects included.
+    property string dragAreaId: ""
+    property var areaDrop: null
+
+    function updateAreaDrag(scenePos) {
+        projectDragPos = scenePos;
+        areaDrop = sidebarSlot(sidebarRows(["areaBlock"]), dragAreaId, scenePos);
+    }
+
+    function endAreaDrag() {
+        const id = dragAreaId;
+        const drop = areaDrop;
+        dragAreaId = "";
+        areaDrop = null;
+        if (drop && id !== "")
+            controller.placeArea(id, drop.afterId);
+    }
+
+    // The sidebar's visible rows named `names`, top to bottom.
+    function sidebarRows(names) {
+        const rows = [];
+        const walk = item => {
+            for (let i = 0; i < item.children.length; ++i) {
+                const child = item.children[i];
+                if (!child.visible)
+                    continue;
+                if (names.indexOf(child.objectName) >= 0)
+                    rows.push(child);
+                walk(child);
+            }
+        };
+        walk(projectsList.contentItem);
+        return rows.sort((a, b) => a.mapToItem(null, 0, 0).y - b.mapToItem(null, 0, 0).y);
+    }
+
+    // A sidebar row's id and group: its area's id ("" for none, and for an
+    // area itself). Rows are plain Items to the type checker.
+    function sidebarRowInfo(row: var): var {
+        if (row.objectName === "areaBlock")
+            return { id: row.modelData.id, group: "" };
+        return { id: row.modelData.id, group: row.modelData.area_id || "" };
+    }
+
+    // Where a row dragged over `rows` would land: in the group of the row
+    // under the pointer, after the row above it in that group (or first),
+    // with `y` the line's place in the projects list. Null when the pointer
+    // is over no row, or over the dragged row itself.
+    function sidebarSlot(rows, draggedId, scenePos) {
+        for (let i = 0; i < rows.length; ++i) {
+            const row = rows[i];
+            const p = row.mapFromItem(null, scenePos.x, scenePos.y);
+            if (p.x < 0 || p.x > row.width || p.y < 0 || p.y >= row.height)
+                continue;
+            const info = sidebarRowInfo(row);
+            if (info.id === draggedId)
+                return null;
+            const before = p.y < row.height / 2;
+            let afterId = before ? "" : info.id;
+            if (before) {
+                for (let j = i - 1; j >= 0; --j) {
+                    const above = sidebarRowInfo(rows[j]);
+                    if (above.group !== info.group)
+                        break;
+                    if (above.id !== draggedId) {
+                        afterId = above.id;
+                        break;
+                    }
+                }
+            }
+            const y = row.mapToItem(projectsList.contentItem, 0, before ? 0 : row.height).y;
+            return { group: info.group, afterId: afterId, y: y };
+        }
+        return null;
     }
 
     // ---- Move (Ctrl+Shift+M, dragging onto the sidebar; #54) -----------
@@ -572,7 +653,7 @@ Item {
     Timer {
         interval: 30
         repeat: true
-        running: root.dragTaskId !== "" || root.dragProjectId !== ""
+        running: root.dragTaskId !== "" || root.dragProjectId !== "" || root.dragAreaId !== ""
         onTriggered: {
             const pos = root.dragTaskId !== "" ? root.taskDragPos : root.projectDragPos;
             const p = projectsList.mapFromItem(null, pos.x, pos.y);
@@ -591,6 +672,8 @@ Item {
             projectsList.contentY = y;
             if (root.dragTaskId !== "")
                 root.updateTaskDrag(pos);
+            else if (root.dragAreaId !== "")
+                root.updateAreaDrag(pos);
             else
                 root.updateProjectDrag(pos);
         }
@@ -1024,6 +1107,7 @@ Item {
 
                                 delegate: Column {
                                     id: areaBlock
+                                    objectName: "areaBlock"
                                     required property var modelData
                                     width: projectsList.width
                                     spacing: 2
@@ -1045,7 +1129,7 @@ Item {
 
                                         RowLayout {
                                             anchors.fill: parent
-                                            anchors.leftMargin: 8
+                                            anchors.leftMargin: 22
                                             anchors.rightMargin: 8
                                             spacing: 8
 
@@ -1070,6 +1154,37 @@ Item {
                                             hoverEnabled: true
                                             cursorShape: Qt.PointingHandCursor
                                             onClicked: controller.selectArea(areaBlock.modelData.id)
+                                        }
+
+                                        // Drag grip: reorders the areas (#164).
+                                        Item {
+                                            objectName: "areaGrip"
+                                            anchors.left: parent.left
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 20
+                                            height: parent.height
+                                            opacity: areaMouse.containsMouse || areaDrag.active ? 1 : 0
+
+                                            Icon {
+                                                anchors.centerIn: parent
+                                                name: "grip"
+                                                size: 14
+                                                color: root.colTextSecondary
+                                            }
+                                            HoverHandler { cursorShape: Qt.OpenHandCursor }
+                                            DragHandler {
+                                                id: areaDrag
+                                                target: null
+                                                onActiveChanged: {
+                                                    if (active) {
+                                                        root.dragAreaId = areaBlock.modelData.id;
+                                                        root.areaDrop = null;
+                                                    } else {
+                                                        root.endAreaDrag();
+                                                    }
+                                                }
+                                                onCentroidChanged: if (active) root.updateAreaDrag(centroid.scenePosition)
+                                            }
                                         }
                                     }
 
@@ -1125,6 +1240,31 @@ Item {
                                                 cursorShape: Qt.PointingHandCursor
                                                 onClicked: controller.selectProject(areaProject.modelData.id)
                                             }
+
+                                            // Drag grip, as for projects with no
+                                            // area: within the area or elsewhere (#164).
+                                            Item {
+                                                objectName: "projectGrip"
+                                                x: 8
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                width: 20
+                                                height: parent.height
+                                                opacity: areaProjectMouse.containsMouse || areaProjectDrag.active ? 1 : 0
+
+                                                Icon {
+                                                    anchors.centerIn: parent
+                                                    name: "grip"
+                                                    size: 14
+                                                    color: root.colTextSecondary
+                                                }
+                                                HoverHandler { cursorShape: Qt.OpenHandCursor }
+                                                DragHandler {
+                                                    id: areaProjectDrag
+                                                    target: null
+                                                    onActiveChanged: active ? root.beginProjectDrag(areaProject.modelData.id) : root.endProjectDrag()
+                                                    onCentroidChanged: if (active) root.updateProjectDrag(centroid.scenePosition)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1134,13 +1274,14 @@ Item {
                         // Where a dragged project will land.
                         Rectangle {
                             objectName: "projectDropIndicator"
-                            visible: root.dragProjectId !== "" && root.projectDrop !== null
+                            readonly property var drop: root.dragAreaId !== "" ? root.areaDrop : root.projectDrop
+                            visible: (root.dragProjectId !== "" || root.dragAreaId !== "") && drop !== null
                             z: 10
                             x: 4
                             width: projectsList.width - 8
                             height: 2
                             radius: 1
-                            y: root.projectDrop ? root.projectDrop.y - 1 : 0
+                            y: drop ? drop.y - 1 : 0
                             color: root.colAccent
                         }
                         // Projects with no area; area projects are listed under
@@ -1216,14 +1357,7 @@ Item {
                                 DragHandler {
                                     id: projDrag
                                     target: null
-                                    onActiveChanged: {
-                                        if (active) {
-                                            root.dragProjectId = projItem.modelData.id;
-                                            root.projectDrop = null;
-                                        } else {
-                                            root.endProjectDrag();
-                                        }
-                                    }
+                                    onActiveChanged: active ? root.beginProjectDrag(projItem.modelData.id) : root.endProjectDrag()
                                     onCentroidChanged: if (active) root.updateProjectDrag(centroid.scenePosition)
                                 }
                             }

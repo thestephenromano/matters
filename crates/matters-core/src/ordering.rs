@@ -372,6 +372,55 @@ pub fn place_project(db: &Database, id: &str, after: Option<&str>) -> Result<()>
     write(db, "projects", "sort_order", &place(&list, id, after))
 }
 
+/// File project `id` in `area` (or in none) and place it right after
+/// `after` among that area's projects, or first when `after` is `None`
+/// (dragging in the sidebar, #164), in one transaction. The area must be
+/// live, and `after` one of its projects.
+pub fn place_project_in_area(
+    db: &Database,
+    id: &str,
+    area: Option<&str>,
+    after: Option<&str>,
+) -> Result<()> {
+    let projects = db.list_projects()?;
+    let Some(project) = projects.iter().find(|p| p.id == id) else {
+        return Err(MattersError::NotFound {
+            entity: "project",
+            id: id.to_string(),
+        });
+    };
+    if let Some(area) = area {
+        if !db.list_areas()?.iter().any(|a| a.id == area) {
+            return Err(MattersError::NotFound {
+                entity: "area",
+                id: area.to_string(),
+            });
+        }
+    }
+    // The area's other projects in order, then this one: `place` gives it
+    // a key between its new neighbours (or renumbers the area, leaving out
+    // any key that stays as it is).
+    let mut list: Vec<(String, f64)> = projects
+        .iter()
+        .filter(|p| p.area_id.as_deref() == area && p.id != id)
+        .map(|p| (p.id.clone(), p.sort_order))
+        .collect();
+    list.push((id.to_string(), project.sort_order));
+    check_member(&list, id, after)?;
+    let changes = place(&list, id, after);
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        let now = crate::clock::now_millis();
+        tx.execute(
+            "UPDATE projects SET area_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![area, now, id],
+        )?;
+        update_keys(&tx, "projects", "sort_order", &changes)?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
 /// Move an area in the sidebar so it follows `after` (or comes first).
 pub fn place_area(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
     let list: Vec<(String, f64)> = db

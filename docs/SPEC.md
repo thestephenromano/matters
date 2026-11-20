@@ -73,6 +73,8 @@ Area (e.g. Work, Personal, Finances)
 
 The sidebar provides access to the foundational GTD buckets:
 
+Below them, the sidebar lists the projects with no area, then each area with its projects. Everything there is arranged by its grip: areas among themselves, and a project within its area, to a place in another area, or out of every area. A project dropped on an area's own row goes last in that area.
+
 Above any list, a tag bar offers the tags its tasks have, their own and those of their projects and areas, with the tags those are nested under. Choosing one narrows the list to the tasks (and listed projects) with that tag, a parent tag including the tags under it; choosing it again or **All** shows everything. Narrowing never reorders the list, and navigating clears it.
 
 ### 1. Inbox

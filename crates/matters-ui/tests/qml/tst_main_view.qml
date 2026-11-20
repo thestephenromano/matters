@@ -2053,10 +2053,19 @@ Item {
             return found;
         }
 
+        // The area's row, scrolled into the visible part of the sidebar (the
+        // areas are at the end; the list may still be growing).
         function shownArea(title) {
-            findChild(view, "projectsList").positionViewAtEnd();
+            const projects = findChild(view, "projectsList");
             let found = null;
-            tryVerify(() => (found = sidebarArea(title)) !== null, 2000);
+            tryVerify(() => {
+                projects.positionViewAtEnd();
+                found = sidebarArea(title);
+                if (found === null)
+                    return false;
+                const top = found.mapToItem(projects, 0, 0).y;
+                return top >= 0 && top + found.height <= projects.height;
+            }, 2000, "'" + title + "' in view");
             return found;
         }
 
@@ -2524,6 +2533,59 @@ Item {
                 }
                 return indexOf("tf-in-proj") >= 0;
             }, 2000, "only the project's task, which inherits its tag");
+        }
+
+        // ---- Arranging the sidebar (#164) ----------------------------------------
+
+        function areaOrder() {
+            return JSON.parse(controller.areasJson).map(a => a.title);
+        }
+
+        function areaProjects(areaId) {
+            return JSON.parse(controller.projectsJson).filter(p => p.area_id === areaId).map(p => p.title);
+        }
+
+        function test_areas_are_reordered_by_dragging() {
+            createArea("sd-first");
+            createArea("sd-second");
+            tryVerify(() => areaOrder().indexOf("sd-second") === areaOrder().indexOf("sd-first") + 1, 2000);
+            shownArea("sd-second");
+            wait(50); // laid out before aiming
+            const first = sidebarArea("sd-first");
+            const second = sidebarArea("sd-second");
+            // Just above the middle of sd-first: before it.
+            const to = first.mapToItem(view, first.width / 2, first.height / 2 - 4);
+            dragGripTo(findChild(second, "areaGrip"), to,
+                       () => verify(findChild(view, "projectDropIndicator").visible, "a line shows where it lands"));
+            tryVerify(() => areaOrder().indexOf("sd-second") === areaOrder().indexOf("sd-first") - 1, 2000,
+                      "sd-second moved above sd-first");
+        }
+
+        function test_a_project_is_dragged_within_its_area_and_into_another() {
+            const one = createArea("sd-one");
+            const two = createArea("sd-two");
+            for (const [title, area] of [["sd-p1", one], ["sd-p2", one], ["sd-p3", two]]) {
+                controller.createProject(title);
+                controller.setProjectArea(projectIdOf(title), area);
+            }
+            tryVerify(() => areaProjects(one).join() === "sd-p1,sd-p2", 2000);
+
+            // Within its area: p2 above p1.
+            shownArea("sd-two");
+            let p1 = null, p2 = null;
+            tryVerify(() => (p1 = sidebarAreaProject("sd-p1")) !== null && (p2 = sidebarAreaProject("sd-p2")) !== null, 2000);
+            wait(50);
+            dragGripTo(findChild(p2, "projectGrip"), p1.mapToItem(view, p1.width / 2, p1.height / 2 - 4));
+            tryVerify(() => areaProjects(one).join() === "sd-p2,sd-p1", 2000, "reordered within sd-one");
+
+            // Into another area, at a place: p3 (sd-two) below p2 (sd-one).
+            shownArea("sd-two");
+            let p3 = null;
+            tryVerify(() => (p2 = sidebarAreaProject("sd-p2")) !== null && (p3 = sidebarAreaProject("sd-p3")) !== null, 2000);
+            wait(50);
+            dragGripTo(findChild(p3, "projectGrip"), p2.mapToItem(view, p2.width / 2, p2.height / 2 + 4));
+            tryVerify(() => areaProjects(one).join() === "sd-p2,sd-p3,sd-p1", 2000, "filed in sd-one after sd-p2");
+            compare(areaProjects(two).length, 0);
         }
     }
 }
