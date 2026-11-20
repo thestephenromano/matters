@@ -56,6 +56,7 @@ Area (e.g. Work, Personal, Finances)
 4. **Task (To-Do):**
    * The atomic unit of work.
    * Contains: Title, Notes (markdown-formatted), Checklist, Tags, `When`, `Deadline`, `Status`.
+   * Notes are written as Markdown (CommonMark with GitHub's extensions) and shown formatted until clicked; a click edits the source with the caret where it was. Links, and bare web addresses, open with the desktop's handler: web and mail links at once, any other kind of link only after asking. A closed task's row shows a mark when it has notes.
    * Tags are given to tasks, projects and areas from a tag field that suggests existing tags as you type, and are shown on a closed task's row. A task also matches the tags of its project and area. Tags can be nested; matching a tag matches the tags under it. The Tags window (the tag button in the sidebar) renames, nests and deletes them; deleting a tag never deletes what had it.
    * Can reside in:
      * Inbox (unassigned)
@@ -326,7 +327,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [x] **Done:** domain hierarchy Area → Project → Heading → Task → Checklist. The app has areas (sidebar, area view, filing projects, rename, Trash), projects with headings, tasks and their checklists; Move files a task in the Inbox, an area, a project or a heading. The core refuses any write that would break the hierarchy.
 - [x] **Done:** core views Inbox, Today (with a This Evening section), Upcoming (grouped by day), Anytime (grouped by area and project), Someday, Logbook (grouped by the day tasks were finished) and Trash.
 - [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
-- [x] **Done:** inline task expansion. Title, notes, checklist, When and deadline are edited in place; a closed row shows how much of its checklist is done.
+- [x] **Done:** inline task expansion. Title, notes (shown as formatted Markdown), checklist, When and deadline are edited in place; a closed row shows how much of its checklist is done, and whether it has notes.
 - [x] **Done:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find, `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) and `Ctrl+Shift+M` (Move popover) work, for one selected task at a time (several: #64).
 - [x] **Done:** project progress, as a pie beside the project's title that fills as its tasks are done.
 - [x] **Done:** Quick Find popover. Finds lists, areas, projects, tags and tasks, and opens the one chosen; typing on the task list opens it with what was typed.
