@@ -166,7 +166,7 @@ Matters is designed to be operated with minimal mouse reliance.
 | `F2` | Selected task | Opens the task with its title selected for editing; `Enter` saves and moves to the notes, `Escape` abandons the edit |
 | `Ctrl + S` | Selected task(s) | Opens **When / Schedule** popover (*Today*, *This Evening*, *Someday*, *Clear*, a typed date such as `tomorrow`, `fri`, `in 3 days` or `dec 24` with a preview of its meaning, and a calendar operable by keyboard). Past days, times of day and phrases that name no day (`week`, `this month`) are refused (`Schedule::parse_typed`) |
 | `Ctrl + D` | Selected task(s) | Opens the **Deadline** popover: a typed day (`fri`, `in 3 days`, `dec 24`), a calendar, *Today* or *Clear*. Rows show the deadline, in red when due today or overdue |
-| `Ctrl + Shift + T` | Selected task | Opens the task with its tag field focused. Typing suggests tags (`Up`/`Down` to pick); `Enter` adds the suggestion or the typed tag, creating it if new; `Backspace` in the empty field removes the last tag; `Escape` clears the field, then closes the task |
+| `Ctrl + Shift + T` | Selected task(s) | With several selected, asks for one tag (existing or new) and gives it to all of them. With one, opens the task with its tag field focused. Typing suggests tags (`Up`/`Down` to pick); `Enter` adds the suggestion or the typed tag, creating it if new; `Backspace` in the empty field removes the last tag; `Escape` clears the field, then closes the task |
 | `Ctrl + Shift + M` | Selected task(s) | Opens the **Move** popover: the Inbox, areas, projects and their headings in sidebar order, with the task's current place ticked. Typing filters it (a project's name finds its headings too); `Enter` or a click files the task at the end of the chosen one. Dragging a task onto the sidebar's Inbox, an area or a project does the same, and onto Today or Someday schedules it; dragging a project onto an area files it there. The sidebar scrolls while a dragged item is held near its edge |
 | `Enter` | Checklist item | Opens a field for a new item directly below; `Enter` again saves it and opens the next. `Escape` leaves the checklist, with the task still open |
 | `Up` / `Down` | Checklist item | Goes to the item above or below; `Ctrl + Up` / `Ctrl + Down` move the item |
@@ -183,8 +183,10 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Ctrl + Shift + N` | Anywhere | Creates a new Project |
 | `Delete` / `Backspace` | Selected task(s) | Moves task to Trash |
 | `Up` / `Down` | Task list | Moves list selection |
+| `Shift + Up` / `Shift + Down` | Task list | Selects several tasks: extends the selection from where it started. `Shift` + click selects up to the clicked task, `Ctrl` + click adds or removes one; a plain arrow or click selects one again. The selection survives list refreshes and clears when navigating |
+| `Ctrl + .` | Selected task(s) | Completes them, or reopens them when none is open |
 | `Escape` | Task list, task editor | Closes the open task, then clears the selection; returns focus to the list |
-| `Ctrl + Z` | After moving to Trash, or deleting a heading or checklist item | Undoes, while the Undo notice shows |
+| `Ctrl + Z` | After moving to Trash, deleting a heading or checklist item, or acting on several tasks | Undoes, while the Undo notice shows. An action on several selected tasks (completing, canceling, trashing, scheduling, setting a deadline, moving, tagging or dragging them) is undone at once, each task put back exactly as it was (`matters_core::TaskSnapshot`) |
 | `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list. In Today, moving past the This Evening heading moves the task into or out of This Evening; in a project, moving past a heading files the task under it, or above the headings (dragging does the same) |
 
 ---
@@ -333,7 +335,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [x] **Done:** core views Inbox, Today (with a This Evening section), Upcoming (grouped by day), Anytime (grouped by area and project), Someday, Logbook (grouped by the day tasks were finished) and Trash.
 - [x] **Done:** When vs. Deadline. Any When (typed, from a calendar, or Today, This Evening, Someday) and any deadline can be set; rows show deadlines, in red when due today or overdue.
 - [x] **Done:** inline task expansion. Title, notes (shown as formatted Markdown), checklist, When and deadline are edited in place; a closed row shows how much of its checklist is done, and whether it has notes.
-- [x] **Done:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find, `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) and `Ctrl+Shift+M` (Move popover) work, for one selected task at a time (several: #64).
+- [x] **Done:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find, `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) and `Ctrl+Shift+M` (Move popover) work on one selected task or several: `Shift`/`Ctrl` select several, and every command applies to all of them, with one Undo.
 - [x] **Done:** project progress, as a pie beside the project's title that fills as its tasks are done.
 - [x] **Done:** Quick Find popover. Finds lists, areas, projects, tags and tasks, and opens the one chosen; typing on the task list opens it with what was typed.
 - [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.
