@@ -1464,14 +1464,13 @@ fn row_key(row: &ListRow) -> String {
     match row {
         ListRow::Task(task) => task.id.clone(),
         ListRow::EmptyHeading(heading) => format!("heading:{}", heading.id),
-        ListRow::Project(project) => format!("project:{}", project.id),
     }
 }
 
 fn row_task(row: &ListRow) -> Option<&Task> {
     match row {
         ListRow::Task(task) => Some(task),
-        ListRow::EmptyHeading(_) | ListRow::Project(_) => None,
+        ListRow::EmptyHeading(_) => None,
     }
 }
 
@@ -1556,16 +1555,12 @@ impl qobject::TaskListModel {
                     let progress = db.checklist_progress(&ids)?;
                     let rows = engine.list_rows(&view, tasks)?;
                     for row in &rows {
-                        let key = match row {
-                            ListRow::EmptyHeading(h) => {
-                                matters_core::heading_section_key(&h.id, &h.title)
-                            }
-                            ListRow::Project(p) => {
-                                matters_core::logbook_section_key(p.completed_at)
-                            }
-                            ListRow::Task(_) => continue,
-                        };
-                        sections.insert(row_key(row), key);
+                        if let ListRow::EmptyHeading(h) = row {
+                            sections.insert(
+                                row_key(row),
+                                matters_core::heading_section_key(&h.id, &h.title),
+                            );
+                        }
                     }
                     Ok((rows, sections, progress))
                 })
@@ -1628,7 +1623,7 @@ impl qobject::TaskListModel {
         let heading = match usize::try_from(row).ok().and_then(|r| self.rows.get(r)) {
             Some(ListRow::Task(task)) => task.heading_id.as_deref(),
             Some(ListRow::EmptyHeading(heading)) => Some(heading.id.as_str()),
-            Some(ListRow::Project(_)) | None => None,
+            None => None,
         };
         QString::from(heading.unwrap_or_default())
     }
@@ -1649,7 +1644,6 @@ impl qobject::TaskListModel {
         let task = match row {
             ListRow::Task(task) => task,
             ListRow::EmptyHeading(heading) => return self.heading_data(row, heading, role),
-            ListRow::Project(project) => return self.project_data(row, project, role),
         };
         match role {
             Role::Kind => QVariant::from(&QString::from("task")),
@@ -1696,25 +1690,6 @@ impl qobject::TaskListModel {
                     DeadlineStatus::Overdue => "overdue",
                 }))
             }
-        }
-    }
-
-    /// A finished project's row in the Logbook: its kind, id (as `taskId`),
-    /// title, whether it was completed, and section; the other roles are
-    /// empty.
-    fn project_data(&self, row: &ListRow, project: &Project, role: Role) -> QVariant {
-        match role {
-            Role::Kind => QVariant::from(&QString::from("project")),
-            Role::TaskId => QVariant::from(&QString::from(project.id.as_str())),
-            Role::Title => QVariant::from(&QString::from(project.title.as_str())),
-            Role::Done => QVariant::from(&(project.status == Status::Completed)),
-            Role::Section => QVariant::from(&QString::from(
-                self.sections
-                    .get(&row_key(row))
-                    .map(String::as_str)
-                    .unwrap_or_default(),
-            )),
-            _ => QVariant::default(),
         }
     }
 

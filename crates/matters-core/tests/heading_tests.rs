@@ -322,7 +322,6 @@ fn an_empty_heading_has_a_row_where_its_tasks_would_be() {
         .map(|row| match row {
             ListRow::Task(t) => t.id,
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
-            ListRow::Project(p) => format!("<{}>", p.id),
         })
         .collect();
     assert_eq!(rows, ["loose", "p1", "[empty]", "b1", "[last]"]);
@@ -351,7 +350,6 @@ fn rows_keep_the_order_of_the_tasks_given_within_each_heading() {
         .map(|row| match row {
             ListRow::Task(t) => t.id,
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
-            ListRow::Project(p) => format!("<{}>", p.id),
         })
         .collect();
     assert_eq!(rows, ["x", "b", "a"]);

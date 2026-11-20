@@ -8,8 +8,8 @@
     "ci/sqlite_wal_tests.rs": "740ef3c4ede5883161274782ba7e6e46b0b98c938d9f7deb02a1ba352e0f8f10",
     "docs/SQLITE_REVIEW.md": "059792c1187aecea4484b75d732c4b67302a535de554cd60ad819d3046c99351",
     "docs/SQLITE_UPGRADE.md": "27ef2d121635390b369111155a274451dfcea73beacfe0131fd0647fef7eb3fd",
-    "docs/SYNC_ATOMIC_SENDER.md": "c4bb1565bfa8f39f8f010052f35427c030e05f265f47569ef53c517639f869e4",
-    "docs/SYNC_BIDIRECTIONAL.md": "b90ed64c9d19798803d73254ddeb39b374f2130af0138cd14a8e1e7a0146c2f5",
+    "docs/SYNC_ATOMIC_SENDER.md": "695aa34d31bf6ab5f6d37b7d6e7c8657376604646fd452e02305ef52b9ce69ef",
+    "docs/SYNC_BIDIRECTIONAL.md": "23029f1b4f8282a4157be0ce4375341f5654898f5f4d9d0d2a8ccb52960aadd3",
     "docs/SYNC_DESIGN.md": "0b95de37e3f2ee4a20516fb005b08cdf16eb0978fe5910740c69a05f914f6a1d",
     "docs/SYNC_DURABLE_RECEIVE.md": "a99671638e802b8177e8ed332544219fdd12d0327dbb29e94774bbbf54bb8761",
     "docs/SYNC_ENCRYPTED_OUTBOX.md": "d5fe38bdc19b51c06ec3459fb66ab69a5f5a4dcc5a296a328cd8a398217edfff",
@@ -24,6 +24,7 @@
     "experiments/sync-prototype/Cargo.toml": "98d68b6811cecdba2529da6505137b034df81cd327814461c7dda9775ea4daa6",
     "experiments/sync-prototype/README.md": "a90e90eb047c4b716eed245e3188b7202031933b7401f767d340133154573fbd",
     "experiments/sync-prototype/REVIEW_ATOMIC_SENDER.md": "68c5409c5aa02ab4a6972269c1d1b644b9a130f88c66c60a310a35f3394a6ae9",
+    "experiments/sync-prototype/REVIEW_BIDIRECTIONAL.md": "f00c234767e1d4f2ab71704251b5a5fda4cfb4cd67e681ab71eb909f254cab7c",
     "experiments/sync-prototype/REVIEW_DURABLE_RECEIVE.md": "4edd6c6bd6ad948ae2dda7b3df76ad0a2ba2b7c59d4bb82928afd7c16042d443",
     "experiments/sync-prototype/REVIEW_ENCRYPTED_OUTBOX.md": "89973fc6fe9d9a1bae64c48010060ee0d6b6ce2a48d9e992e5a50dd53cefa842",
     "experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md": "19a43b042517a212e1fce6eebb9c6f136c034032a7e983e4077fced2a592c77f",
@@ -31,12 +32,12 @@
     "experiments/sync-prototype/REVIEW_WRITER_LIFECYCLE.md": "db070ece7687ec68f8bf119e96dd47ed38f3386b7b88d8d08960dbb699dead98",
     "experiments/sync-prototype/baseline/Cargo.toml": "36853bbbd79151afeb6479fac879f5e9be2e7b50f1e0d50804e7c05c621c5aad",
     "experiments/sync-prototype/baseline/src/main.rs": "73a937eb3e02ee8d67274704b8d922106914816e4e3fcc15815afdcf7ead2d20",
-    "experiments/sync-prototype/src/lib.rs": "a51958173c8249a19b20c26cb8119afcd54f5ffbeeabaef2c8b4e382cba08c02",
+    "experiments/sync-prototype/src/lib.rs": "e3ea30e66952000e309cbe8449ca9525ede31f4f32de2aa69a4c242f051044e9",
     "experiments/sync-prototype/src/model.rs": "21ea2823fb40428eb65be105a099dcca2d1c174b939ac3458380e0dc4ec7ee98",
-    "experiments/sync-prototype/src/replica.rs": "384fabb5272a1fbb2f1cafff5f75fb2288b0a7e96032053f02776c615d553b07",
+    "experiments/sync-prototype/src/replica.rs": "e1ca6cce7f5b231ffce1ff722dc027ea10c8dc8f4bef52d5b0a2ec75a29d8594",
     "experiments/sync-prototype/src/wire.rs": "0291319a3e0563d0d91a50043537df5160e407abdf9bd793a37b93f45aabb549",
     "experiments/sync-prototype/tests/cases/atomic_sender.rs": "6fe5d483feb4e18ffe064a3d0918c3dac12c087419cd4eae8999600abc4aaf0b",
-    "experiments/sync-prototype/tests/cases/bidirectional.rs": "0b658f10a54f069e24450458d1fa02bd9461d96ab2c5f3fc160bbef654ccfd8c",
+    "experiments/sync-prototype/tests/cases/bidirectional.rs": "fa592497f1ebec87211833e113300ff05d8f98dd17c6ab91b96ebeee6b62ae8e",
     "experiments/sync-prototype/tests/cases/encrypted_inbox.rs": "9412a581ad710b1c260408dd013727c14a5903178f1260a93217c55916a962e1",
     "experiments/sync-prototype/tests/cases/encrypted_outbox.rs": "ca76b41fd4cbd3834e4496a2d9aceed698a99f4eb39bf578bf781ac7fff963ec",
     "experiments/sync-prototype/tests/cases/writer_lifecycle.rs": "c452834e99b0dd2189c84ef9bfd5da22eedb01bb32b31d59afe532159b71737e",
@@ -46,9 +47,9 @@
     "experiments/sync-prototype/tests/record_contract.rs": "2ff9e6e1fb0bb1d4b5a2b788058750fa7bd94656497ab2a7141dc23fa246e4f7",
     "experiments/sync-prototype/tests/review_regressions.rs": "b85fa55b4a2e3bfc764b15e38ac653dc33b557721bf292e99fa9923a223b1b24",
     "experiments/sync-prototype/tests/sqlite.rs": "7fa0bf70f839356c2326a81dd2ea18992aabbf32d0bb8099a6825fd7d33382b9",
-    "experiments/sync-prototype/tests/support/atomic_sender.rs": "441aaf9b91389603bad856efb753a5ac11476e2a256880ae1358ba958313eb79",
-    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "100963aa7e91d4ba990746229fc1ccca136eeacd4987d1901c18713fea81422f",
-    "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "0ac5fd979e06c20d31a2f59675270261b3eaf54df2ffc692fe243a4e3c6565e3",
+    "experiments/sync-prototype/tests/support/atomic_sender.rs": "5f6eb724693c4c2d9a4b1de8d217081e1e6b5bc96e93d6d543171e12bcb029ff",
+    "experiments/sync-prototype/tests/support/encrypted_inbox.rs": "41bb3283a43affaf77afe7aef48113f2d138c8e179c36844cf5f87fb32dcba37",
+    "experiments/sync-prototype/tests/support/encrypted_outbox.rs": "70c058a7f497e41f757bc7771d943a4a5b39a262787e79ede71f6ed5e246d46a",
     "experiments/sync-prototype/tests/support/key_distribution.rs": "a4758f303361bb8c73459f0568a8dbe4f29b3817a1596153b42b766ea2baa175",
     "experiments/sync-prototype/tests/support/record_chain.rs": "ae6b9ca0904ce78af2bbaeb066139ae0783c3d3166e9a926fad3f825ec4ad893",
     "experiments/sync-prototype/tests/support/record_crypto.rs": "85f652231a86fb6cc3367a7677d88f6ed61c61ffacc56ca6ff7d0009b41ab8f2",
@@ -58,7 +59,7 @@
     "experiments/sync-prototype/tests/vectors/key-distribution/generate.py": "5fc38f1cf960b620314069007df97ff6f14b570a4440874ba754eb70d896f6de",
     "experiments/sync-prototype/tests/vectors/key-distribution/golden.json": "9104d08ac2fe7e81f2c46622be09b4400c6f7d1ace2f1836014f491d7d73764a",
     "experiments/sync-prototype/tests/vectors/record-contract/README.md": "e7d1a9259229d049f78ca532bdaff3c6fedfa9ccf1b3489c6ff1864667307409",
-    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "189bd499eb67c2e868a66d80f0d42920c30abe5d9650dd74910e6f2e8c58b637",
+    "experiments/sync-prototype/tests/vectors/record-contract/check_evidence.py": "fc946d2c6dadd30d46ef7357c61979d2825fc8341def5a8f1903c14e7aed9ad2",
     "experiments/sync-prototype/tests/vectors/record-contract/generate.py": "66e54329920fde8eb08bd268f5a6bbbe954afe66ae410082c8a52e70d00a14d1",
     "experiments/sync-prototype/tests/vectors/record-contract/golden.json": "8e680f891450c8504466503916dd9177fba920c942e212eafde03bc7a15539ee",
     "experiments/sync-prototype/tests/vectors/record-contract/requirements.txt": "e8827e5e32f37d1f8f315e2dd6ad387eb669b2aeeb66fac6edce0af5776f5db6"
@@ -879,7 +880,7 @@
       "app": {
         "manifest": "Cargo.toml",
         "lockfile_sha256": "f1e2a3959def0f888e085df925c53779e7cfeee768c6c0d1dd33a29c0cbac8c3",
-        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        \u251c\u2500\u2500 matters-gtk v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-gtk)\n        \u2514\u2500\u2500 matters-ui v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-ui)\n",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n└── rusqlite v0.43.0\n    └── matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        ├── matters-gtk v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-gtk)\n        └── matters-ui v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-ui)\n",
         "selected_packages": [
           {
             "name": "foldhash",
@@ -937,7 +938,7 @@
       "prototype": {
         "manifest": "experiments/sync-prototype/Cargo.toml",
         "lockfile_sha256": "0b48a50603054b09f3214da21f1fb4542719c21e8e37174c893118b97a1f515e",
-        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-sync-prototype v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype)\n",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n└── rusqlite v0.43.0\n    └── matters-sync-prototype v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype)\n",
         "selected_packages": [
           {
             "name": "foldhash",
@@ -999,7 +1000,7 @@
       "baseline": {
         "manifest": "experiments/sync-prototype/baseline/Cargo.toml",
         "lockfile_sha256": "f3515f7f67cdd7633dddc8f1fdc41657e438e1e9c947b9025eda20caa5d9a373",
-        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        \u2514\u2500\u2500 matters-sync-baseline v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype/baseline)\n",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n└── rusqlite v0.43.0\n    └── matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        └── matters-sync-baseline v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype/baseline)\n",
         "selected_packages": [
           {
             "name": "foldhash",
@@ -1058,9 +1059,9 @@
       }
     },
     "dependency_trees_before": {
-      "app": "libsqlite3-sys v0.30.1\n\u2514\u2500\u2500 rusqlite v0.32.1\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        \u251c\u2500\u2500 matters-gtk v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-gtk)\n        \u2514\u2500\u2500 matters-ui v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-ui)\n",
-      "prototype": "libsqlite3-sys v0.30.1\n\u2514\u2500\u2500 rusqlite v0.32.1\n    \u2514\u2500\u2500 matters-sync-prototype v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype)\n",
-      "baseline": "libsqlite3-sys v0.30.1\n\u2514\u2500\u2500 rusqlite v0.32.1\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        \u2514\u2500\u2500 matters-sync-baseline v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype/baseline)\n"
+      "app": "libsqlite3-sys v0.30.1\n└── rusqlite v0.32.1\n    └── matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        ├── matters-gtk v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-gtk)\n        └── matters-ui v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-ui)\n",
+      "prototype": "libsqlite3-sys v0.30.1\n└── rusqlite v0.32.1\n    └── matters-sync-prototype v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype)\n",
+      "baseline": "libsqlite3-sys v0.30.1\n└── rusqlite v0.32.1\n    └── matters-core v0.1.0 (/tmp/matters-sqlite97-20261118/crates/matters-core)\n        └── matters-sync-baseline v0.0.0 (/tmp/matters-sqlite97-20261118/experiments/sync-prototype/baseline)\n"
     },
     "runtime_probes_before": {
       "app": {
@@ -1241,8 +1242,8 @@
         "manifest": "Cargo.toml",
         "committed_lockfile": "Cargo.lock",
         "lockfile_sha256": "d9107137e79eaa2790825e35b2dc0e1a404efe3fdf07904594eb874925654673",
-        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n        \u251c\u2500\u2500 matters-gtk v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-gtk)\n        \u2514\u2500\u2500 matters-ui v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-ui)\n",
-        "native_rusqlite_tree": "rusqlite v0.43.0\n\u251c\u2500\u2500 bitflags v2.13.2\n\u251c\u2500\u2500 chrono v0.4.45\n\u2502   \u251c\u2500\u2500 iana-time-zone v0.1.65\n\u2502   \u251c\u2500\u2500 num-traits v0.2.19\n\u2502   \u2502   [build-dependencies]\n\u2502   \u2502   \u2514\u2500\u2500 autocfg v1.5.1\n\u2502   \u2514\u2500\u2500 serde v1.0.229\n\u2502       \u251c\u2500\u2500 serde_core v1.0.229\n\u2502       \u2514\u2500\u2500 serde_derive v1.0.229 (proc-macro)\n\u2502           \u251c\u2500\u2500 proc-macro2 v1.0.107\n\u2502           \u2502   \u2514\u2500\u2500 unicode-ident v1.0.27\n\u2502           \u251c\u2500\u2500 quote v1.0.47\n\u2502           \u2502   \u2514\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502           \u2514\u2500\u2500 syn v3.0.10\n\u2502               \u251c\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502               \u251c\u2500\u2500 quote v1.0.47 (*)\n\u2502               \u2514\u2500\u2500 unicode-ident v1.0.27\n\u251c\u2500\u2500 fallible-iterator v0.3.0\n\u251c\u2500\u2500 fallible-streaming-iterator v0.1.9\n\u251c\u2500\u2500 hashlink v0.12.2\n\u2502   \u2514\u2500\u2500 hashbrown v0.17.1\n\u2502       \u2514\u2500\u2500 foldhash v0.2.0\n\u251c\u2500\u2500 libsqlite3-sys v0.40.0\n\u2502   [build-dependencies]\n\u2502   \u251c\u2500\u2500 cc v1.11.2\n\u2502   \u2502   \u251c\u2500\u2500 find-msvc-tools v0.1.15\n\u2502   \u2502   \u251c\u2500\u2500 jobserver v0.1.35\n\u2502   \u2502   \u2502   \u2514\u2500\u2500 libc v0.2.191\n\u2502   \u2502   \u251c\u2500\u2500 libc v0.2.191\n\u2502   \u2502   \u2514\u2500\u2500 shlex v2.0.1\n\u2502   \u251c\u2500\u2500 pkg-config v0.3.34\n\u2502   \u2514\u2500\u2500 vcpkg v0.2.15\n\u251c\u2500\u2500 smallvec v1.16.5\n\u2514\u2500\u2500 uuid v1.29.3\n    \u251c\u2500\u2500 getrandom v0.4.3\n    \u2502   \u251c\u2500\u2500 cfg-if v1.0.5\n    \u2502   \u2514\u2500\u2500 libc v0.2.191\n    \u2514\u2500\u2500 serde_core v1.0.229\n",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n└── rusqlite v0.43.0\n    └── matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n        ├── matters-gtk v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-gtk)\n        └── matters-ui v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-ui)\n",
+        "native_rusqlite_tree": "rusqlite v0.43.0\n├── bitflags v2.13.2\n├── chrono v0.4.45\n│   ├── iana-time-zone v0.1.65\n│   ├── num-traits v0.2.19\n│   │   [build-dependencies]\n│   │   └── autocfg v1.5.1\n│   └── serde v1.0.229\n│       ├── serde_core v1.0.229\n│       └── serde_derive v1.0.229 (proc-macro)\n│           ├── proc-macro2 v1.0.107\n│           │   └── unicode-ident v1.0.27\n│           ├── quote v1.0.47\n│           │   └── proc-macro2 v1.0.107 (*)\n│           └── syn v3.0.10\n│               ├── proc-macro2 v1.0.107 (*)\n│               ├── quote v1.0.47 (*)\n│               └── unicode-ident v1.0.27\n├── fallible-iterator v0.3.0\n├── fallible-streaming-iterator v0.1.9\n├── hashlink v0.12.2\n│   └── hashbrown v0.17.1\n│       └── foldhash v0.2.0\n├── libsqlite3-sys v0.40.0\n│   [build-dependencies]\n│   ├── cc v1.11.2\n│   │   ├── find-msvc-tools v0.1.15\n│   │   ├── jobserver v0.1.35\n│   │   │   └── libc v0.2.191\n│   │   ├── libc v0.2.191\n│   │   └── shlex v2.0.1\n│   ├── pkg-config v0.3.34\n│   └── vcpkg v0.2.15\n├── smallvec v1.16.5\n└── uuid v1.29.3\n    ├── getrandom v0.4.3\n    │   ├── cfg-if v1.0.5\n    │   └── libc v0.2.191\n    └── serde_core v1.0.229\n",
         "selected_packages": [
           {
             "name": "hashlink",
@@ -1297,8 +1298,8 @@
         "manifest": "experiments/sync-prototype/Cargo.toml",
         "committed_lockfile": "experiments/sync-prototype/Cargo.lock",
         "lockfile_sha256": "d6a31bdcec9e440ed4c205bdce8d8bef47afb398dab574a8bd2cf6ad0fdaf6e7",
-        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n",
-        "native_rusqlite_tree": "rusqlite v0.43.0\n\u251c\u2500\u2500 bitflags v2.13.2\n\u251c\u2500\u2500 fallible-iterator v0.3.0\n\u251c\u2500\u2500 fallible-streaming-iterator v0.1.9\n\u251c\u2500\u2500 hashlink v0.12.2\n\u2502   \u2514\u2500\u2500 hashbrown v0.17.1\n\u2502       \u2514\u2500\u2500 foldhash v0.2.0\n\u251c\u2500\u2500 libsqlite3-sys v0.40.0\n\u2502   [build-dependencies]\n\u2502   \u251c\u2500\u2500 cc v1.11.2\n\u2502   \u2502   \u251c\u2500\u2500 find-msvc-tools v0.1.15\n\u2502   \u2502   \u2514\u2500\u2500 shlex v2.0.1\n\u2502   \u251c\u2500\u2500 pkg-config v0.3.34\n\u2502   \u2514\u2500\u2500 vcpkg v0.2.15\n\u2514\u2500\u2500 smallvec v1.16.6\n    \u2514\u2500\u2500 serde v1.0.229\n        \u251c\u2500\u2500 serde_core v1.0.229\n        \u2514\u2500\u2500 serde_derive v1.0.229 (proc-macro)\n            \u251c\u2500\u2500 proc-macro2 v1.0.107\n            \u2502   \u2514\u2500\u2500 unicode-ident v1.0.27\n            \u251c\u2500\u2500 quote v1.0.47\n            \u2502   \u2514\u2500\u2500 proc-macro2 v1.0.107 (*)\n            \u2514\u2500\u2500 syn v3.0.10\n                \u251c\u2500\u2500 proc-macro2 v1.0.107 (*)\n                \u251c\u2500\u2500 quote v1.0.47 (*)\n                \u2514\u2500\u2500 unicode-ident v1.0.27\n",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n└── rusqlite v0.43.0\n    └── matters-sync-prototype v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype)\n",
+        "native_rusqlite_tree": "rusqlite v0.43.0\n├── bitflags v2.13.2\n├── fallible-iterator v0.3.0\n├── fallible-streaming-iterator v0.1.9\n├── hashlink v0.12.2\n│   └── hashbrown v0.17.1\n│       └── foldhash v0.2.0\n├── libsqlite3-sys v0.40.0\n│   [build-dependencies]\n│   ├── cc v1.11.2\n│   │   ├── find-msvc-tools v0.1.15\n│   │   └── shlex v2.0.1\n│   ├── pkg-config v0.3.34\n│   └── vcpkg v0.2.15\n└── smallvec v1.16.6\n    └── serde v1.0.229\n        ├── serde_core v1.0.229\n        └── serde_derive v1.0.229 (proc-macro)\n            ├── proc-macro2 v1.0.107\n            │   └── unicode-ident v1.0.27\n            ├── quote v1.0.47\n            │   └── proc-macro2 v1.0.107 (*)\n            └── syn v3.0.10\n                ├── proc-macro2 v1.0.107 (*)\n                ├── quote v1.0.47 (*)\n                └── unicode-ident v1.0.27\n",
         "selected_packages": [
           {
             "name": "hashlink",
@@ -1351,8 +1352,8 @@
         "manifest": "experiments/sync-prototype/baseline/Cargo.toml",
         "committed_lockfile": "experiments/sync-prototype/baseline/Cargo.lock",
         "lockfile_sha256": "4017e18fb260b9f44603483dadaf041f71df87f5eb6e1cd6002099babf67eff9",
-        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n\u2514\u2500\u2500 rusqlite v0.43.0\n    \u2514\u2500\u2500 matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n        \u2514\u2500\u2500 matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n    [dev-dependencies]\n    \u2514\u2500\u2500 matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n",
-        "native_rusqlite_tree": "rusqlite v0.43.0\n\u251c\u2500\u2500 bitflags v2.13.2\n\u251c\u2500\u2500 chrono v0.4.45\n\u2502   \u251c\u2500\u2500 iana-time-zone v0.1.65\n\u2502   \u251c\u2500\u2500 num-traits v0.2.19\n\u2502   \u2502   [build-dependencies]\n\u2502   \u2502   \u2514\u2500\u2500 autocfg v1.5.1\n\u2502   \u2514\u2500\u2500 serde v1.0.229\n\u2502       \u251c\u2500\u2500 serde_core v1.0.229\n\u2502       \u2514\u2500\u2500 serde_derive v1.0.229 (proc-macro)\n\u2502           \u251c\u2500\u2500 proc-macro2 v1.0.107\n\u2502           \u2502   \u2514\u2500\u2500 unicode-ident v1.0.27\n\u2502           \u251c\u2500\u2500 quote v1.0.47\n\u2502           \u2502   \u2514\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502           \u2514\u2500\u2500 syn v3.0.10\n\u2502               \u251c\u2500\u2500 proc-macro2 v1.0.107 (*)\n\u2502               \u251c\u2500\u2500 quote v1.0.47 (*)\n\u2502               \u2514\u2500\u2500 unicode-ident v1.0.27\n\u251c\u2500\u2500 fallible-iterator v0.3.0\n\u251c\u2500\u2500 fallible-streaming-iterator v0.1.9\n\u251c\u2500\u2500 hashlink v0.12.2\n\u2502   \u2514\u2500\u2500 hashbrown v0.17.1\n\u2502       \u2514\u2500\u2500 foldhash v0.2.0\n\u251c\u2500\u2500 libsqlite3-sys v0.40.0\n\u2502   [build-dependencies]\n\u2502   \u251c\u2500\u2500 cc v1.11.2\n\u2502   \u2502   \u251c\u2500\u2500 find-msvc-tools v0.1.15\n\u2502   \u2502   \u2514\u2500\u2500 shlex v2.0.1\n\u2502   \u251c\u2500\u2500 pkg-config v0.3.34\n\u2502   \u2514\u2500\u2500 vcpkg v0.2.15\n\u251c\u2500\u2500 smallvec v1.16.6\n\u2514\u2500\u2500 uuid v1.29.3\n    \u251c\u2500\u2500 getrandom v0.4.3\n    \u2502   \u251c\u2500\u2500 cfg-if v1.0.5\n    \u2502   \u2514\u2500\u2500 libc v0.2.191\n    \u2514\u2500\u2500 serde_core v1.0.229\n",
+        "sqlite_dependency_tree": "libsqlite3-sys v0.40.0\n└── rusqlite v0.43.0\n    └── matters-core v0.1.0 (/tmp/matters-sqlite-review-20261118/crates/matters-core)\n        └── matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n    [dev-dependencies]\n    └── matters-sync-baseline v0.0.0 (/tmp/matters-sqlite-review-20261118/experiments/sync-prototype/baseline)\n",
+        "native_rusqlite_tree": "rusqlite v0.43.0\n├── bitflags v2.13.2\n├── chrono v0.4.45\n│   ├── iana-time-zone v0.1.65\n│   ├── num-traits v0.2.19\n│   │   [build-dependencies]\n│   │   └── autocfg v1.5.1\n│   └── serde v1.0.229\n│       ├── serde_core v1.0.229\n│       └── serde_derive v1.0.229 (proc-macro)\n│           ├── proc-macro2 v1.0.107\n│           │   └── unicode-ident v1.0.27\n│           ├── quote v1.0.47\n│           │   └── proc-macro2 v1.0.107 (*)\n│           └── syn v3.0.10\n│               ├── proc-macro2 v1.0.107 (*)\n│               ├── quote v1.0.47 (*)\n│               └── unicode-ident v1.0.27\n├── fallible-iterator v0.3.0\n├── fallible-streaming-iterator v0.1.9\n├── hashlink v0.12.2\n│   └── hashbrown v0.17.1\n│       └── foldhash v0.2.0\n├── libsqlite3-sys v0.40.0\n│   [build-dependencies]\n│   ├── cc v1.11.2\n│   │   ├── find-msvc-tools v0.1.15\n│   │   └── shlex v2.0.1\n│   ├── pkg-config v0.3.34\n│   └── vcpkg v0.2.15\n├── smallvec v1.16.6\n└── uuid v1.29.3\n    ├── getrandom v0.4.3\n    │   ├── cfg-if v1.0.5\n    │   └── libc v0.2.191\n    └── serde_core v1.0.229\n",
         "selected_packages": [
           {
             "name": "hashlink",
@@ -4290,5 +4291,89 @@
       "No hostile-import/staging resource bound, performance, cross-target or power/media-loss claim",
       "Production migration/UI, changing membership, compaction, reconciliation and independent review remain open"
     ]
+  },
+  "bidirectional_review": {
+    "reviewed_pull_request": 150,
+    "reviewed_merge": "dd63919",
+    "implementation_commit": "bbd9906afb583ebc705c81a890ab6699c47b79ca",
+    "review_record": "experiments/sync-prototype/REVIEW_BIDIRECTIONAL.md",
+    "contract": "docs/SYNC_BIDIRECTIONAL.md",
+    "findings_addressed": 10,
+    "decisions": {
+      "budget_charging": "The shared 32-row receive and 32-control writer budgets are unchanged and now charged where each consumer is created: a local intent in its command transaction, a remote record at receipt (local intents counted), a writer announcement in the signing open. Exhaustion refuses that action; a pass never fails on capacity.",
+      "merge_conflict": "A shared pass that merges into a state without a projection rolls back and records domain-merge-conflict; later passes report it before staging and local commands continue. force_merge_conflict is a test seam because the seeded merge property test shows valid commands never reach it.",
+      "formats": "matters-sync-atomic-outbox/1 for sender-only stores, matters-sync-atomic-outbox/2 for stores that also receive (LocalOutbox::format); opens accept both and check the receive mode; matters-encrypted-inbox/3 unchanged"
+    },
+    "regression_before": {
+      "scope": "The five new tests run against the #150 implementation (origin/main copies of src/ and tests/support/), with force_merge_conflict and Sender::merge_conflict added to that code as the only changes.",
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--features",
+          "crypto-probe,record-contract",
+          "--test",
+          "key_distribution",
+          "--",
+          "the_shared_receive",
+          "a_full_writer",
+          "a_shared_merge",
+          "a_failed_shared",
+          "a_sender_only"
+        ]
+      ],
+      "failed": [
+        "the_shared_receive_budget_counts_local_and_remote_rows_where_they_arrive",
+        "a_full_writer_budget_refuses_a_new_writer_and_never_blocks_application",
+        "a_shared_merge_conflict_is_recorded_and_stops_application_without_restaging",
+        "a_failed_shared_write_never_reaches_the_before_apply_point",
+        "a_sender_only_store_keeps_the_first_atomic_marker"
+      ],
+      "reasons": {
+        "the_shared_receive": "all 12 remote records accepted past the 32-row budget",
+        "a_full_writer": "process_incoming failed with writer receipt capacity after reopens",
+        "a_shared_merge": "no conflict recorded after the rolled-back pass",
+        "a_failed_shared": "BeforeApply fired before the failing journal and projection writes",
+        "a_sender_only": "refusing incompatible prototype database for a /1 sender-only store"
+      }
+    },
+    "manual_mutations": {
+      "base": "bbd9906afb583ebc705c81a890ab6699c47b79ca",
+      "scope": "Seven named substitutions, each compiled (checked separately) and caught by the named test; source restored after each. Not exhaustive.",
+      "results": [
+        "remote receipt not charged: caught (the_shared_receive)",
+        "local intent not charged: caught (the_shared_receive)",
+        "announcements not retained at open: caught (a_full_writer)",
+        "conflict not recorded: caught (a_shared_merge)",
+        "recorded conflict not checked before staging: caught (a_shared_merge)",
+        "before_commit runs before the projection write: caught (a_failed_shared)",
+        "bidirectional store marked /1: caught (a_sender_only)"
+      ]
+    },
+    "new_normal_tests": 5,
+    "local_gates": {
+      "scope": "Focused prototype checks run locally; the full CI lanes (oracle generators, include-ignored suite) run in the prototype workflow.",
+      "commands": [
+        "cargo fmt --check",
+        "cargo clippy --locked --all-targets --features crypto-probe,record-contract -- -D warnings",
+        "cargo test --locked --features crypto-probe,record-contract",
+        "cargo test --locked --features crypto-probe,record-contract --test key_distribution bidirectional -- --include-ignored",
+        "python tests/vectors/record-contract/check_evidence.py",
+        "python tests/vectors/check_evidence_guards.py"
+      ],
+      "normal_results": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored",
+        "test result: ok. 24 passed; 0 failed; 0 ignored",
+        "test result: ok. 4 passed; 0 failed; 1 ignored",
+        "test result: ok. 3 passed; 0 failed; 0 ignored",
+        "test result: ok. 117 passed; 0 failed; 5 ignored",
+        "test result: ok. 9 passed; 0 failed; 0 ignored",
+        "test result: ok. 25 passed; 0 failed; 0 ignored",
+        "test result: ok. 7 passed; 0 failed; 1 ignored",
+        "test result: ok. 0 passed; 0 failed; 0 ignored"
+      ],
+      "bidirectional_include_ignored": "test result: ok. 15 passed; 0 failed; 0 ignored"
+    }
   }
 }

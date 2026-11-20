@@ -1,12 +1,15 @@
 //! Single-file domain + outbox experiment. Keys stay with trusted callbacks.
-use crate::encrypted_inbox::{Config, Entry, Inbox, Point as InPoint};
+use crate::encrypted_inbox::{
+    has_shared_inbox, Config, Entry, Inbox, Point as InPoint, MERGE_CONFLICT,
+};
 use crate::encrypted_outbox::{
     Binding, Composition, Outbox, Point, RecoveryIntent, Stored, Writer,
 };
 use crate::record_chain::Id;
 use crate::support::{EpochKey, Message};
 use matters_sync_prototype::{
-    wire, Fault, LocalOutbox, Projection, Record, Replica, Request, Result,
+    invalid, wire, Fault, LocalOutbox, Projection, Record, Replica, Request, Result, ATOMIC_FORMAT,
+    SHARED_ATOMIC_FORMAT,
 };
 use rusqlite::Transaction;
 use std::path::Path;
@@ -30,10 +33,18 @@ fn request_id(batch: &Id) -> Result<String> {
 }
 struct Participant {
     writer: Writer,
+    shared: bool,
 }
 impl LocalOutbox for Participant {
     fn actor(&self) -> u64 {
         self.writer.actor
+    }
+    fn format(&self) -> &'static str {
+        if self.shared {
+            SHARED_ATOMIC_FORMAT
+        } else {
+            ATOMIC_FORMAT
+        }
     }
     fn check_owner(&self, tx: &Transaction<'_>) -> Result<()> {
         Outbox::check_owner(tx, self.writer)
@@ -110,15 +121,8 @@ impl Sender {
         let replica = Replica::open_with_outbox(
             path,
             |tx, exists| {
-                let has_inbox: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='inbox_meta')",
-                    [],
-                    |r| r.get(0),
-                )?;
-                if exists && has_inbox != config.is_some() {
-                    return Err(matters_sync_prototype::invalid(
-                        "cannot change sender receive mode",
-                    ));
+                if exists && has_shared_inbox(tx)? != config.is_some() {
+                    return Err(invalid("cannot change sender receive mode"));
                 }
                 if let Some(config) = &config {
                     Inbox::initialize_shared(tx, config)?;
@@ -131,9 +135,16 @@ impl Sender {
                     Some(sign),
                     exists,
                 )?;
+                if config.is_some() {
+                    // The new announcement takes its writer-budget slot now.
+                    Inbox::retain_local_writers(tx)?;
+                }
                 hook.borrow_mut()(Point::BeforeWriterCommit)?;
                 writer = Some(next);
-                Ok(Box::new(Participant { writer: next }))
+                Ok(Box::new(Participant {
+                    writer: next,
+                    shared: config.is_some(),
+                }))
             },
             // Right after the writer and its announcement commit, before the
             // rest of the open (projection, restore) can fail.
@@ -149,15 +160,22 @@ impl Sender {
             inbox,
         })
     }
+    fn inbox(&self) -> Result<&Inbox> {
+        self.inbox
+            .as_ref()
+            .ok_or_else(|| invalid("bidirectional sender required"))
+    }
+    fn inbox_mut(&mut self) -> Result<&mut Inbox> {
+        self.inbox
+            .as_mut()
+            .ok_or_else(|| invalid("bidirectional sender required"))
+    }
     pub fn receive_writer(
         &mut self,
         bytes: &[u8],
         hook: impl FnMut(InPoint) -> Result<()>,
     ) -> Result<()> {
-        self.inbox
-            .as_mut()
-            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
-            .receive_writer(bytes, hook)
+        self.inbox_mut()?.receive_writer(bytes, hook)
     }
     pub fn receive_record(
         &mut self,
@@ -166,23 +184,23 @@ impl Sender {
         bytes: &[u8],
         hook: impl FnMut(InPoint) -> Result<()>,
     ) -> Result<()> {
-        self.inbox
-            .as_mut()
-            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
-            .receive(generation, sequence, bytes, hook)
+        self.inbox_mut()?.receive(generation, sequence, bytes, hook)
     }
     pub fn receive_cursor(&self) -> Result<i64> {
-        self.inbox
-            .as_ref()
-            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
-            .cursor()
+        self.inbox()?.cursor()
     }
     pub fn received_entries(&self) -> Result<Vec<Entry>> {
-        self.inbox
-            .as_ref()
-            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?
-            .entries()
+        self.inbox()?.entries()
     }
+    /// The recorded merge conflict that stopped application, if any.
+    pub fn merge_conflict(&self) -> Result<Option<String>> {
+        self.inbox()?.merge_conflict()
+    }
+    /// Apply retained incoming records in one replica transaction. If the
+    /// accepted records merge into a state with no projection, the pass
+    /// rolls back and the conflict is recorded; later passes report it
+    /// without staging again, and local work continues on the last good
+    /// state.
     pub fn process_incoming(
         &mut self,
         key: &EpochKey,
@@ -192,17 +210,27 @@ impl Sender {
         let inbox = self
             .inbox
             .as_mut()
-            .ok_or_else(|| matters_sync_prototype::invalid("bidirectional sender required"))?;
+            .ok_or_else(|| invalid("bidirectional sender required"))?;
         let mut admitted = None;
-        self.replica.apply_authenticated(
+        let mut conflict = false;
+        let result = self.replica.apply_authenticated(
             |tx, doc| {
                 let prepared = inbox.prepare_shared(tx, key, doc)?;
+                if prepared.conflict {
+                    conflict = true;
+                    return Err(invalid(MERGE_CONFLICT));
+                }
                 admitted = Some(prepared.admitted);
-                hook(InPoint::BeforeApply)?;
                 Ok((prepared.doc, prepared.imports))
             },
+            // Everything is staged, just before the shared commit.
+            || hook(InPoint::BeforeApply),
             fault,
-        )?;
+        );
+        if conflict {
+            inbox.record_conflict()?;
+        }
+        result?;
         inbox.publish(admitted.expect("prepare completed"));
         hook(InPoint::AfterApply)
     }

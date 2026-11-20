@@ -13,7 +13,7 @@ pub use checklist::{ChecklistItem, ChecklistProgress};
 pub use heading::{DeletedHeading, Heading};
 pub use home::Home;
 pub use project::{Project, ProjectProgress};
-pub use status::{Outcome, Status};
+pub use status::Status;
 pub use task::{DeadlineStatus, Task};
 pub use view::View;
 pub use when::{DateOrder, Schedule};

@@ -96,6 +96,13 @@ pub struct Work {
 thread_local!(static WORK: Cell<Work> = const {
     Cell::new(Work { authentications: 0, stagings: 0, writer_checks: 0 })
 });
+thread_local!(static FORCED_CONFLICT: Cell<bool> = const { Cell::new(false) });
+/// Test seam: valid commands never merge into a state without a projection
+/// (a seeded property test asserts this), so tests force one to exercise
+/// how a shared store records it.
+pub fn force_merge_conflict(on: bool) {
+    FORCED_CONFLICT.with(|f| f.set(on));
+}
 pub fn take_work() -> Work {
     WORK.with(|w| w.replace(Work::default()))
 }
@@ -126,6 +133,9 @@ pub(super) struct Prepared {
     pub doc: LoroDoc,
     pub imports: Vec<Record>,
     pub admitted: (i64, Authority),
+    /// The accepted records merge into a state with no projection. Shared
+    /// mode must roll the pass back and record it ([`Inbox::record_conflict`]).
+    pub conflict: bool,
 }
 impl Inbox {
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
@@ -158,9 +168,6 @@ impl Inbox {
         bytes: &[u8],
         mut hook: impl FnMut(Point) -> Result<()>,
     ) -> Result<()> {
-        if bytes.len() > MAX_CONTROL {
-            return Err(error("writer control exceeds input budget"));
-        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -245,9 +252,10 @@ impl Inbox {
             tx.query_row("SELECT cursor FROM inbox_meta WHERE singleton=1", [], |r| {
                 r.get(0)
             })?;
-        if sequence != cursor + 1 || cursor >= MAX_RECORDS {
-            return Err(error("receive gap or retained-record capacity"));
+        if sequence != cursor + 1 {
+            return Err(error("receive gap"));
         }
+        charge_receipt(&tx, self.integrated)?;
         tx.execute(
             "INSERT INTO received_records(sequence,bytes,status,reason) VALUES (?1,?2,'waiting','unprocessed')",
             params![sequence, bytes],
@@ -291,15 +299,45 @@ impl Inbox {
     }
     pub(super) fn initialize_shared(tx: &Transaction<'_>, config: &Config) -> Result<()> {
         let binding = config.binding()?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='inbox_meta')",
-            [],
-            |r| r.get(0),
-        )?;
-        if exists {
+        if has_shared_inbox(tx)? {
             validate_binding(tx, &binding, true)?;
         }
         initialize_tables(tx, &binding, true)
+    }
+    /// Retain this device's signed writer announcements in the writer
+    /// budget, in the transaction that creates the newest one. A full budget
+    /// refuses the new writer here, so applying retained work never runs
+    /// out of writer capacity later.
+    pub(super) fn retain_local_writers(tx: &Transaction<'_>) -> Result<()> {
+        let mut stmt = tx.prepare(
+            "SELECT announcement FROM writers WHERE announcement IS NOT NULL ORDER BY seq",
+        )?;
+        let announcements = stmt
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for bytes in announcements {
+            retain_writer(tx, &bytes)?;
+        }
+        Ok(())
+    }
+    /// Charge a new local intent to the shared receive budget, in the
+    /// transaction that creates it. Every intent is sealed and retained as
+    /// one receive row, so a full budget refuses the edit here instead of
+    /// blocking a later pass. Standalone outboxes have no receive budget.
+    pub(super) fn charge_local_intent(tx: &Transaction<'_>) -> Result<()> {
+        if has_shared_inbox(tx)? {
+            charge_receipt(tx, true)?;
+        }
+        Ok(())
+    }
+    /// A durable conflict stops application: the replica has no state
+    /// without a projection. Recorded outside the rolled-back pass.
+    pub(super) fn record_conflict(&self) -> Result<()> {
+        self.conn.execute(
+            "UPDATE inbox_meta SET projection=NULL,conflict=?1 WHERE singleton=1",
+            [MERGE_CONFLICT],
+        )?;
+        Ok(())
     }
     pub(super) fn attach(path: &Path, config: Config) -> Result<Self> {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
@@ -324,44 +362,45 @@ impl Inbox {
         if !self.integrated {
             return Err(error("shared inbox required"));
         }
+        if let Some(reason) = self.merge_conflict()? {
+            return Err(error(&reason));
+        }
         // Receipt may proceed while local work is unsealed. Application may
         // not: a remote journal row must never follow a stranded local request.
         let unsealed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM intents WHERE NOT EXISTS(SELECT 1 FROM sealed WHERE intent=intents.seq))", [], |r| r.get(0))?;
         if unsealed {
             return Err(error("seal local intents before applying incoming records"));
         }
-        let mut controls = tx.prepare("SELECT announcement FROM writers ORDER BY seq")?;
-        for bytes in controls.query_map([], |r| r.get::<_, Vec<u8>>(0))? {
-            retain_writer(tx, &bytes?)?;
-        }
-        let mut stmt = tx.prepare("SELECT intents.seq,sealed.bytes,intents.plaintext FROM intents JOIN sealed ON sealed.intent=intents.seq ORDER BY intents.seq")?;
+        // Retain newly sealed local records; their receive rows were
+        // charged when their intents were created.
+        tx.execute(
+            "INSERT INTO received_records(sequence,bytes,status,reason)
+             SELECT -intents.seq,sealed.bytes,'waiting','local-sealed'
+             FROM intents JOIN sealed ON sealed.intent=intents.seq
+             WHERE NOT EXISTS(SELECT 1 FROM received_records WHERE sequence=-intents.seq)",
+            [],
+        )?;
+        // Only local rows not yet applied are staged, so only their durable
+        // plaintext is read. Sealed bytes never change once written.
+        let mut stmt = tx.prepare(
+            "SELECT received_records.sequence,received_records.bytes=sealed.bytes,intents.plaintext
+             FROM received_records JOIN intents ON intents.seq=-received_records.sequence
+             JOIN sealed ON sealed.intent=intents.seq
+             WHERE received_records.sequence<0 AND received_records.applied IS NULL",
+        )?;
         let mut local_plain = BTreeMap::new();
         for row in stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
-                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, bool>(1)?,
                 r.get::<_, Vec<u8>>(2)?,
             ))
         })? {
-            let (seq, bytes, plain) = row?;
-            let saved: Option<Vec<u8>> = tx
-                .query_row(
-                    "SELECT bytes FROM received_records WHERE sequence=?1",
-                    [-seq],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            if let Some(saved) = saved {
-                if saved != bytes {
-                    return Err(error("local receipt changed"));
-                }
-            } else {
-                if rows(tx)?.len() >= MAX_RECORDS as usize {
-                    return Err(error("receive capacity"));
-                }
-                tx.execute("INSERT INTO received_records(sequence,bytes,status,reason) VALUES (?1,?2,'waiting','local-sealed')", params![-seq, bytes])?;
+            let (sequence, same, plain) = row?;
+            if !same {
+                return Err(error("local receipt changed"));
             }
-            local_plain.insert(-seq, plain);
+            local_plain.insert(sequence, plain);
         }
         let prepared = prepare_on(
             tx,
@@ -383,9 +422,11 @@ impl Inbox {
             .admitted
             .1
             .lineage_frozen(self.config.document, &author)
-            || rows(tx)?
-                .iter()
-                .any(|r| r.entry.sequence < 0 && r.entry.status == "fork");
+            || tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM received_records WHERE sequence<0 AND status='fork')",
+                [],
+                |r| r.get(0),
+            )?;
         if frozen {
             tx.execute("UPDATE inbox_meta SET local_frozen=1 WHERE singleton=1", [])?;
         }
@@ -424,6 +465,32 @@ fn initialize_tables(tx: &Transaction<'_>, binding: &[u8], integrated: bool) -> 
             serde_json::to_string(&Projection::default())?
         ],
     )?;
+    Ok(())
+}
+/// Whether this store composes the inbox with the replica and outbox.
+pub(super) fn has_shared_inbox(conn: &Connection) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='inbox_meta')",
+        [],
+        |r| r.get(0),
+    )?)
+}
+/// Refuse one more receive row past the budget. In a shared store every
+/// local intent becomes one retained row, so intents count from the moment
+/// they are created, whether or not a pass has retained them yet.
+fn charge_receipt(tx: &Transaction<'_>, shared: bool) -> Result<()> {
+    let used: i64 = if shared {
+        tx.query_row(
+            "SELECT (SELECT count(*) FROM received_records WHERE sequence>0)+(SELECT count(*) FROM intents)",
+            [],
+            |r| r.get(0),
+        )?
+    } else {
+        tx.query_row("SELECT count(*) FROM received_records", [], |r| r.get(0))?
+    };
+    if used >= MAX_RECORDS {
+        return Err(error("retained-record capacity"));
+    }
     Ok(())
 }
 fn retain_writer(tx: &Transaction<'_>, bytes: &[u8]) -> Result<bool> {
@@ -680,35 +747,36 @@ fn prepare_on(
             match stage(&doc, bytes, facts.actor, local.is_some())? {
                 Stage::Ready(staged) => {
                     doc = staged;
-                    if local.is_none() {
-                        imports.push(Record {
-                            id: format!(
-                                "authenticated:{}",
-                                facts
-                                    .digest
-                                    .iter()
-                                    .map(|b| format!("{b:02x}"))
-                                    .collect::<String>()
-                            ),
-                            bytes: bytes.clone(),
-                        });
-                    }
-                    ordinal += 1;
-                    row.applied = Some(ordinal);
-                    row.status = "applied".into();
-                    row.reason.clear();
-                    heads.insert(facts.incarnation, facts.digest);
-                    progress = true;
+                    imports.push(Record {
+                        id: format!(
+                            "authenticated:{}",
+                            facts
+                                .digest
+                                .iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect::<String>()
+                        ),
+                        bytes: bytes.clone(),
+                    });
                 }
+                Stage::Retained => {}
                 Stage::Waiting => {
                     row.status = "waiting".into();
                     row.reason = "causal-dependency".into();
+                    continue;
                 }
                 Stage::Rejected(reason) => {
                     reject(row, reason);
                     settled.insert(*index);
+                    continue;
                 }
             }
+            ordinal += 1;
+            row.applied = Some(ordinal);
+            row.status = "applied".into();
+            row.reason.clear();
+            heads.insert(facts.incarnation, facts.digest);
+            progress = true;
         }
         if !progress {
             break;
@@ -772,7 +840,12 @@ fn prepare_on(
     // Accepted records were each valid in their own causal past, and the
     // merged engine state does not depend on application order. Its
     // projection, or the absence of one, is therefore the same everywhere.
-    let (projection, conflict) = match project_document(&doc) {
+    let projected = if FORCED_CONFLICT.with(Cell::get) {
+        Err(error("forced merge conflict"))
+    } else {
+        project_document(&doc)
+    };
+    let (projection, conflict) = match projected {
         Ok(view) => (Some(serde_json::to_string(&view)?), None),
         Err(_) => (None, Some(MERGE_CONFLICT)),
     };
@@ -781,13 +854,12 @@ fn prepare_on(
             "UPDATE inbox_meta SET projection=?1,conflict=?2,engine=?3 WHERE singleton=1",
             params![projection, conflict, doc.export(ExportMode::Snapshot)?],
         )?;
-    } else if conflict.is_some() {
-        return Err(error(MERGE_CONFLICT));
     }
     Ok(Prepared {
         doc,
         imports,
         admitted,
+        conflict: conflict.is_some(),
     })
 }
 /// Authenticated decryption; only an authenticated handle can decrypt.
@@ -898,6 +970,8 @@ fn reject(row: &mut Entry, reason: &str) {
 }
 enum Stage {
     Ready(LoroDoc),
+    /// A retained local record: already in the shared document.
+    Retained,
     Waiting,
     Rejected(&'static str),
 }
@@ -934,7 +1008,7 @@ fn stage(doc: &LoroDoc, plain: &[u8], actor: u64, retained_local: bool) -> Resul
         {
             return Err(error(format!("invalid durable local update: {reason}")));
         }
-        return Ok(Stage::Ready(doc.fork()));
+        return Ok(Stage::Retained);
     }
     if start < counter {
         return Ok(Stage::Rejected("actor-overlap"));
