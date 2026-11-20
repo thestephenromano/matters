@@ -642,3 +642,181 @@ pub(crate) fn converted(
     commands.push(Command::Purge { ids: gone.to_vec() });
     Ok(commands)
 }
+
+impl Database {
+    /// Apply an engine update from another replica: it is journalled as
+    /// received (never sent back out), merged, and the rows are rebuilt
+    /// from the engine, in one transaction. An update whose dependencies
+    /// have not arrived stays in the journal and applies once they do.
+    pub fn receive_update(&self, bytes: &[u8]) -> Result<()> {
+        self.with_engine(|conn, engine| {
+            let Some(doc) = engine.as_mut() else {
+                return Err(MattersError::Validation("sync is off".into()));
+            };
+            let tx = conn.transaction()?;
+            let applied = (|| {
+                tx.execute(
+                    "INSERT INTO sync_journal (bytes, outgoing) VALUES (?1, 0)",
+                    params![bytes],
+                )?;
+                doc.merge(bytes)?;
+                rebuild_rows(&tx, &doc.project()?)?;
+                Ok::<_, MattersError>(tx.commit()?)
+            })();
+            if let Err(error) = applied {
+                *engine = load_engine(conn)?;
+                return Err(error);
+            }
+            Ok(())
+        })
+    }
+
+    /// This replica's own engine updates journalled after `after`, in
+    /// order, with their journal sequence numbers: what a sync client
+    /// sends.
+    pub fn outgoing_updates(&self, after: i64) -> Result<Vec<(i64, Vec<u8>)>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT seq, bytes FROM sync_journal WHERE outgoing = 1 AND seq > ?1 ORDER BY seq",
+            )?;
+            let rows = stmt.query_map(params![after], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
+    /// Throw the rows away and rebuild them from the engine, as receiving
+    /// does: the views must come out the same.
+    #[cfg(feature = "test-support")]
+    pub fn rebuild_from_engine(&self) -> Result<()> {
+        self.with_engine(|conn, engine| {
+            let doc = engine
+                .as_ref()
+                .ok_or_else(|| MattersError::Validation("sync is off".into()))?;
+            let tx = conn.transaction()?;
+            rebuild_rows(&tx, &doc.project()?)?;
+            Ok(tx.commit()?)
+        })
+    }
+}
+
+/// Replace every domain row with the engine's. Order keys become ranks.
+fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
+    tx.execute_batch(
+        "DELETE FROM task_tags; DELETE FROM project_tags; DELETE FROM area_tags;
+         DELETE FROM checklist_items; DELETE FROM tasks; DELETE FROM headings;
+         DELETE FROM projects; DELETE FROM areas; DELETE FROM tags;",
+    )?;
+    let date = |d: Option<jiff::civil::Date>| d.map(|d| d.to_string());
+    for a in &s.areas {
+        tx.execute(
+            "INSERT INTO areas (id, title, sort_order, created_at, updated_at, trashed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                a.id,
+                a.title,
+                a.sort_order,
+                a.created_at,
+                a.updated_at,
+                a.trashed_at
+            ],
+        )?;
+    }
+    for p in &s.projects {
+        tx.execute(
+            "INSERT INTO projects (id, area_id, title, notes, start_date, time_of_day, is_someday,
+                deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                p.id,
+                p.area_id,
+                p.title,
+                p.notes,
+                date(p.start_date),
+                p.time_of_day,
+                p.is_someday,
+                date(p.deadline),
+                p.status.as_str(),
+                p.completed_at,
+                p.sort_order,
+                p.created_at,
+                p.updated_at,
+                p.trashed_at
+            ],
+        )?;
+    }
+    for h in &s.headings {
+        tx.execute(
+            "INSERT INTO headings (id, project_id, title, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                h.id,
+                h.project_id,
+                h.title,
+                h.sort_order,
+                h.created_at,
+                h.updated_at
+            ],
+        )?;
+    }
+    for t in &s.tasks {
+        tx.execute(
+            "INSERT INTO tasks (id, area_id, project_id, heading_id, title, notes, start_date,
+                time_of_day, is_someday, deadline, status, completed_at, sort_order, created_at,
+                updated_at, trashed_at, today_order, closed_by_project)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            params![
+                t.id,
+                t.area_id,
+                t.project_id,
+                t.heading_id,
+                t.title,
+                t.notes,
+                date(t.start_date),
+                t.time_of_day,
+                t.is_someday,
+                date(t.deadline),
+                t.status.as_str(),
+                t.completed_at,
+                t.sort_order,
+                t.created_at,
+                t.updated_at,
+                t.trashed_at,
+                t.today_order,
+                s.closed_by_project.contains(&t.id)
+            ],
+        )?;
+    }
+    for i in &s.checklist_items {
+        tx.execute(
+            "INSERT INTO checklist_items (id, task_id, title, is_completed, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![i.id, i.task_id, i.title, i.is_completed, i.sort_order, i.created_at, i.updated_at],
+        )?;
+    }
+    for t in &s.tags {
+        tx.execute(
+            "INSERT INTO tags (id, name, parent_id, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                t.id,
+                t.name,
+                t.parent_id,
+                t.sort_order,
+                t.created_at,
+                t.updated_at
+            ],
+        )?;
+    }
+    for (kind, item, tag) in &s.links {
+        let table = match kind {
+            crate::crdt::LinkKind::Task => "task_tags (task_id, tag_id)",
+            crate::crdt::LinkKind::Project => "project_tags (project_id, tag_id)",
+            crate::crdt::LinkKind::Area => "area_tags (area_id, tag_id)",
+        };
+        tx.execute(
+            &format!("INSERT INTO {table} VALUES (?1, ?2)"),
+            params![item, tag],
+        )?;
+    }
+    Ok(())
+}
