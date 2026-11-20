@@ -51,7 +51,7 @@ Area (e.g. Work, Personal, Finances)
 3. **Heading:**
    * A visual section divider inside a Project to group related tasks.
    * Cannot be completed independently; exists purely for spatial organization.
-   * Added from the project's menu; renamed, moved (with its tasks) and deleted from its own. Deleting a heading keeps its tasks in the project, above the headings, and can be undone. An empty heading is still shown, so tasks can be moved into it.
+   * Added from the project's menu; renamed, moved up or down or to another project (with its tasks), and deleted from its own. Deleting a heading keeps its tasks in the project, above the headings, and can be undone. An empty heading is still shown, so tasks can be moved into it.
 
 4. **Task (To-Do):**
    * The atomic unit of work.
@@ -157,14 +157,14 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Enter` | Checklist item | Opens a field for a new item directly below; `Enter` again saves it and opens the next. `Escape` leaves the checklist, with the task still open |
 | `Up` / `Down` | Checklist item | Goes to the item above or below; `Ctrl + Up` / `Ctrl + Down` move the item |
 | `Ctrl + .` | Checklist item | Ticks or unticks the item |
-| `Backspace` | Empty checklist item | Deletes the item and goes to the one above |
+| `Backspace` | Empty checklist item | Deletes the item and goes to the one above; the Undo notice brings it back |
 | `Ctrl + K` or `/` | Anywhere | Opens **Quick Find** (instant fuzzy search across all items) |
 | `Ctrl + N` | Anywhere | Creates a new task in the current view |
 | `Ctrl + Shift + N` | Anywhere | Creates a new Project |
 | `Delete` / `Backspace` | Selected task(s) | Moves task to Trash |
 | `Up` / `Down` | Task list | Moves list selection |
 | `Escape` | Task list, task editor | Closes the open task, then clears the selection; returns focus to the list |
-| `Ctrl + Z` | After moving to Trash | Undoes, while the Undo notice shows |
+| `Ctrl + Z` | After moving to Trash, or deleting a heading or checklist item | Undoes, while the Undo notice shows |
 | `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list. In Today, moving past the This Evening heading moves the task into or out of This Evening; in a project, moving past a heading files the task under it, or above the headings (dragging does the same) |
 
 ---

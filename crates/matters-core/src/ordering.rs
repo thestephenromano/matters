@@ -275,6 +275,47 @@ pub fn move_heading(db: &Database, id: &str, step: isize) -> Result<()> {
     }
 }
 
+/// Move heading `id`, with the tasks under it, to project `project_id`,
+/// last among its headings (#169), in one transaction. The project must be
+/// live and not the heading's own.
+pub fn move_heading_to_project(db: &Database, id: &str, project_id: &str) -> Result<()> {
+    let Some(heading) = db.get_heading(id)? else {
+        return Err(MattersError::NotFound {
+            entity: "heading",
+            id: id.to_string(),
+        });
+    };
+    if heading.project_id == project_id {
+        return Err(invalid(format!(
+            "heading '{id}' is already in project '{project_id}'"
+        )));
+    }
+    if !QueryEngine::new(db).project_is_live(project_id)? {
+        return Err(MattersError::NotFound {
+            entity: "project",
+            id: project_id.to_string(),
+        });
+    }
+    let key = db
+        .list_headings_for_project(project_id)?
+        .last()
+        .map_or(1.0, |h| h.sort_order + 1.0);
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        let now = crate::clock::now_millis();
+        tx.execute(
+            "UPDATE headings SET project_id = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
+            params![project_id, key, now, id],
+        )?;
+        tx.execute(
+            "UPDATE tasks SET project_id = ?1, updated_at = ?2 WHERE heading_id = ?3",
+            params![project_id, now, id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
 /// The headings of heading `id`'s project, in order, with their keys.
 fn headings_beside(db: &Database, id: &str) -> Result<Vec<(String, f64)>> {
     let Some(heading) = db.get_heading(id)? else {

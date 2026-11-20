@@ -368,8 +368,19 @@ pub mod qobject {
         ) -> bool;
         #[qinvokable]
         fn set_checklist_item_done(self: Pin<&mut AppController>, item_id: &QString, done: bool);
+        /// Delete a checklist item; `restore_checklist_item` undoes the
+        /// last deletion (#169).
         #[qinvokable]
         fn delete_checklist_item(self: Pin<&mut AppController>, item_id: &QString);
+        #[qinvokable]
+        fn restore_checklist_item(self: Pin<&mut AppController>);
+        /// Move a heading, with its tasks, to another project (#169).
+        #[qinvokable]
+        fn move_heading_to_project(
+            self: Pin<&mut AppController>,
+            heading_id: &QString,
+            project_id: &QString,
+        );
         /// Move a checklist item `step` places up (negative) or down.
         #[qinvokable]
         fn move_checklist_item(self: Pin<&mut AppController>, item_id: &QString, step: i32);
@@ -672,6 +683,8 @@ pub struct AppControllerRust {
     db: Database,
     /// The last heading deleted, for Undo (`restore_heading`).
     deleted_heading: Option<DeletedHeading>,
+    /// The last checklist item deleted, for Undo (`restore_checklist_item`).
+    deleted_checklist_item: Option<ChecklistItem>,
 }
 
 impl Default for AppControllerRust {
@@ -714,6 +727,7 @@ impl Default for AppControllerRust {
             day: DayTracker::new(local_today()),
             search_query: String::new(),
             deleted_heading: None,
+            deleted_checklist_item: None,
             db: database(),
         }
     }
@@ -1474,8 +1488,33 @@ impl qobject::AppController {
         self.finish(result);
     }
 
-    pub fn delete_checklist_item(self: Pin<&mut Self>, item_id: &QString) {
-        let result = self.db.delete_checklist_item(&String::from(item_id));
+    pub fn restore_checklist_item(mut self: Pin<&mut Self>) {
+        let Some(item) = self.as_mut().rust_mut().deleted_checklist_item.take() else {
+            return;
+        };
+        let result = self.db.create_checklist_item(&item);
+        self.finish(result);
+    }
+
+    pub fn move_heading_to_project(
+        self: Pin<&mut Self>,
+        heading_id: &QString,
+        project_id: &QString,
+    ) {
+        let result = matters_core::ordering::move_heading_to_project(
+            &self.db,
+            &String::from(heading_id),
+            &String::from(project_id),
+        );
+        self.finish(result);
+    }
+
+    pub fn delete_checklist_item(mut self: Pin<&mut Self>, item_id: &QString) {
+        let id = String::from(item_id);
+        if let Ok(Some(item)) = self.db.get_checklist_item(&id) {
+            self.as_mut().rust_mut().deleted_checklist_item = Some(item);
+        }
+        let result = self.db.delete_checklist_item(&id);
         self.finish(result);
     }
 
