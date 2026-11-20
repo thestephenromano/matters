@@ -1,7 +1,7 @@
 //! The engine document behind sync ([ADR 0001], #35): areas, projects,
 //! headings, tasks and checklist items in one ordered Loro tree, Today's
-//! order in a movable list, and permanent deletion as tombstones. Tags
-//! follow in the next slice. [`Document::apply`] turns typed commands into engine
+//! order in a movable list, tags in a second tree, and permanent deletion
+//! as tombstones. [`Document::apply`] turns typed commands into engine
 //! operations; [`Document::project`] reads the merged state back as the
 //! application's rows.
 //!
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::Status;
 use crate::error::{MattersError, Result};
 
-pub use projection::Snapshot;
+pub use projection::{LinkKind, Snapshot};
 
 /// What an entity in the home tree is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -137,9 +137,37 @@ pub enum Command {
     Purge {
         ids: Vec<String>,
     },
+    CreateTag {
+        id: String,
+        name: String,
+        parent: Option<String>,
+        at: Anchor,
+        created_at: i64,
+    },
+    RenameTag {
+        id: String,
+        name: String,
+    },
+    MoveTag {
+        id: String,
+        parent: Option<String>,
+        at: Anchor,
+    },
+    /// Delete a tag; tags nested under it move up to its parent.
+    DeleteTag {
+        id: String,
+    },
+    /// Give `item` (a task, project or area) the tag, or take it off.
+    Link {
+        item: String,
+        tag: String,
+        present: bool,
+    },
 }
 
 const HOME: &str = "home";
+const TAGS: &str = "tags";
+const LINKS: &str = "links";
 const TODAY: &str = "today";
 const PURGED: &str = "purged";
 
@@ -174,10 +202,11 @@ fn scalar_string(map: &LoroMap, key: &str) -> Option<String> {
     }
 }
 
-/// The document, with an index from entity UUIDs to tree nodes.
+/// The document, with an index from entity and tag UUIDs to tree nodes.
 pub struct Document {
     doc: LoroDoc,
     entities: BTreeMap<String, (TreeID, Kind)>,
+    tags: BTreeMap<String, TreeID>,
 }
 
 impl Document {
@@ -188,6 +217,7 @@ impl Document {
         Ok(Self {
             doc,
             entities: BTreeMap::new(),
+            tags: BTreeMap::new(),
         })
     }
 
@@ -232,6 +262,14 @@ impl Document {
             };
             self.entities.insert(key, (node, kind));
         }
+        self.tags.clear();
+        let tags = self.doc.get_tree(TAGS);
+        for node in tags.nodes() {
+            let meta = tags.get_meta(node).map_err(engine)?;
+            if let Some(id) = scalar_string(&meta, "id") {
+                self.tags.entry(id).or_insert(node);
+            }
+        }
         Ok(())
     }
 
@@ -272,6 +310,19 @@ impl Document {
             })
     }
 
+    fn tag(&self, id: &str) -> Result<TreeID> {
+        if self.purged(id) {
+            return Err(invalid(format!("tag '{id}' was deleted")));
+        }
+        self.tags
+            .get(id)
+            .copied()
+            .ok_or_else(|| MattersError::NotFound {
+                entity: "tag",
+                id: id.to_string(),
+            })
+    }
+
     fn meta(&self, node: TreeID) -> Result<LoroMap> {
         self.doc.get_tree(HOME).get_meta(node).map_err(engine)
     }
@@ -301,7 +352,7 @@ impl Document {
                 created_at,
             } => {
                 check_uuid(id)?;
-                if self.entities.contains_key(id) || self.purged(id) {
+                if self.entities.contains_key(id) || self.tags.contains_key(id) || self.purged(id) {
                     return Err(invalid(format!("'{id}' already exists")));
                 }
                 let parent = self.parent(*kind, parent.as_deref())?;
@@ -325,7 +376,7 @@ impl Document {
                 meta.insert("done", false).map_err(engine)?;
                 meta.insert("created_at", *created_at).map_err(engine)?;
                 meta.insert("updated_at", at).map_err(engine)?;
-                self.place(&home, node, parent, anchor)?;
+                self.place(&home, node, parent, anchor, false)?;
                 if *kind == Kind::Task {
                     let today = self.doc.get_movable_list(TODAY);
                     today.insert(today.len(), id.as_str()).map_err(engine)?;
@@ -342,7 +393,7 @@ impl Document {
                 if Some(node) == parent {
                     return Err(invalid("an entity can't contain itself"));
                 }
-                self.place(&home, node, parent, anchor)?;
+                self.place(&home, node, parent, anchor, false)?;
                 self.touch(node, at)?;
                 return Ok(());
             }
@@ -359,6 +410,66 @@ impl Document {
                     self.entity(id)?;
                     purged.insert(id, true).map_err(engine)?;
                 }
+                return Ok(());
+            }
+            Command::CreateTag {
+                id,
+                name,
+                parent,
+                at: anchor,
+                created_at,
+            } => {
+                check_uuid(id)?;
+                if self.tags.contains_key(id) || self.entities.contains_key(id) || self.purged(id) {
+                    return Err(invalid(format!("'{id}' already exists")));
+                }
+                let tags = self.doc.get_tree(TAGS);
+                let parent = parent.as_deref().map(|p| self.tag(p)).transpose()?;
+                let node = tags
+                    .create_at(parent, tags.children_num(parent).unwrap_or(0))
+                    .map_err(engine)?;
+                self.tags.insert(id.clone(), node);
+                let meta = tags.get_meta(node).map_err(engine)?;
+                meta.insert("id", id.as_str()).map_err(engine)?;
+                meta.insert("name", name.as_str()).map_err(engine)?;
+                meta.insert("created_at", *created_at).map_err(engine)?;
+                meta.insert("updated_at", at).map_err(engine)?;
+                self.place(&tags, node, parent, anchor, true)?;
+                return Ok(());
+            }
+            Command::RenameTag { id, name } => {
+                let node = self.tag(id)?;
+                let meta = self.doc.get_tree(TAGS).get_meta(node).map_err(engine)?;
+                meta.insert("name", name.as_str()).map_err(engine)?;
+                meta.insert("updated_at", at).map_err(engine)?;
+                return Ok(());
+            }
+            Command::MoveTag {
+                id,
+                parent,
+                at: anchor,
+            } => {
+                let node = self.tag(id)?;
+                let tags = self.doc.get_tree(TAGS);
+                let parent = parent.as_deref().map(|p| self.tag(p)).transpose()?;
+                self.place(&tags, node, parent, anchor, true)?;
+                return Ok(());
+            }
+            Command::DeleteTag { id } => {
+                self.tag(id)?;
+                self.doc.get_map(PURGED).insert(id, true).map_err(engine)?;
+                return Ok(());
+            }
+            Command::Link { item, tag, present } => {
+                let (_, kind) = self.entity(item)?;
+                if LinkKind::of(kind).is_none() {
+                    return Err(invalid("only tasks, projects and areas take tags"));
+                }
+                self.tag(tag)?;
+                self.doc
+                    .get_map(LINKS)
+                    .insert(&projection::link_key(item, tag), *present)
+                    .map_err(engine)?;
                 return Ok(());
             }
             _ => {}
@@ -444,13 +555,14 @@ impl Document {
     }
 
     /// Put `node` under `parent` at `anchor`. An anchor must be a sibling
-    /// under that parent.
+    /// under that parent, in the same tree.
     fn place(
         &self,
         tree: &LoroTree,
         node: TreeID,
         parent: Option<TreeID>,
         anchor: &Anchor,
+        is_tags: bool,
     ) -> Result<()> {
         let parent_id: TreeParentId = parent.into();
         match anchor {
@@ -461,7 +573,11 @@ impl Document {
                 tree.mov_to(node, parent, if already { n.saturating_sub(1) } else { n })
             }
             Anchor::After(sibling) => {
-                let sibling = self.entity(sibling)?.0;
+                let sibling = if is_tags {
+                    self.tag(sibling)?
+                } else {
+                    self.entity(sibling)?.0
+                };
                 if sibling == node {
                     return Err(invalid("an entity can't follow itself"));
                 }

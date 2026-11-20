@@ -9,9 +9,34 @@ use jiff::civil::Date;
 use loro::{LoroDoc, LoroTree, ToJson, TreeID, TreeParentId};
 use serde_json::Value;
 
-use super::{engine, invalid, Kind, HOME, PURGED, TODAY};
-use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
+use super::{engine, invalid, Kind, HOME, LINKS, PURGED, TAGS, TODAY};
+use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Tag, Task};
 use crate::error::Result;
+
+/// What a tag is given to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LinkKind {
+    Task,
+    Project,
+    Area,
+}
+
+impl LinkKind {
+    pub(super) fn of(kind: Kind) -> Option<Self> {
+        match kind {
+            Kind::Task => Some(LinkKind::Task),
+            Kind::Project => Some(LinkKind::Project),
+            Kind::Area => Some(LinkKind::Area),
+            _ => None,
+        }
+    }
+}
+
+/// Entity UUIDs are unique across kinds, so an assignment needs only the
+/// item and the tag.
+pub(super) fn link_key(item: &str, tag: &str) -> String {
+    format!("{item}\t{tag}")
+}
 
 /// The application's rows for the merged state. Order keys are ranks:
 /// only their relative order is meaningful.
@@ -22,9 +47,11 @@ pub struct Snapshot {
     pub headings: Vec<Heading>,
     pub tasks: Vec<Task>,
     pub checklist_items: Vec<ChecklistItem>,
+    pub tags: Vec<Tag>,
+    pub links: BTreeSet<(LinkKind, String, String)>,
     /// Closed tasks that finishing their project closed.
     pub closed_by_project: BTreeSet<String>,
-    /// Permanently deleted entity IDs.
+    /// Permanently deleted entity and tag IDs.
     pub tombstones: BTreeSet<String>,
     /// Deterministic repairs of states only concurrent edits produce.
     pub repairs: BTreeSet<String>,
@@ -285,6 +312,25 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
             }),
         }
     }
+    let surviving: BTreeMap<String, Kind> = parent_of
+        .keys()
+        .map(|n| (nodes[n].id.clone(), nodes[n].kind))
+        .collect();
+    let merged = project_tags(doc, &out.tombstones, &mut out.tags, &mut out.repairs)?;
+
+    let links = doc.get_map(LINKS).get_deep_value().to_json_value();
+    for (key, present) in links.as_object().ok_or_else(|| invalid("invalid links"))? {
+        if present != &Value::Bool(true) {
+            continue;
+        }
+        let Some((item, tag)) = key.split_once('\t') else {
+            return Err(invalid("invalid link"));
+        };
+        let Some(tag) = merged.get(tag) else { continue };
+        if let Some(kind) = surviving.get(item).and_then(|k| LinkKind::of(*k)) {
+            out.links.insert((kind, item.to_owned(), tag.clone()));
+        }
+    }
     Ok(out)
 }
 
@@ -326,6 +372,87 @@ fn today_ranks(
         }
     }
     Ok(ranks)
+}
+
+/// Surviving tags, with deleted parents lifted to their nearest surviving
+/// ancestor. Names are unique ignoring case: among concurrently created
+/// tags sharing a name, the smallest UUID keeps it and the others merge
+/// into it. Returns where each surviving tag ID now points.
+fn project_tags(
+    doc: &LoroDoc,
+    tombstones: &BTreeSet<String>,
+    tags: &mut Vec<Tag>,
+    repairs: &mut BTreeSet<String>,
+) -> Result<BTreeMap<String, String>> {
+    let tree = doc.get_tree(TAGS);
+    let mut found = Vec::new();
+    let mut seen = BTreeSet::new();
+    for node in ordered(&tree) {
+        let value = tree
+            .get_meta(node)
+            .map_err(engine)?
+            .get_deep_value()
+            .to_json_value();
+        let id = text(&value, "id")?;
+        if tombstones.contains(&id) || !seen.insert(id.clone()) {
+            continue;
+        }
+        let mut ancestor = tree.parent(node);
+        let mut parent = None;
+        while let Some(TreeParentId::Node(p)) = ancestor {
+            let pid = text(
+                &tree
+                    .get_meta(p)
+                    .map_err(engine)?
+                    .get_deep_value()
+                    .to_json_value(),
+                "id",
+            )?;
+            if !tombstones.contains(&pid) {
+                parent = Some(pid);
+                break;
+            }
+            ancestor = tree.parent(p);
+        }
+        found.push((id, parent, value));
+    }
+    let mut owner: BTreeMap<String, String> = BTreeMap::new();
+    for (id, _, value) in &found {
+        owner
+            .entry(text(value, "name")?.to_lowercase())
+            .and_modify(|o| {
+                if id < o {
+                    *o = id.clone();
+                }
+            })
+            .or_insert(id.clone());
+    }
+    let mut merged = BTreeMap::new();
+    for (id, _, value) in &found {
+        let keeper = owner[&text(value, "name")?.to_lowercase()].clone();
+        if &keeper != id {
+            repairs.insert(format!("tag-merge:{id}"));
+        }
+        merged.insert(id.clone(), keeper);
+    }
+    let mut ranks: BTreeMap<Option<String>, f64> = BTreeMap::new();
+    for (id, parent, value) in found {
+        if merged[&id] != id {
+            continue;
+        }
+        let parent = parent.map(|p| merged[&p].clone()).filter(|p| p != &id);
+        let rank = ranks.entry(parent.clone()).or_default();
+        tags.push(Tag {
+            id,
+            name: text(&value, "name")?,
+            parent_id: parent,
+            sort_order: *rank,
+            created_at: int(&value, "created_at"),
+            updated_at: int(&value, "updated_at"),
+        });
+        *rank += 1.0;
+    }
+    Ok(merged)
 }
 
 #[cfg(test)]
