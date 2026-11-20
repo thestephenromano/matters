@@ -1034,7 +1034,7 @@ Item {
                 const other = addToToday("lg-stays");
                 controller.toggleTask(row.taskId);
                 waitForNoRow("lg-now");
-                verify(rowFor("lg-stays") !== null);
+                verify(indexOf("lg-stays") >= 0, "the open task stays");
                 verify(!findChild(view, "logCompletedButton").visible, "nothing waits to be logged");
             } finally {
                 controller.chooseLogPolicy("when-leaving");

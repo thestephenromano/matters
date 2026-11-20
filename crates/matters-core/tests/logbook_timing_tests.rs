@@ -254,6 +254,38 @@ fn without_keeping_a_ticked_task_leaves_at_once() {
     assert_eq!(show(&mut visit, &back).len(), 1, "on again, it keeps");
 }
 
+/// The frontends set the keeping rule before every load; setting it on
+/// again must not forget the tasks kept so far.
+#[test]
+fn keeping_set_before_each_load_keeps_a_ticked_task_until_leaving() {
+    let db = Database::open_in_memory().unwrap();
+    for id in ["a", "b"] {
+        let mut t = Task::new(id, id, 0.0);
+        t.apply_schedule(&Schedule::Today { evening: false }, today());
+        db.add_task(&mut t).unwrap();
+    }
+    let mut visit = Visit::new();
+    // As a frontend loads: keeping set, then the rows from those shown.
+    let show = |visit: &mut Visit, shown: &[Task]| -> Vec<Task> {
+        visit.keep_ticked(true);
+        let members = QueryEngine::new(&db)
+            .tasks_in(&View::Today, today())
+            .unwrap();
+        visit
+            .rows(&View::Today, members, shown, |id| db.get_task(id))
+            .unwrap()
+    };
+    let ids = |tasks: &[Task]| -> Vec<String> { tasks.iter().map(|t| t.id.clone()).collect() };
+    let first = show(&mut visit, &[]);
+    db.complete_task("a").unwrap();
+    let second = show(&mut visit, &first);
+    assert_eq!(ids(&second), ["a", "b"]);
+    let third = show(&mut visit, &second);
+    assert_eq!(ids(&third), ["a", "b"], "still kept on the next load");
+    visit.restart();
+    assert_eq!(ids(&show(&mut visit, &third)), ["b"], "gone once left");
+}
+
 #[test]
 fn settings_survive_a_save_and_a_missing_file_is_the_defaults() {
     let dir = tempfile::tempdir().unwrap();
