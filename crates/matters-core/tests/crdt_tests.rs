@@ -968,3 +968,108 @@ fn re_creating_a_removed_heading_or_item_restores_it() {
         .apply(&[create(ITEM, Kind::Task, None, "another kind")], 60)
         .is_err());
 }
+
+/// Both replicas generate the occurrence `n` of a series on one date, each
+/// with its own randomly named checklist copy.
+fn generate_occurrence(doc: &mut Document, n: u128, item: u128) {
+    doc.apply(
+        &[
+            create(n, Kind::Task, None, "Water plants"),
+            Command::SetOccurrence {
+                id: id(n),
+                series: id(900),
+                date: jiff::civil::date(2026, 11, 21),
+            },
+            create(item, Kind::ChecklistItem, Some(n), "Ferns"),
+        ],
+        20,
+    )
+    .unwrap();
+}
+
+#[test]
+fn concurrently_generated_identical_occurrences_merge() {
+    let (mut a, mut b) = pair();
+    generate_occurrence(&mut a, 500, 501);
+    generate_occurrence(&mut b, 500, 502);
+    let s = converged(&mut a, &mut b);
+    let waters: Vec<_> = s
+        .tasks
+        .iter()
+        .filter(|t| t.title == "Water plants")
+        .collect();
+    assert_eq!(waters.len(), 1, "one occurrence, not a conflict copy");
+    assert_eq!(waters[0].id, id(500));
+    let items: Vec<_> = s
+        .checklist_items
+        .iter()
+        .filter(|i| i.task_id == id(500))
+        .collect();
+    assert_eq!(items.len(), 1, "one checklist, the keeper's");
+    assert!(s.repairs.contains(&format!("occurrence-merge:{}", id(500))));
+    assert!(!s.repairs.iter().any(|r| r.starts_with("identity-copy:")));
+    // The merged occurrence stays editable on both replicas.
+    a.apply(
+        &[Command::Rename {
+            id: id(500),
+            title: "Water ferns".into(),
+        }],
+        30,
+    )
+    .unwrap();
+    b.apply(
+        &[Command::SetRepeat {
+            id: id(500),
+            rule: None,
+        }],
+        30,
+    )
+    .unwrap();
+    let s = converged(&mut a, &mut b);
+    assert!(s
+        .tasks
+        .iter()
+        .any(|t| t.id == id(500) && t.title == "Water ferns"));
+}
+
+#[test]
+fn a_generated_occurrence_edited_before_it_met_its_twin_stays_a_copy() {
+    let (mut a, mut b) = pair();
+    generate_occurrence(&mut a, 510, 511);
+    generate_occurrence(&mut b, 510, 512);
+    b.apply(
+        &[Command::SetDone {
+            id: id(512),
+            done: true,
+        }],
+        25,
+    )
+    .unwrap();
+    let s = converged(&mut a, &mut b);
+    assert_eq!(
+        s.tasks.iter().filter(|t| t.title == "Water plants").count(),
+        2,
+        "the ticked checklist is kept on its own copy"
+    );
+    assert!(s.repairs.iter().any(|r| r.starts_with("identity-copy:")));
+}
+
+#[test]
+fn handing_the_rule_on_does_not_stop_the_merge() {
+    let (mut a, mut b) = pair();
+    generate_occurrence(&mut a, 520, 521);
+    generate_occurrence(&mut b, 520, 522);
+    a.apply(
+        &[Command::SetRepeat {
+            id: id(520),
+            rule: None,
+        }],
+        40,
+    )
+    .unwrap();
+    let s = converged(&mut a, &mut b);
+    assert_eq!(
+        s.tasks.iter().filter(|t| t.title == "Water plants").count(),
+        1
+    );
+}

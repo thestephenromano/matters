@@ -129,6 +129,13 @@ Status, finish time and the "closed by its project" mark share one register, and
 
 With sync on, every typed write records its engine commands in the transaction that changes the rows, and the engine is rebuilt from the journal if that transaction fails. Only schema migrations write outside `Database::write`. Ordering records each changed key as a placement after its predecessor among its siblings, and Today anchors within the task's section. Empty Trash records the exact set of entities it deletes, cascades included. Converting a task into a project purges the task and its checklist, so a concurrent edit to the old task elsewhere is dropped, as with Empty Trash.
 
+### Generated occurrences (#61, 2026-11-21)
+
+Repeating tasks derive each occurrence's ID from its series and date. Two devices that generate the same occurrence therefore create two nodes under one UUID, which C18 would show as a conflict copy. The refinement:
+- **Merge when identical.** When every node under that UUID is a generated occurrence matching in everything a user can see, they merge into the node with the smallest tree ID, and the merge is listed as an `occurrence-merge` repair. "Everything a user can see" means title, notes, When, deadline, status, trash state, reminder, series and date, and the checklist's titles and ticks in order. The other nodes, and their checklists, are hidden and can't be addressed.
+- **Otherwise keep C18.** Nodes that differ in anything visible stay conflict copies, as C18 says, so no edit is lost.
+- **Not compared:** the repeat rule and timestamps. A device hands the rule on and stamps the occurrence when it generates the next one.
+
 ### Measured cost (#35, 2026-11-20)
 
 [The engine cost record](../evidence/sync-engine-cost-2026-11-20.json) compares sync on with the unchanged write path on `betelgeuse` (i9-10920X, NVMe/Btrfs, Fedora 44), at 1,000 and 10,000 tasks with 1 KiB notes:
