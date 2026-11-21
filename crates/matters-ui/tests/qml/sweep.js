@@ -17,6 +17,37 @@ function setup(t, view, name) {
     t.wait(30);
 }
 
+// Take the data `setup` and `run` made away again: the test files share
+// one database, and a longer sidebar would move what later files drag.
+// `tasks`: the titles of other tasks the test file made (in the Inbox or
+// Today), as `name` gives them.
+function teardown(t, view, name, tasks) {
+    const controller = view.appController;
+    const list = view.taskList;
+    const titles = [name("inbox"), name("today")].concat((tasks || []).map(name));
+    for (const v of ["inbox", "today"]) {
+        controller.selectView(v);
+        t.wait(0);
+        for (let i = list.count - 1; i >= 0; --i) {
+            if (titles.indexOf(list.model.titleAt(i)) >= 0)
+                controller.trashTask(list.model.idAt(i));
+        }
+    }
+    for (const p of JSON.parse(controller.projectsJson)) {
+        if (p.title === name("project") || p.title === name("filed project"))
+            controller.trashProject(p.id);
+    }
+    for (const a of JSON.parse(controller.areasJson)) {
+        if (a.title === name("area"))
+            controller.trashArea(a.id);
+    }
+    controller.emptyTrash();
+    controller.selectView("today");
+    t.wait(0);
+    t.verify(!JSON.parse(controller.areasJson).some(a => a.title === name("area")), "the sweep's area is gone");
+    t.verify(!JSON.parse(controller.projectsJson).some(p => p.title === name("project")), "and its projects");
+}
+
 function run(t, view, look, name) {
     const controller = view.appController;
     const list = view.taskList;

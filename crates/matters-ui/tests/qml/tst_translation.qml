@@ -155,6 +155,7 @@ Item {
 
         function cleanupTestCase() {
             translations.useCatalog("en");
+            Sweep.teardown(testCase, view, name, ["fit"]);
         }
 
         function test_the_check_sees_what_isnt_translated() {

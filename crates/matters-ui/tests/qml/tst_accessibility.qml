@@ -83,6 +83,10 @@ Item {
             settle();
         }
 
+        function cleanupTestCase() {
+            Sweep.teardown(testCase, view, s => "a11y " + s, ["cursor first", "cursor second"]);
+        }
+
         // Every state is checked before the test fails, so one run lists
         // everything that is wrong: each problem with where it was met.
         property var found: ({})
