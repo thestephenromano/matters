@@ -45,6 +45,16 @@ impl SealingIdentity {
     }
 }
 
+/// This open's sealing writer and collection membership.
+#[derive(Default)]
+pub(crate) struct SyncKeys {
+    pub(crate) sealing: Option<Sealing>,
+    pub(crate) membership: Option<super::membership::Joined>,
+    /// This device has joined a collection and is active in it: every
+    /// recorded write must seal, so writes wait for its keys.
+    pub(crate) required: bool,
+}
+
 /// The identity and this open's writer incarnation.
 pub(crate) struct Sealing {
     identity: SealingIdentity,
@@ -61,7 +71,7 @@ pub struct SealedRecord {
 }
 
 /// 32 bytes of fresh OS entropy.
-fn random32() -> [u8; 32] {
+pub(crate) fn random32() -> [u8; 32] {
     let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
     let mut out = [0; 32];
     out[..16].copy_from_slice(a.as_bytes());
@@ -131,6 +141,24 @@ impl Sealing {
     fn identity(&self) -> &SealingIdentity {
         &self.identity
     }
+
+    /// Start sealing as `identity` under a new writer incarnation.
+    pub(crate) fn begin(conn: &rusqlite::Connection, identity: SealingIdentity) -> Result<Self> {
+        let incarnation = random32();
+        conn.execute(
+            "INSERT INTO sync_writers (incarnation, opened_at) VALUES (?1, ?2)",
+            params![incarnation.as_slice(), crate::clock::now_millis()],
+        )?;
+        Ok(Self {
+            identity,
+            incarnation,
+        })
+    }
+
+    /// Continue this writer's chain under a new epoch's identity.
+    pub(crate) fn rekey(&mut self, identity: SealingIdentity) {
+        self.identity = identity;
+    }
 }
 
 impl Database {
@@ -139,26 +167,18 @@ impl Database {
     /// or restored database never continues another copy's chain.
     #[cfg(feature = "test-support")]
     pub fn start_sealing(&self, identity: SealingIdentity) -> Result<()> {
-        self.with_sealing(|conn, engine, sealing| {
+        self.with_sealing(|conn, engine, keys| {
             if engine.is_none() {
                 return Err(MattersError::Validation("sync is off".into()));
             }
-            let incarnation = random32();
-            conn.execute(
-                "INSERT INTO sync_writers (incarnation, opened_at) VALUES (?1, ?2)",
-                params![incarnation.as_slice(), crate::clock::now_millis()],
-            )?;
-            *sealing = Some(Sealing {
-                identity,
-                incarnation,
-            });
+            keys.sealing = Some(Sealing::begin(conn, identity)?);
             Ok(())
         })
     }
 
     /// This open's writer incarnation, while it seals.
     pub fn writer_incarnation(&self) -> Option<[u8; 32]> {
-        self.with_sealing(|_, _, sealing| Ok(sealing.as_ref().map(|s| s.incarnation)))
+        self.with_sealing(|_, _, keys| Ok(keys.sealing.as_ref().map(|s| s.incarnation)))
             .unwrap_or(None)
     }
 

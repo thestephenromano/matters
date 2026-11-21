@@ -23,6 +23,11 @@ pub enum MattersError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A sync control record, envelope or key was refused (#37). Carries
+    /// no key material.
+    #[error("Sync authority error: {0}")]
+    Authority(#[from] matters_sync::authority::Error),
 }
 
 pub type Result<T> = std::result::Result<T, MattersError>;

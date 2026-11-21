@@ -1,4 +1,5 @@
 pub mod db;
+pub mod membership;
 mod repeats;
 pub mod schema;
 pub mod sealing;
