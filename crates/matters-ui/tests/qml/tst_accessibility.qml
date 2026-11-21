@@ -89,6 +89,33 @@ Item {
             settle();
         }
 
+        // Take this file's data away again: the test files share one
+        // database, and a longer sidebar would move what later files drag.
+        function cleanupTestCase() {
+            const titles = ["a11y today", "a11y inbox", "a11y cursor first", "a11y cursor second"];
+            for (const v of ["inbox", "today"]) {
+                controller.selectView(v);
+                wait(0);
+                for (let i = list.count - 1; i >= 0; --i) {
+                    if (titles.indexOf(list.model.titleAt(i)) >= 0)
+                        controller.trashTask(list.model.idAt(i));
+                }
+            }
+            for (const p of JSON.parse(controller.projectsJson)) {
+                if (p.title === "a11y project" || p.title === "a11y filed project")
+                    controller.trashProject(p.id);
+            }
+            for (const a of JSON.parse(controller.areasJson)) {
+                if (a.title === "a11y area")
+                    controller.trashArea(a.id);
+            }
+            controller.emptyTrash();
+            controller.selectView("today");
+            wait(0);
+            verify(!JSON.parse(controller.areasJson).some(a => a.title === "a11y area"), "the area is gone");
+            verify(!JSON.parse(controller.projectsJson).some(p => p.title.indexOf("a11y ") === 0), "and the projects");
+        }
+
         // Every state is checked before the test fails, so one run lists
         // everything that is wrong: each problem with where it was met.
         property var found: ({})
