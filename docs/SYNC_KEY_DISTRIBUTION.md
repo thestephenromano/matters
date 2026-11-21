@@ -209,7 +209,7 @@ root_recovery body = membership body, signed by the root under "matters-sync/v0/
 
 A device's membership survives restarts, and is never split between stores ([`matters_core::storage::membership`](../crates/matters-core/src/storage/membership.rs), migration v13).
 
-- **Keyring.** It holds only the two 32-byte seeds the device's ML-DSA and MLKEM keys are made from, under a random entry name. Behind the `KeyStore` trait this is oo7 in the app, per the #37 decision, and a map in tests.
+- **Keyring.** It holds only the two 32-byte seeds the device's ML-DSA and MLKEM keys are made from, under a random entry name. Behind the `KeyStore` trait this is oo7 in the app, per the #37 decision ([`matters-keyring`](../crates/matters-keyring/src/lib.rs): the Secret Service on the host, the secret portal's encrypted file keyring under Flatpak), and a map in tests. `matters-keyring`'s tests run against oo7's file backend; the Secret Service backend shares the adapter code above it but needs a keyring daemon that CI does not run.
 - **SQLite** holds only public, signed or encrypted material:
   - `sync_device`: the route, the document, the pinned root ID, the device ID, the keyring entry's name and the device's standing;
   - `sync_controls`: the signed control records the device accepted, in order, including the competing record of any fork;
