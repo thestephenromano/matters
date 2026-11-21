@@ -1,13 +1,14 @@
 //! The sync client between two Matters databases and the real relay on a
 //! real PostgreSQL (#39): convergence, idempotent re-sends after lost
-//! acknowledgements, a relay restore, removal, and hint-driven syncing.
+//! acknowledgements, a relay restore, removal, and hint-driven syncing; and,
+//! without PostgreSQL, that a stalled relay never holds up local edits.
 //!
 //! Set MATTERS_RELAY_TEST_DATABASE_URL (crates/matters-relay/compose.yaml);
 //! without it these tests are skipped, unless MATTERS_RELAY_REQUIRE_DB is
 //! set, as in CI.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use matters_core::storage::membership::{MemoryKeyStore, SyncStanding};
 use matters_core::{Database, Task};
@@ -265,4 +266,49 @@ async fn running_clients_follow_each_other_through_hints() {
     .expect("A receives B's edit through the hint, well before the minute");
     let _ = stop.send(true);
     relayed.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stalled_relay_never_blocks_local_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("a.db")).unwrap();
+    db.create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    let db = Arc::new(db);
+    // A relay that accepts connections and never answers.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        loop {
+            open.push(listener.accept().await.unwrap());
+        }
+    });
+    let client = Client::new(&endpoint, db.clone()).unwrap();
+    let round = tokio::spawn(async move { client.sync_once().await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // While the round waits on the network, the device keeps working.
+    let started = Instant::now();
+    let writer = db.clone();
+    tokio::task::spawn_blocking(move || {
+        for n in 1..=20 {
+            writer
+                .add_task(&mut Task::new(id(n), format!("offline {n}"), n as f64))
+                .unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "local edits waited {:?} on a stalled round",
+        started.elapsed()
+    );
+    assert!(
+        !round.is_finished(),
+        "the round is still waiting on the relay"
+    );
+    assert_eq!(db.outgoing_records().unwrap().len(), 20, "each edit queued");
+    round.abort();
+    held.abort();
 }

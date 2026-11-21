@@ -1,7 +1,7 @@
 //! Convergence under recorded schedules (#39): three Matters devices edit
 //! offline and sync through the real relay in fixed, seeded interleavings.
 //! The schedules include concurrent edits of one task, lost
-//! acknowledgements and a relay restore. After a final round of syncing,
+//! acknowledgements, process restarts and a relay restore. After a final round of syncing,
 //! every device must hold the same tasks, field for field, and nothing
 //! may be left pending.
 //!
@@ -9,6 +9,7 @@
 //! rerunning that seed replays it exactly. See client_tests.rs for the
 //! environment.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use matters_core::storage::membership::{MemoryKeyStore, SyncStanding};
@@ -52,6 +53,9 @@ struct World {
     admin: PgPool,
     name: String,
     relay: Relay,
+    endpoint: String,
+    paths: Vec<PathBuf>,
+    keys: Vec<MemoryKeyStore>,
     devices: Vec<Arc<Database>>,
     clients: Vec<Client<Database>>,
 }
@@ -77,16 +81,20 @@ async fn world() -> Option<World> {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     // A, then B and C joined out of band.
     let dir = tempfile::tempdir().unwrap();
-    let a = Database::open(dir.path().join("a.db")).unwrap();
-    a.create_collection(&MemoryKeyStore::default(), route())
-        .unwrap();
+    let paths: Vec<PathBuf> = ["a", "b", "c"]
+        .iter()
+        .map(|n| dir.path().join(format!("{n}.db")))
+        .collect();
+    let mut keys = vec![MemoryKeyStore::default()];
+    let a = Database::open(&paths[0]).unwrap();
+    a.create_collection(&keys[0], route()).unwrap();
     let mut devices = vec![Arc::new(a)];
-    for name in ["b", "c"] {
+    for path in &paths[1..] {
         let a = &devices[0];
-        let joiner = Database::open(dir.path().join(format!("{name}.db"))).unwrap();
-        let keys = MemoryKeyStore::default();
+        let joiner = Database::open(path).unwrap();
+        let joiner_keys = MemoryKeyStore::default();
         let shown = a.invite().unwrap();
-        let request = joiner.start_enrollment(&keys, &shown).unwrap();
+        let request = joiner.start_enrollment(&joiner_keys, &shown).unwrap();
         let joiner_id = parse(&request).unwrap().message.signer;
         a.admit(&request, &shown).unwrap();
         let envelopes: Vec<Vec<u8>> = a
@@ -101,11 +109,12 @@ async fn world() -> Option<World> {
             .collect();
         assert_eq!(
             joiner
-                .finish_enrollment(&keys, &a.sync_controls().unwrap(), &envelopes)
+                .finish_enrollment(&joiner_keys, &a.sync_controls().unwrap(), &envelopes)
                 .unwrap(),
             SyncStanding::Active
         );
         devices.push(Arc::new(joiner));
+        keys.push(joiner_keys);
     }
     let genesis = devices[0].sync_controls().unwrap().remove(0);
     let Body::Genesis(g) = parse(&genesis).unwrap().message.body else {
@@ -124,12 +133,28 @@ async fn world() -> Option<World> {
         admin,
         name,
         relay,
+        endpoint,
+        paths,
+        keys,
         devices,
         clients,
     })
 }
 
 impl World {
+    /// The device's process stops and starts again: everything it knows
+    /// comes back from its database and its key store.
+    fn restart(&mut self, d: usize) {
+        drop(self.clients.remove(d));
+        drop(self.devices.remove(d));
+        let db = Database::open(&self.paths[d]).unwrap();
+        db.resume_sync(&self.keys[d]).unwrap();
+        let db = Arc::new(db);
+        self.devices.insert(d, db.clone());
+        self.clients
+            .insert(d, Client::new(&self.endpoint, db).unwrap());
+    }
+
     async fn finish(self) {
         self.relay.pool().close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -161,12 +186,12 @@ fn view(db: &Database, created: u128) -> Vec<String> {
 }
 
 async fn run_schedule(seed: u64, steps: usize) {
-    let Some(w) = world().await else { return };
+    let Some(mut w) = world().await else { return };
     let mut rng = Rng(seed);
     let mut created: u128 = 0;
     for step in 0..steps {
         let d = rng.below(3) as usize;
-        let db = &w.devices[d];
+        let db = &w.devices[d].clone();
         let context = format!("seed {seed} step {step} device {d}");
         match rng.below(100) {
             // Edits, offline.
@@ -205,7 +230,7 @@ async fn run_schedule(seed: u64, steps: usize) {
                 }
             }
             // Coming online.
-            63..=92 => match w.clients[d].sync_once().await {
+            63..=89 => match w.clients[d].sync_once().await {
                 Ok(_) => {}
                 // Before the admin's device first comes online, the relay
                 // has not seen this device's admission: it is refused a
@@ -215,6 +240,8 @@ async fn run_schedule(seed: u64, steps: usize) {
                 )) => {}
                 Err(e) => panic!("{context}: sync: {e}"),
             },
+            // The device's process restarts.
+            90..=92 => w.restart(d),
             // An acknowledgement was lost: everything is sent again.
             93..=97 => db.sync_generation_changed().unwrap(),
             // The relay is restored from a backup into a new generation.
