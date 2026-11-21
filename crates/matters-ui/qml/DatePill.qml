@@ -22,7 +22,8 @@ ToolButton {
     required property color hoverColor
     required property color downColor
 
-    focusPolicy: Qt.NoFocus
+    // Tab reaches it (#74); a click leaves the focus where it was.
+    focusPolicy: Qt.TabFocus
     font.pixelSize: 12
     Accessible.name: label
     Accessible.role: Accessible.ButtonMenu
@@ -35,8 +36,8 @@ ToolButton {
         implicitHeight: 26
         radius: height / 2
         color: pill.down ? pill.downColor : pill.hovered ? pill.hoverColor : "transparent"
-        border.width: 1
-        border.color: pill.lineColor
+        border.width: pill.visualFocus ? 2 : 1
+        border.color: pill.visualFocus ? pill.palette.highlight : pill.lineColor
     }
 
     contentItem: RowLayout {

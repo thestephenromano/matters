@@ -3,6 +3,8 @@
 //! The binary (`src/main.rs`) opens the database and shows `qml/Main.qml`;
 //! this library holds everything else so tests can link against it.
 
+#[cfg(feature = "ui-tests")]
+pub mod accessibility_probe;
 pub mod bridge;
 pub mod calendar;
 pub mod eds;

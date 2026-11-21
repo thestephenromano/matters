@@ -184,3 +184,44 @@ fn qml_custom_content_controls_leave_text_to_their_content() {
         found.join("\n")
     );
 }
+
+/// Every colour is a palette token (#74): a colour literal outside
+/// MainView's palette block would escape the contrast check
+/// (`tests/qml/tst_contrast.qml`), which reads the tokens.
+#[test]
+fn qml_colours_come_from_the_palette() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("qml");
+    let literal = |line: &str| {
+        line.match_indices("\"#").any(|(at, _)| {
+            let hex = &line[at + 2..];
+            let digits = hex.chars().take_while(char::is_ascii_hexdigit).count();
+            matches!(digits, 3 | 6 | 8) && hex[digits..].starts_with('"')
+        })
+    };
+    let mut found = Vec::new();
+    let mut palettes = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "qml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut in_palette = false;
+        for (n, line) in text.lines().enumerate() {
+            if line.contains("// The palette (#74).") {
+                in_palette = true;
+                palettes += 1;
+            } else if line.contains("// End of the palette.") {
+                in_palette = false;
+            } else if !in_palette && literal(line) {
+                found.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+            }
+        }
+    }
+    assert_eq!(palettes, 1, "one palette block, in MainView.qml");
+    assert!(
+        found.is_empty(),
+        "colour literals outside the palette (add a token):\n{}",
+        found.join("\n")
+    );
+}
