@@ -131,7 +131,7 @@ binding    = HMAC-SHA384(key("matters-sync/v0/enrollment"),
 ```
 
 - **Invitation.** The admin draws 16 bytes of OS entropy and shows the invitation as a QR code. Alternatively it shows the 26-character code and publishes the offer under the lookup, so a device that has only the code can fetch the route, root ID and manifest. The code-holding device checks the offer's tag before using anything in it. The secret is one-time, and the admin's application forgets it after one accepted request.
-- **Request.** The new device pins the root by the invitation's root ID (`Authority::bootstrap_from_invitation`) and signs an `enrollment_request` with its own signing key, as the device ID of its two keys.
+- **Request.** The new device pins the root by the invitation's root ID (`Authority::bootstrap_from_invitation`) and signs an `enrollment_request` with its own signing key, as the device ID of its two keys. It leaves the request in the relay's enrollment mailbox under the invitation's lookup ID, and the admin's device collects it there (SYNC_SERVICE_CONTRACT.md, #42).
 - **Acceptance.** `Authority::accept_enrollment` checks, before the admin signs anything:
   - the invitation's route, root and current manifest;
   - the request's route, kind and manifest;

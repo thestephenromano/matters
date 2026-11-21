@@ -9,6 +9,7 @@ pub mod schema;
 pub mod sealing;
 pub(crate) mod sync;
 mod sync_store;
+pub use sync_store::Enrolling;
 mod tags;
 mod task_actions;
 pub(crate) mod trash;

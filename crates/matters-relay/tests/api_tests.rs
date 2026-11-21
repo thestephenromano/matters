@@ -15,7 +15,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use common::*;
 use matters_relay::api::{router, Clock};
-use matters_sync::authority::{sign_session, DeviceKeys, Route};
+use matters_sync::authority::{sign_session, Authority, DeviceKeys, Route};
 use matters_sync::record::record_hash;
 use minicbor::{Decoder, Encoder};
 use tower::ServiceExt;
@@ -568,5 +568,114 @@ async fn health_readiness_and_redacted_metrics() {
     assert_eq!(ready.status, StatusCode::SERVICE_UNAVAILABLE);
     let health = call(&app, Method::GET, "/healthz", None, vec![]).await;
     assert_eq!(health.status, StatusCode::OK);
+    db.finish().await;
+}
+
+#[tokio::test]
+async fn the_enrollment_mailbox_holds_requests_for_the_admin_only() {
+    let Some((db, c, app, _)) = setup().await else {
+        return;
+    };
+    let r = route_hex(&route());
+    // A request under an invitation into a collection on `route`.
+    let request_for = |route: &Route| {
+        let keys = matters_sync::authority::RecoverySecret::new(fresh())
+            .keys(route)
+            .unwrap();
+        let admin = device();
+        let genesis = matters_sync::authority::genesis(
+            route,
+            &keys,
+            &admin,
+            &matters_sync::ContentKey::new([4; 32]),
+            fresh(),
+        )
+        .unwrap();
+        let invitation = Authority::bootstrap(&genesis, route.clone(), keys.root_key())
+            .unwrap()
+            .invite(matters_sync::authority::InvitationSecret::new([1; 16]))
+            .unwrap();
+        matters_sync::authority::request_enrollment(&invitation, &device(), fresh()).unwrap()
+    };
+    let request = request_for(&route());
+    let lookup = hex(&[3; 16]);
+    let uri = format!("/v0/routes/{r}/enrollments/{lookup}");
+    // Left without a session; again with the same bytes; never replaced.
+    let put = |bytes: Vec<u8>, uri: String| {
+        let app = app.clone();
+        async move { call(&app, Method::PUT, &uri, None, bytes).await }
+    };
+    assert_eq!(
+        put(request.clone(), uri.clone()).await.status,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        put(request.clone(), uri.clone()).await.status,
+        StatusCode::OK
+    );
+    let other = request_for(&route());
+    assert_eq!(put(other, uri.clone()).await.status, StatusCode::CONFLICT);
+    // Only enrollment requests, and only for this route.
+    let malformed = put(
+        c.genesis.clone(),
+        format!("/v0/routes/{r}/enrollments/{}", hex(&[4; 16])),
+    )
+    .await;
+    assert_eq!(malformed.code(), "malformed");
+    let elsewhere = Route {
+        collection: [7; 16],
+        ..route()
+    };
+    let foreign = put(
+        request_for(&elsewhere),
+        format!("/v0/routes/{r}/enrollments/{}", hex(&[5; 16])),
+    )
+    .await;
+    assert_eq!(foreign.code(), "context-mismatch");
+    // The admin collects it; anyone without a session cannot.
+    let token = login(&app, &c.admin).await;
+    let got = call(&app, Method::GET, &uri, Some(&token), vec![]).await;
+    assert_eq!(
+        (got.status, got.body.clone()),
+        (StatusCode::OK, request.clone())
+    );
+    let anonymous = call(&app, Method::GET, &uri, None, vec![]).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    let absent = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/enrollments/{}", hex(&[9; 16])),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(absent.status, StatusCode::NOT_FOUND);
+    // A route keeps a bounded number at once.
+    for n in 0..(matters_relay::MAX_ENROLLMENTS - 1) {
+        let uri = format!("/v0/routes/{r}/enrollments/{}", hex(&[10 + n as u8; 16]));
+        assert_eq!(
+            put(request_for(&route()), uri).await.status,
+            StatusCode::CREATED
+        );
+    }
+    let full = put(
+        request_for(&route()),
+        format!("/v0/routes/{r}/enrollments/{}", hex(&[200; 16])),
+    )
+    .await;
+    assert_eq!(full.code(), "quota-exhausted");
+    // An expired request is gone, and makes room.
+    sqlx::query("UPDATE enrollments SET received_at = now() - interval '2 hours'")
+        .execute(db.relay.pool())
+        .await
+        .unwrap();
+    let expired = call(&app, Method::GET, &uri, Some(&token), vec![]).await;
+    assert_eq!(expired.status, StatusCode::NOT_FOUND);
+    let room = put(
+        request_for(&route()),
+        format!("/v0/routes/{r}/enrollments/{}", hex(&[201; 16])),
+    )
+    .await;
+    assert_eq!(room.status, StatusCode::CREATED);
     db.finish().await;
 }

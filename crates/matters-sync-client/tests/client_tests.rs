@@ -312,3 +312,56 @@ async fn a_stalled_relay_never_blocks_local_edits() {
     round.abort();
     held.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_joins_through_the_relay_mailbox() {
+    let Some(relayed) = relay().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let a = Arc::new(Database::open(dir.path().join("a.db")).unwrap());
+    a.create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    a.add_task(&mut Task::new(id(1), "before B joined", 0.0))
+        .unwrap();
+    let genesis = a.sync_controls().unwrap().remove(0);
+    let Body::Genesis(g) = parse(&genesis).unwrap().message.body else {
+        unreachable!()
+    };
+    relayed
+        .relay
+        .provision(&route(), &g.root_key, &genesis)
+        .await
+        .unwrap();
+    let a_client = Client::new(&relayed.endpoint, a.clone()).unwrap();
+    a_client.sync_once().await.unwrap();
+    // A shows an invitation; B, holding it, signs a request and leaves it.
+    let invitation = a.invite().unwrap();
+    let lookup = invitation.secret.lookup(&invitation.route).unwrap();
+    let b = Arc::new(Database::open(dir.path().join("b.db")).unwrap());
+    let b_keys = Arc::new(MemoryKeyStore::default());
+    let request = b.start_enrollment(b_keys.as_ref(), &invitation).unwrap();
+    let joining = Arc::new(matters_core::storage::Enrolling {
+        db: b.clone(),
+        keys: b_keys.clone(),
+    });
+    let joiner = matters_sync_client::Joiner::new(&relayed.endpoint, joining).unwrap();
+    assert!(!joiner.try_finish().await.unwrap(), "not admitted yet");
+    joiner.send_request(&lookup, &request).await.unwrap();
+    joiner.send_request(&lookup, &request).await.unwrap();
+    // A collects it, admits B and publishes.
+    let collected = a_client.fetch_enrollment(&lookup).await.unwrap().unwrap();
+    assert_eq!(collected, request);
+    a.admit(&collected, &invitation).unwrap();
+    a_client.sync_once().await.unwrap();
+    // B is a member now: it finishes, and syncs as any device.
+    assert!(joiner.try_finish().await.unwrap());
+    let b_client = Client::new(&relayed.endpoint, b.clone()).unwrap();
+    b_client.sync_once().await.unwrap();
+    assert_eq!(titles(&b), ["before B joined"]);
+    b.add_task(&mut Task::new(id(2), "from B", 1.0)).unwrap();
+    b_client.sync_once().await.unwrap();
+    a_client.sync_once().await.unwrap();
+    assert_eq!(titles(&a), titles(&b));
+    // Someone else's lookup holds nothing for A.
+    assert_eq!(a_client.fetch_enrollment(&[0; 16]).await.unwrap(), None);
+    relayed.finish().await;
+}

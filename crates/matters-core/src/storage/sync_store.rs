@@ -1,7 +1,7 @@
 //! Matters' database as a sync client's local store (#39).
 
 use matters_sync::authority::{self, Hash, Route};
-use matters_sync::store::{ControlOutcome, LocalStore, Log, StoreResult};
+use matters_sync::store::{ControlOutcome, JoiningStore, LocalStore, Log, StoreResult};
 use matters_sync::wire::SIGNATURE_BYTES;
 use rusqlite::{params, OptionalExtension};
 
@@ -152,4 +152,42 @@ impl LocalStore for Database {
     fn generation_changed(&self) -> StoreResult<()> {
         Ok(self.sync_generation_changed()?)
     }
+}
+
+/// A database joining a collection, with the key store its keys are in,
+/// as a sync client's joining store (#42).
+pub struct Enrolling<K> {
+    pub db: std::sync::Arc<Database>,
+    pub keys: K,
+}
+
+impl<K: super::membership::KeyStore + Send + Sync> JoiningStore for Enrolling<K> {
+    fn route(&self) -> StoreResult<Route> {
+        Ok(self.db.enrolling()?.ok_or_else(not_enrolling)?.0)
+    }
+
+    fn device(&self) -> StoreResult<Hash> {
+        Ok(self.db.enrolling()?.ok_or_else(not_enrolling)?.1)
+    }
+
+    fn sign_session(&self, challenge: &[u8; 32]) -> StoreResult<[u8; SIGNATURE_BYTES]> {
+        Ok(self.db.sign_enrolling_session(&self.keys, challenge)?)
+    }
+
+    fn finish(&self, controls: &[Vec<u8>], envelopes: &[Vec<u8>]) -> StoreResult<bool> {
+        match self.db.finish_enrollment(&self.keys, controls, envelopes) {
+            Ok(_) => Ok(true),
+            Err(MattersError::Validation(m))
+                if m.contains("has not added this device")
+                    || m.contains("no key envelope for the current epoch") =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+fn not_enrolling() -> MattersError {
+    MattersError::Validation("this device is not joining a collection".into())
 }

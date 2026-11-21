@@ -261,6 +261,9 @@ mod joining {
         pub unrecoverable: Vec<Hash>,
     }
 
+    /// A stored enrollment's application, tenant, collection and device.
+    type EnrollingRow = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
+
     /// A stored enrollment: application, tenant, collection, root, request.
     type Pending = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 
@@ -443,6 +446,62 @@ mod joining {
                     unrecoverable,
                 })
             })
+        }
+
+        /// The route and device ID of the enrollment this device started
+        /// and has not finished, if any.
+        pub fn enrolling(&self) -> Result<Option<(Route, Hash)>> {
+            self.with_conn(|conn| {
+                let row: Option<EnrollingRow> = conn
+                    .query_row(
+                        "SELECT application, tenant, collection, device FROM sync_enrolling",
+                        [],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    )
+                    .optional()?;
+                let stored = || MattersError::Validation("stored enrollment".into());
+                row.map(|(application, tenant, collection, device)| {
+                    Ok((
+                        Route {
+                            application: application.try_into().map_err(|_| stored())?,
+                            tenant: tenant.try_into().map_err(|_| stored())?,
+                            collection: collection.try_into().map_err(|_| stored())?,
+                        },
+                        device.try_into().map_err(|_| stored())?,
+                    ))
+                })
+                .transpose()
+            })
+        }
+
+        /// Sign a relay session challenge as the joining device, with its
+        /// keys from `store`. The relay grants the session only once the
+        /// admin's transition adding this device is published.
+        pub fn sign_enrolling_session(
+            &self,
+            store: &dyn KeyStore,
+            challenge: &[u8; 32],
+        ) -> Result<[u8; matters_sync::wire::SIGNATURE_BYTES]> {
+            let (route, _) = self.enrolling()?.ok_or_else(|| {
+                MattersError::Validation("this device has not started enrolling".into())
+            })?;
+            let key_name: String = self.with_conn(|conn| {
+                Ok(conn.query_row("SELECT key_name FROM sync_enrolling", [], |r| r.get(0))?)
+            })?;
+            let device = store
+                .load(&key_name)?
+                .ok_or_else(|| {
+                    MattersError::Validation(
+                        "this device's sync keys are missing from the keyring; enroll again".into(),
+                    )
+                })?
+                .keys()?;
+            Ok(authority::sign_session(
+                &device,
+                &route,
+                challenge,
+                random32(),
+            )?)
         }
 
         /// A new device's last step: the collection's control records,

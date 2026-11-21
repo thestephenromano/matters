@@ -65,3 +65,17 @@ pub trait LocalStore: Send + Sync {
     /// cursors and queue every record and control again for upload.
     fn generation_changed(&self) -> StoreResult<()>;
 }
+
+/// What a sync client needs from a device that is joining a collection
+/// (#42): it is not a member until the admin's transition is published, and
+/// its keys are in the key store rather than an open membership.
+pub trait JoiningStore: Send + Sync {
+    fn route(&self) -> StoreResult<Route>;
+    fn device(&self) -> StoreResult<Hash>;
+    fn sign_session(&self, challenge: &[u8; 32]) -> StoreResult<[u8; SIGNATURE_BYTES]>;
+    /// Finish joining with the collection's controls as the relay's
+    /// authority log holds them (key envelopes left out), and the envelopes
+    /// addressed to this device. True once joined; false while the admin's
+    /// transition is not there yet.
+    fn finish(&self, controls: &[Vec<u8>], envelopes: &[Vec<u8>]) -> StoreResult<bool>;
+}

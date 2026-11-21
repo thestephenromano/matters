@@ -108,6 +108,17 @@ pub trait KeyStore {
     fn store(&self, name: &str, seeds: &DeviceSeeds) -> Result<()>;
 }
 
+/// A shared key store is a key store.
+impl<T: KeyStore + ?Sized> KeyStore for std::sync::Arc<T> {
+    fn load(&self, name: &str) -> Result<Option<DeviceSeeds>> {
+        (**self).load(name)
+    }
+
+    fn store(&self, name: &str, seeds: &DeviceSeeds) -> Result<()> {
+        (**self).store(name, seeds)
+    }
+}
+
 /// A [`KeyStore`] in memory, for tests.
 #[cfg(feature = "test-support")]
 #[derive(Default)]

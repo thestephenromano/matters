@@ -85,6 +85,19 @@ The relay captures the route's high-water mark at the start of the request and r
 
 A cursor from another generation gets `410 generation-changed` with the current generation (see *Restore*). An empty page is not evidence that history never existed; a missing predecessor stays pending on the client.
 
+### Enrollment mailbox
+
+```text
+PUT /v0/routes/{route}/enrollments/{lookup-hex}     <exact signed enrollment_request, at most 65,536 bytes>
+GET /v0/routes/{route}/enrollments/{lookup-hex}     → 200 <the request bytes> | 404
+```
+
+A device joining through an invitation is not a member yet, so it has no session. It leaves its signed `enrollment_request` (SYNC_KEY_DISTRIBUTION.md) under the invitation's 16-byte lookup ID, which is derived from the invitation secret the relay never sees. The `PUT` needs no session.
+
+The relay checks only that the bytes are an enrollment request for this route. The same bytes again return `200`, and other bytes under the same lookup get `409 record-conflict`. A route keeps at most 16 unexpired requests, each for an hour; a seventeenth gets `507 quota-exhausted`.
+
+The `GET` needs a session, and only the route's current admin is given the request; anyone else, and an expired or absent request, gets `404`. The admin's device verifies the request against its invitation before signing anything. The joining device then becomes a member through the published transition and reads the authority log as any device does.
+
 ### Authority objects
 
 ```text

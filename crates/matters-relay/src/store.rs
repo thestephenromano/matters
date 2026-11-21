@@ -170,6 +170,12 @@ pub struct Page {
     pub complete: bool,
 }
 
+/// Unexpired enrollment requests a route keeps at once.
+pub const MAX_ENROLLMENTS: i64 = 16;
+/// How long an enrollment request is kept: an invitation is used within
+/// minutes.
+pub const ENROLLMENT_TTL_SECONDS: u64 = 3600;
+
 /// The relay's store.
 #[derive(Clone)]
 pub struct Relay {
@@ -518,6 +524,96 @@ impl Relay {
             generation: row.generation,
             digest: *digest,
         }))
+    }
+
+    /// Leave a joining device's enrollment request under `lookup` (#42).
+    /// No session is needed: the device is not a member yet. The relay checks
+    /// that the bytes are an enrollment request for this route, and keeps at
+    /// most [`MAX_ENROLLMENTS`] unexpired ones per route, each for
+    /// [`ENROLLMENT_TTL_SECONDS`].
+    ///
+    /// The same bytes again return `false`. Other bytes under the same
+    /// lookup conflict.
+    pub async fn put_enrollment(
+        &self,
+        route: &Route,
+        lookup: &[u8; 16],
+        bytes: &[u8],
+    ) -> Result<bool> {
+        let parsed = authority::parse(bytes).map_err(|_| RelayError::Malformed)?;
+        if parsed.message.body.kind() != "enrollment_request" {
+            return Err(RelayError::Malformed);
+        }
+        if parsed.message.route != *route {
+            return Err(RelayError::ContextMismatch);
+        }
+        let mut tx = self.pool.begin().await?;
+        let row = route_row(&mut tx, route, true).await?;
+        sqlx::query(
+            "DELETE FROM enrollments WHERE route = $1
+             AND received_at < now() - ($2::BIGINT * interval '1 second')",
+        )
+        .bind(row.id)
+        .bind(ENROLLMENT_TTL_SECONDS as i64)
+        .execute(&mut *tx)
+        .await?;
+        let existing: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT request FROM enrollments WHERE route = $1 AND lookup = $2")
+                .bind(row.id)
+                .bind(lookup.as_slice())
+                .fetch_optional(&mut *tx)
+                .await?;
+        if let Some(existing) = existing {
+            if existing != bytes {
+                return Err(RelayError::RecordConflict {
+                    digest: record_hash(&existing),
+                });
+            }
+            return Ok(false);
+        }
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM enrollments WHERE route = $1")
+            .bind(row.id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if pending >= MAX_ENROLLMENTS {
+            return Err(RelayError::QuotaExhausted);
+        }
+        sqlx::query("INSERT INTO enrollments (route, lookup, request) VALUES ($1, $2, $3)")
+            .bind(row.id)
+            .bind(lookup.as_slice())
+            .bind(bytes)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// The unexpired enrollment request under `lookup`, for the route's
+    /// admin (`device`, already authenticated). Anyone else, and an
+    /// expired or absent request, gets `None`.
+    pub async fn enrollment(
+        &self,
+        route: &Route,
+        device: &Hash,
+        lookup: &[u8; 16],
+    ) -> Result<Option<Vec<u8>>> {
+        let authority = self.authority(route).await?;
+        if authority.admin().ok() != Some(*device) {
+            return Ok(None);
+        }
+        let mut tx = self.pool.begin().await?;
+        let row = route_row(&mut tx, route, false).await?;
+        let request: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT request FROM enrollments WHERE route = $1 AND lookup = $2
+             AND received_at >= now() - ($3::BIGINT * interval '1 second')",
+        )
+        .bind(row.id)
+        .bind(lookup.as_slice())
+        .bind(ENROLLMENT_TTL_SECONDS as i64)
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(request)
     }
 
     /// A page of the route's records after `after` (from sequence 1 when
