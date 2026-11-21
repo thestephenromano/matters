@@ -11,9 +11,18 @@ import matters
 Item {
     id: root
 
-    readonly property string title: controller.currentTitle
+    // The open list's name: a fixed view's in the user's language, or the
+    // project's or area's own.
+    readonly property string title: {
+        const fixed = fixedViews.find(v => v.id === controller.currentView);
+        return fixed ? fixed.title : controller.currentTitle;
+    }
     // Exposed for hosts and tests.
     readonly property alias appController: controller
+    // Right to left in a right-to-left language (#75): rows, the sidebar
+    // and layouts mirror; Qt reverses text itself.
+    LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
+    LayoutMirroring.childrenInherit: true
     readonly property alias taskList: taskListView
 
     // No animations when the desktop asks for reduced motion (#77). Writable
@@ -51,9 +60,9 @@ Item {
             return;
         const ids = targetsOf(id);
         if (taskModel.statusAt(row) === "open")
-            actOn(ids.filter(t => taskModel.statusAt(taskModel.rowOf(t)) === "open"), t => controller.cancelTask(t), "%n tasks canceled");
+            actOn(ids.filter(t => taskModel.statusAt(taskModel.rowOf(t)) === "open"), t => controller.cancelTask(t), n => qsTr("%n tasks canceled", "", n));
         else
-            actOn(ids.filter(t => taskModel.statusAt(taskModel.rowOf(t)) !== "open"), t => controller.toggleTask(t), "%n tasks reopened");
+            actOn(ids.filter(t => taskModel.statusAt(taskModel.rowOf(t)) !== "open"), t => controller.toggleTask(t), n => qsTr("%n tasks reopened", "", n));
     }
 
     // Copy task `id` below itself and select the copy; with several
@@ -98,17 +107,19 @@ Item {
 
         MenuItem {
             objectName: "menuCancel"
-            text: (taskMenu.open_ ? "Cancel " : "Reopen ") + (taskMenu.taskCount > 1 ? taskMenu.taskCount + " Tasks" : "Task")
+            text: taskMenu.taskCount > 1
+                ? (taskMenu.open_ ? qsTr("Cancel %n Tasks", "", taskMenu.taskCount) : qsTr("Reopen %n Tasks", "", taskMenu.taskCount))
+                : (taskMenu.open_ ? qsTr("Cancel Task") : qsTr("Reopen Task"))
             onTriggered: root.cancelOrReopen(taskMenu.taskId)
         }
         MenuItem {
             objectName: "menuDuplicate"
-            text: "Duplicate"
+            text: qsTr("Duplicate")
             onTriggered: root.duplicateTask(taskMenu.taskId)
         }
         MenuItem {
             objectName: "menuConvert"
-            text: "Convert to Project"
+            text: qsTr("Convert to Project")
             // One task becomes one project.
             enabled: taskMenu.open_ && taskMenu.taskCount === 1
             onTriggered: controller.convertTaskToProject(taskMenu.taskId)
@@ -116,7 +127,7 @@ Item {
         MenuSeparator {}
         MenuItem {
             objectName: "menuTrash"
-            text: "Move to Trash"
+            text: qsTr("Move to Trash")
             onTriggered: root.trashTasks(root.targetsOf(taskMenu.taskId))
         }
     }
@@ -158,13 +169,13 @@ Item {
 
     // The fixed views, in sidebar order; Quick Find finds them by name too.
     readonly property var fixedViews: [
-        { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: root.viewColors.inbox },
-        { id: "today", title: "Today", icon: "today", count: controller.todayCount, color: root.viewColors.today },
-        { id: "upcoming", title: "Upcoming", icon: "upcoming", count: controller.upcomingCount, color: root.viewColors.upcoming },
-        { id: "anytime", title: "Anytime", icon: "anytime", count: controller.anytimeCount, color: root.viewColors.anytime },
-        { id: "someday", title: "Someday", icon: "someday", count: controller.somedayCount, color: root.viewColors.someday },
-        { id: "logbook", title: "Logbook", icon: "logbook", count: controller.logbookCount, color: root.viewColors.logbook },
-        { id: "trash", title: "Trash", icon: "trash", count: 0, color: root.viewColors.trash }
+        { id: "inbox", title: qsTr("Inbox"), icon: "inbox", count: controller.inboxCount, color: root.viewColors.inbox },
+        { id: "today", title: qsTr("Today"), icon: "today", count: controller.todayCount, color: root.viewColors.today },
+        { id: "upcoming", title: qsTr("Upcoming"), icon: "upcoming", count: controller.upcomingCount, color: root.viewColors.upcoming },
+        { id: "anytime", title: qsTr("Anytime"), icon: "anytime", count: controller.anytimeCount, color: root.viewColors.anytime },
+        { id: "someday", title: qsTr("Someday"), icon: "someday", count: controller.somedayCount, color: root.viewColors.someday },
+        { id: "logbook", title: qsTr("Logbook"), icon: "logbook", count: controller.logbookCount, color: root.viewColors.logbook },
+        { id: "trash", title: qsTr("Trash"), icon: "trash", count: 0, color: root.viewColors.trash }
     ]
 
     // Every tag, parents before children, with its depth (#57).
@@ -608,16 +619,16 @@ Item {
     }
 
     // Run `act` on each of `ids`. For several, they are remembered first,
-    // so one Undo puts them all back, and the notice says `done` ("%n" is
-    // how many).
-    function actOn(ids: var, act: var, done: string) {
+    // so one Undo puts them all back, and the notice says `done(n)` for how
+    // many.
+    function actOn(ids: var, act: var, done: var) {
         const several = ids.length > 1;
         if (several)
             controller.rememberTasks(JSON.stringify(ids));
         for (const id of ids)
             act(id);
         if (several)
-            showUndo("batch", "", done.replace("%n", ids.length));
+            showUndo("batch", "", done(ids.length));
     }
 
     function selectRow(row) {
@@ -827,7 +838,7 @@ Item {
                 else
                     controller.placeTask(moved, after);
                 after = moved;
-            }, "%n tasks moved");
+            }, n => qsTr("%n tasks moved", "", n));
             Qt.callLater(root.scrollToTask, id);
         }
     }
@@ -999,7 +1010,7 @@ Item {
     // Send tasks `ids` as `sendTask` does; one Undo brings them all back.
     function sendTasks(ids: var, kind: string, targetId: string) {
         const scheduled = kind === "today" || kind === "someday";
-        actOn(ids, id => sendTask(id, kind, targetId), scheduled ? "%n tasks scheduled" : "%n tasks moved");
+        actOn(ids, id => sendTask(id, kind, targetId), n => scheduled ? qsTr("%n tasks scheduled", "", n) : qsTr("%n tasks moved", "", n));
     }
 
     function openMoveFor(id) {
@@ -1114,7 +1125,7 @@ Item {
         if (ids.length === 1)
             showUndo("task", ids[0], taskModel.titleAt(taskModel.rowOf(ids[0])));
         selectOnly(next);
-        actOn(ids, id => controller.trashTask(id), "%n tasks moved to Trash");
+        actOn(ids, id => controller.trashTask(id), n => qsTr("%n tasks moved to Trash", "", n));
     }
 
     // Ctrl+.: complete the selected tasks, or reopen them all when none is
@@ -1125,9 +1136,9 @@ Item {
             return;
         const open = ids.filter(id => taskModel.statusAt(taskModel.rowOf(id)) === "open");
         if (open.length > 0)
-            actOn(open, id => controller.toggleTask(id), "%n tasks completed");
+            actOn(open, id => controller.toggleTask(id), n => qsTr("%n tasks completed", "", n));
         else
-            actOn(ids, id => controller.toggleTask(id), "%n tasks reopened");
+            actOn(ids, id => controller.toggleTask(id), n => qsTr("%n tasks reopened", "", n));
     }
 
     // ---- When popover (Ctrl+S, the Date… button; #59) ------------------
@@ -1223,7 +1234,7 @@ Item {
     // that goes on past the day.
     function describeEventTime(day, start, end, allDay) {
         if (allDay)
-            return "All day";
+            return qsTr("All day");
         const time = d => d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat);
         const from = parseLocal(start);
         const to = parseLocal(end);
@@ -1232,14 +1243,14 @@ Item {
         const startsBefore = from < dayStart;
         const endsAfter = to > nextDay;
         if (startsBefore && (endsAfter || to.getTime() === nextDay.getTime()))
-            return "All day";
+            return qsTr("All day");
         if (startsBefore)
-            return "Until " + time(to);
+            return qsTr("Until %1").arg(time(to));
         if (endsAfter)
-            return "From " + time(from);
+            return qsTr("From %1").arg(time(from));
         if (to <= from)
             return time(from);
-        return time(from) + " – " + time(to);
+        return qsTr("%1 – %2", "a time range").arg(time(from)).arg(time(to));
     }
 
     // The user's calendars (#62): [{id, name, color}], and the ids of those
@@ -1264,7 +1275,7 @@ Item {
         if (key === "")
             return "";
         if (key === "evening")
-            return "This Evening";
+            return qsTr("This Evening");
         const colon = key.indexOf(":");
         const kind = key.slice(0, colon);
         const rest = key.slice(colon + 1);
@@ -1274,19 +1285,26 @@ Item {
             return title;
         }
         if (kind === "done" && rest === "")
-            return "Earlier";
+            return qsTr("Earlier");
         const parts = rest.split("-");
         const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const days = Math.round((date - today) / 86400000);
         if (kind === "date" && days === 1)
-            return "Tomorrow";
+            return qsTr("Tomorrow");
         if (kind === "done" && days === 0)
-            return "Today";
+            return qsTr("Today");
         if (kind === "done" && days === -1)
-            return "Yesterday";
-        return Qt.formatDate(date, "dddd, MMMM d");
+            return qsTr("Yesterday");
+        return localDate(date, "weekday-day-month");
+    }
+
+    // `date` as the locale writes it (locale_format.rs): "day-month",
+    // "day-month-year", "weekday-day-month", "weekday-day-month-year",
+    // "month-year" or "weekday" (its short name).
+    function localDate(date, style) {
+        return controller.formatDate(Qt.formatDate(date, "yyyy-MM-dd"), style);
     }
 
     // Name something: rename the current project or area (`kind` "project"
@@ -1314,10 +1332,10 @@ Item {
     // just "When" when it has none.
     function describeWhenOf(iso, evening, someday) {
         if (someday)
-            return "Someday";
+            return qsTr("Someday");
         if (evening)
-            return "This Evening";
-        return iso === "" ? "When" : describeDay(iso);
+            return qsTr("This Evening");
+        return iso === "" ? qsTr("When") : describeDay(iso);
     }
 
     // A day for people: Today, Tomorrow, a weekday within the coming week, or
@@ -1329,12 +1347,12 @@ Item {
         today.setHours(0, 0, 0, 0);
         const days = Math.round((date - today) / 86400000);
         if (days === 0)
-            return "Today";
+            return qsTr("Today");
         if (days === 1)
-            return "Tomorrow";
+            return qsTr("Tomorrow");
         if (days > 1 && days < 7)
-            return Qt.formatDate(date, "ddd");
-        return Qt.formatDate(date, date.getFullYear() === today.getFullYear() ? "MMM d" : "MMM d, yyyy");
+            return localDate(date, "weekday");
+        return localDate(date, date.getFullYear() === today.getFullYear() ? "day-month" : "day-month-year");
     }
 
     // A deadline as shown on a row: "Due today", "Overdue: Nov 10" or the date.
@@ -1342,23 +1360,23 @@ Item {
         if (iso === "")
             return "";
         if (status === "today")
-            return "Due today";
+            return qsTr("Due today");
         const parts = iso.split("-");
-        const date = Qt.formatDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])), "MMM d");
-        return status === "overdue" ? "Overdue: " + date : date;
+        const date = localDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])), "day-month");
+        return status === "overdue" ? qsTr("Overdue: %1").arg(date) : date;
     }
 
     // How a typed When reads back, for the preview under the field.
     function describeWhen(preview) {
         if (preview === "today")
-            return "Today";
+            return qsTr("Today");
         if (preview === "evening")
-            return "This Evening";
+            return qsTr("This Evening");
         if (preview === "someday")
-            return "Someday";
+            return qsTr("Someday");
         const parts = preview.split("-");
         const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-        return Qt.formatDate(date, "dddd, MMMM d, yyyy");
+        return localDate(date, "weekday-day-month-year");
     }
 
     Component.onCompleted: {
@@ -1410,8 +1428,8 @@ Item {
                     objectName: "quickFindButton"
                     activeFocusOnTab: true
                     Accessible.role: Accessible.Button
-                    Accessible.name: "Quick Find"
-                    Accessible.description: "Ctrl+K"
+                    Accessible.name: qsTr("Quick Find")
+                    Accessible.description: qsTr("Ctrl+K")
                     Accessible.onPressAction: quickFindDialog.open()
                     Keys.onSpacePressed: quickFindDialog.open()
                     Keys.onReturnPressed: quickFindDialog.open()
@@ -1436,7 +1454,7 @@ Item {
                         }
 
                         Text {
-                            text: "Quick Find (Ctrl+K)"
+                            text: qsTr("Quick Find (Ctrl+K)")
                             color: root.colTextSecondary
                             font.pixelSize: 12
                             Layout.fillWidth: true
@@ -1476,7 +1494,7 @@ Item {
                             Keys.onSpacePressed: controller.selectView(navItem.modelData.id)
                             Keys.onReturnPressed: controller.selectView(navItem.modelData.id)
                             Keys.onEnterPressed: controller.selectView(navItem.modelData.id)
-                            Accessible.description: navItem.modelData.count > 0 ? navItem.modelData.count + " open" : ""
+                            Accessible.description: navItem.modelData.count > 0 ? qsTr("%n open", "", navItem.modelData.count) : ""
                             required property var modelData
                             Layout.fillWidth: true
                             height: 32
@@ -1557,7 +1575,7 @@ Item {
                     Layout.fillWidth: true
 
                     Text {
-                        text: "PROJECTS"
+                        text: qsTr("PROJECTS")
                         color: root.colTextSecondary
                         font.pixelSize: 11
                         font.weight: Font.Bold
@@ -1566,7 +1584,7 @@ Item {
 
                     ToolButton {
                         objectName: "tagsButton"
-                        Accessible.name: "Tags"
+                        Accessible.name: qsTr("Tags")
                         icon.width: 16
                         contentItem: Icon {
                             name: "tag"
@@ -1574,27 +1592,27 @@ Item {
                             color: root.colTextSecondary
                         }
                         ToolTip.visible: hovered
-                        ToolTip.text: "Tags"
+                        ToolTip.text: qsTr("Tags")
                         onClicked: tagsDialog.open()
                     }
 
                     ToolButton {
                         objectName: "preferencesButton"
                         icon.width: 16
-                        Accessible.name: "Preferences"
+                        Accessible.name: qsTr("Preferences")
                         contentItem: Icon {
                             name: "settings"
                             size: 16
                             color: root.colTextSecondary
                         }
                         ToolTip.visible: hovered
-                        ToolTip.text: "Preferences (Ctrl+,)"
+                        ToolTip.text: qsTr("Preferences (Ctrl+,)")
                         onClicked: preferencesDialog.open()
                     }
 
                     ToolButton {
                         objectName: "newContainerButton"
-                        Accessible.name: "New Project or Area"
+                        Accessible.name: qsTr("New Project or Area")
                         icon.width: 16
                         contentItem: Icon {
                             name: "plus"
@@ -1602,19 +1620,19 @@ Item {
                             color: root.colTextSecondary
                         }
                         ToolTip.visible: hovered
-                        ToolTip.text: "New Project or Area"
+                        ToolTip.text: qsTr("New Project or Area")
                         onClicked: newContainerMenu.popup()
 
                         Menu {
                             id: newContainerMenu
                             MenuItem {
                                 objectName: "newProjectItem"
-                                text: "New Project"
+                                text: qsTr("New Project")
                                 onTriggered: newProjectDialog.open()
                             }
                             MenuItem {
                                 objectName: "newAreaItem"
-                                text: "New Area"
+                                text: qsTr("New Area")
                                 onTriggered: newAreaDialog.open()
                             }
                         }
@@ -1963,7 +1981,7 @@ Item {
 
                     ToolButton {
                         objectName: "sidebarToggle"
-                        Accessible.name: (root.sidebarShown ? "Hide" : "Show") + " the sidebar"
+                        Accessible.name: root.sidebarShown ? qsTr("Hide the sidebar") : qsTr("Show the sidebar")
                         focusPolicy: Qt.NoFocus
                         contentItem: Icon {
                             name: "sidebar"
@@ -1971,7 +1989,7 @@ Item {
                             color: root.colTextSecondary
                         }
                         ToolTip.visible: hovered
-                        ToolTip.text: (root.sidebarShown ? "Hide" : "Show") + " the sidebar (F9)"
+                        ToolTip.text: root.sidebarShown ? qsTr("Hide the sidebar (F9)") : qsTr("Show the sidebar (F9)")
                         onClicked: root.sidebarShown = !root.sidebarShown
                     }
 
@@ -2011,7 +2029,7 @@ Item {
 
                         HoverHandler { id: pieHover }
                         ToolTip.visible: pieHover.hovered
-                        ToolTip.text: Math.round(progress * 100) + "% done"
+                        ToolTip.text: qsTr("%1% done").arg(Math.round(progress * 100))
                     }
 
                     // The title, and beside it whether a project is finished
@@ -2022,7 +2040,7 @@ Item {
 
                         Text {
                             id: viewTitle
-                            text: controller.currentTitle
+                            text: root.title
                             font.pixelSize: 28
                             font.weight: Font.Bold
                             color: projectStatusLabel.visible ? root.colTextSecondary : root.colTextPrimary
@@ -2034,7 +2052,7 @@ Item {
                             readonly property string status: controller.currentProjectStatus
                             anchors.verticalCenter: viewTitle.verticalCenter
                             visible: status === "completed" || status === "canceled"
-                            text: status === "completed" ? "Completed" : "Canceled"
+                            text: status === "completed" ? qsTr("Completed") : qsTr("Canceled")
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
                             color: root.colTextSecondary
@@ -2053,7 +2071,7 @@ Item {
                     // completed (#55).
                     Button {
                         objectName: "completeProjectButton"
-                        text: "Complete Project"
+                        text: qsTr("Complete Project")
                         visible: controller.currentView === "project" && controller.currentProjectStatus === "open"
                             && controller.currentProjectProgress >= 1
                         onClicked: root.askFinishProject("completed")
@@ -2063,7 +2081,7 @@ Item {
                     // (#67).
                     Button {
                         objectName: "logCompletedButton"
-                        text: "Log Completed"
+                        text: qsTr("Log Completed")
                         visible: root.logsByHand
                             && ["inbox", "today", "upcoming", "anytime", "someday"].indexOf(controller.currentView) >= 0
                         onClicked: controller.logCompleted()
@@ -2072,7 +2090,7 @@ Item {
                     Button {
                         id: emptyTrashButton
                         objectName: "emptyTrashButton"
-                        text: "Empty Trash"
+                        text: qsTr("Empty Trash")
                         visible: controller.currentView === "trash"
                             && (taskListView.count > 0 || root.trashedProjects.length > 0 || root.trashedAreas.length > 0)
                         onClicked: emptyTrashDialog.open()
@@ -2088,7 +2106,7 @@ Item {
                     ToolButton {
                         id: containerMenuButton
                         objectName: "containerMenuButton"
-                        Accessible.name: controller.currentView === "area" ? "Area actions" : "Project actions"
+                        Accessible.name: controller.currentView === "area" ? qsTr("Area actions") : qsTr("Project actions")
                         contentItem: Icon {
                             name: "more"
                             size: 20
@@ -2096,7 +2114,7 @@ Item {
                         }
                         visible: controller.currentView === "project" || controller.currentView === "area"
                         ToolTip.visible: hovered
-                        ToolTip.text: controller.currentView === "area" ? "Area actions" : "Project actions"
+                        ToolTip.text: controller.currentView === "area" ? qsTr("Area actions") : qsTr("Project actions")
                         onClicked: (controller.currentView === "area" ? areaMenu : projectMenu).popup(containerMenuButton, 0, height)
 
                         Menu {
@@ -2107,10 +2125,10 @@ Item {
                             Menu {
                                 id: projectAreaMenu
                                 objectName: "projectAreaMenu"
-                                title: "Area"
+                                title: qsTr("Area")
 
                                 Instantiator {
-                                    model: [{ id: "", title: "No Area" }].concat(root.areas)
+                                    model: [{ id: "", title: qsTr("No Area") }].concat(root.areas)
                                     delegate: MenuItem {
                                         required property var modelData
                                         objectName: "areaChoice-" + (modelData.id === "" ? "none" : modelData.id)
@@ -2129,13 +2147,13 @@ Item {
 
                             MenuItem {
                                 objectName: "renameProjectItem"
-                                text: "Rename…"
+                                text: qsTr("Rename…")
                                 onTriggered: root.openRename("project")
                             }
 
                             MenuItem {
                                 objectName: "addHeadingItem"
-                                text: "Add Heading…"
+                                text: qsTr("Add Heading…")
                                 onTriggered: root.openRename("newHeading", "", "")
                             }
 
@@ -2146,7 +2164,7 @@ Item {
                             MenuItem {
                                 objectName: "completeProjectItem"
                                 readonly property bool open: controller.currentProjectStatus === "open"
-                                text: open ? "Complete Project" : "Reopen Project"
+                                text: open ? qsTr("Complete Project") : qsTr("Reopen Project")
                                 onTriggered: {
                                     if (open)
                                         root.askFinishProject("completed");
@@ -2156,7 +2174,7 @@ Item {
                             }
                             MenuItem {
                                 objectName: "cancelProjectItem"
-                                text: "Cancel Project"
+                                text: qsTr("Cancel Project")
                                 enabled: controller.currentProjectStatus === "open"
                                 onTriggered: root.askFinishProject("canceled")
                             }
@@ -2165,7 +2183,7 @@ Item {
 
                             MenuItem {
                                 objectName: "trashProjectItem"
-                                text: "Move to Trash"
+                                text: qsTr("Move to Trash")
                                 onTriggered: {
                                     const id = controller.currentProjectId;
                                     root.showUndo("project", id, controller.currentTitle);
@@ -2180,7 +2198,7 @@ Item {
 
                             MenuItem {
                                 objectName: "renameAreaItem"
-                                text: "Rename…"
+                                text: qsTr("Rename…")
                                 onTriggered: root.openRename("area")
                             }
 
@@ -2188,7 +2206,7 @@ Item {
 
                             MenuItem {
                                 objectName: "trashAreaItem"
-                                text: "Move to Trash"
+                                text: qsTr("Move to Trash")
                                 onTriggered: {
                                     const id = controller.currentAreaId;
                                     root.showUndo("area", id, controller.currentTitle);
@@ -2230,8 +2248,8 @@ Item {
                                 color: root.colDanger
                             }
                             ToolTip.visible: hovered
-                            ToolTip.text: "Dismiss"
-                            Accessible.name: "Dismiss"
+                            ToolTip.text: qsTr("Dismiss")
+                            Accessible.name: qsTr("Dismiss")
                             visible: controller.errorMessage !== ""
                             onClicked: controller.clearError()
                         }
@@ -2264,13 +2282,13 @@ Item {
                             hoverColor: root.colSidebarHover
                             downColor: root.colSidebarActive
                             ToolTip.visible: hovered
-                            ToolTip.text: "When the project starts"
+                            ToolTip.text: qsTr("When the project starts")
                             onClicked: root.openProjectDatePopup("when")
                         }
 
                         DatePill {
                             objectName: "projectDeadline"
-                            label: controller.currentProjectDeadline === "" ? "Deadline"
+                            label: controller.currentProjectDeadline === "" ? qsTr("Deadline")
                                 : root.describeDeadline(controller.currentProjectDeadline, controller.currentProjectDeadlineStatus)
                             hasValue: controller.currentProjectDeadline !== ""
                             iconName: "deadline"
@@ -2280,7 +2298,7 @@ Item {
                             hoverColor: root.colSidebarHover
                             downColor: root.colSidebarActive
                             ToolTip.visible: hovered
-                            ToolTip.text: "The project's deadline"
+                            ToolTip.text: qsTr("The project's deadline")
                             onClicked: root.openProjectDatePopup("deadline")
                         }
                     }
@@ -2305,14 +2323,14 @@ Item {
                     TextArea {
                         id: projectNotes
                         objectName: "projectNotes"
-                        Accessible.name: "Project notes"
+                        Accessible.name: qsTr("Project notes")
                         // The project whose notes are in the editor, and what
                         // was last loaded or saved for it.
                         property string projectId: ""
                         property string saved: ""
                         Layout.fillWidth: true
                         Layout.preferredHeight: Math.max(32, contentHeight + topPadding + bottomPadding)
-                        placeholderText: "Notes"
+                        placeholderText: qsTr("Notes")
                         font.pixelSize: 13
                         color: root.colTextPrimary
                         wrapMode: TextArea.Wrap
@@ -2410,7 +2428,7 @@ Item {
                         TextInput {
                             id: newTaskInput
                             objectName: "newTaskInput"
-                            Accessible.name: "New task"
+                            Accessible.name: qsTr("New task")
                             Layout.fillWidth: true
                             font.pixelSize: 14
                             color: root.colTextPrimary
@@ -2418,7 +2436,7 @@ Item {
 
                             Text {
                                 anchors.fill: parent
-                                text: "Add a task"
+                                text: qsTr("Add a task")
                                 color: root.colTextSecondary
                                 font.pixelSize: 14
                                 visible: !newTaskInput.text && !newTaskInput.activeFocus
@@ -2480,7 +2498,7 @@ Item {
 
                                 ToolButton {
                                     objectName: "restoreAreaButton"
-                                    text: "Put Back"
+                                    text: qsTr("Put Back")
                                     font.pixelSize: 11
                                     onClicked: controller.restoreArea(trashedArea.modelData.id)
                                 }
@@ -2531,7 +2549,7 @@ Item {
 
                                 ToolButton {
                                     objectName: "restoreProjectButton"
-                                    text: "Put Back"
+                                    text: qsTr("Put Back")
                                     font.pixelSize: 11
                                     onClicked: controller.restoreProject(trashedProject.modelData.id)
                                 }
@@ -2551,7 +2569,7 @@ Item {
                     spacing: 6
 
                     Repeater {
-                        model: [{ id: "", name: "All", depth: 0 }].concat(root.presentTags)
+                        model: [{ id: "", name: qsTr("All"), depth: 0 }].concat(root.presentTags)
                         delegate: Rectangle {
                             id: filterChip
                             objectName: "filterTag"
@@ -2566,7 +2584,7 @@ Item {
                             border.width: 1
                             border.color: chosen ? root.colAccent : root.colBorder
                             Accessible.role: Accessible.Button
-                            Accessible.name: tagId === "" ? "Show all tasks" : "Show only " + name
+                            Accessible.name: tagId === "" ? qsTr("Show all tasks") : qsTr("Show only %1").arg(name)
                             Accessible.checked: chosen
 
                             Text {
@@ -2727,14 +2745,14 @@ Item {
                                 anchors.right: parent.right
                                 anchors.verticalCenter: headingText.verticalCenter
                                 focusPolicy: Qt.NoFocus
-                                Accessible.name: "Heading actions"
+                                Accessible.name: qsTr("Heading actions")
                                 contentItem: Icon {
                                     name: "more"
                                     size: 16
                                     color: root.colTextSecondary
                                 }
                                 ToolTip.visible: hovered
-                                ToolTip.text: "Heading actions"
+                                ToolTip.text: qsTr("Heading actions")
                                 onClicked: headingMenu.popup(headingMenuButton, 0, height)
 
                                 Menu {
@@ -2743,24 +2761,24 @@ Item {
 
                                     MenuItem {
                                         objectName: "renameHeadingItem"
-                                        text: "Rename…"
+                                        text: qsTr("Rename…")
                                         onTriggered: root.openRename("heading", sectionHeading.headingId, sectionHeading.title)
                                     }
                                     MenuItem {
                                         objectName: "moveHeadingUpItem"
-                                        text: "Move Up"
+                                        text: qsTr("Move Up")
                                         onTriggered: controller.moveHeading(sectionHeading.headingId, -1)
                                     }
                                     MenuItem {
                                         objectName: "moveHeadingDownItem"
-                                        text: "Move Down"
+                                        text: qsTr("Move Down")
                                         onTriggered: controller.moveHeading(sectionHeading.headingId, 1)
                                     }
                                     // To another project, with its tasks (#169).
                                     Menu {
                                         id: headingProjectMenu
                                         objectName: "moveHeadingToProjectMenu"
-                                        title: "Move to Project"
+                                        title: qsTr("Move to Project")
                                         Instantiator {
                                             model: root.projects.filter(p => p.id !== controller.currentProjectId)
                                             delegate: MenuItem {
@@ -2777,7 +2795,7 @@ Item {
                                     // Its tasks stay in the project (decided on #22).
                                     MenuItem {
                                         objectName: "deleteHeadingItem"
-                                        text: "Delete Heading"
+                                        text: qsTr("Delete Heading")
                                         onTriggered: {
                                             root.showUndo("heading", sectionHeading.headingId, sectionHeading.title);
                                             controller.deleteHeading(sectionHeading.headingId);
@@ -2882,7 +2900,7 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             visible: taskListView.count === 0
-                            text: "No tasks here. Enjoy your peace of mind."
+                            text: qsTr("No tasks here. Enjoy your peace of mind.")
                             color: root.colTextSecondary
                             font.pixelSize: 15
                         }
@@ -2929,7 +2947,7 @@ Item {
                                     height: 36
                                     opacity: 0.65
                                     Accessible.role: Accessible.StaticText
-                                    Accessible.name: "Will repeat: " + title + ", " + repeat
+                                    Accessible.name: qsTr("Will repeat: %1, %2").arg(title).arg(repeat)
 
                                     RowLayout {
                                         anchors.fill: parent
@@ -2978,8 +2996,8 @@ Item {
                                     width: taskListView.width
                                     height: 32
                                     Accessible.role: Accessible.StaticText
-                                    Accessible.name: "Event: " + title + ", " + when
-                                        + (calendarName !== "" ? ", " + calendarName : "")
+                                    Accessible.name: calendarName !== "" ? qsTr("Event: %1, %2, %3").arg(title).arg(when).arg(calendarName)
+                                        : qsTr("Event: %1, %2").arg(title).arg(when)
 
                                     RowLayout {
                                         anchors.fill: parent
@@ -3089,10 +3107,10 @@ Item {
                                             objectName: "projectRowLabel"
                                             readonly property bool urgent: !projectRow.finished
                                                 && (projectRow.deadlineStatus === "today" || projectRow.deadlineStatus === "overdue")
-                                            text: projectRow.status === "completed" ? "Completed project"
-                                                : projectRow.status === "canceled" ? "Canceled project"
+                                            text: projectRow.status === "completed" ? qsTr("Completed project")
+                                                : projectRow.status === "canceled" ? qsTr("Canceled project")
                                                 : urgent ? root.describeDeadline(projectRow.deadline, projectRow.deadlineStatus)
-                                                : "Project"
+                                                : qsTr("Project")
                                             font.pixelSize: 12
                                             font.weight: urgent ? Font.DemiBold : Font.Normal
                                             color: urgent ? root.colDanger : root.colTextSecondary
@@ -3116,7 +3134,9 @@ Item {
                                     objectName: "taskRow"
                                     Accessible.role: Accessible.ListItem
                                     Accessible.name: title
-                                    Accessible.description: [done ? "Completed" : canceled ? "Canceled" : "", repeat !== "" ? "Repeats " + repeat : "", reminder !== "" ? "Reminder at " + reminder : ""].filter(s => s !== "").join(", ")
+                                    Accessible.description: [done ? qsTr("Completed") : canceled ? qsTr("Canceled") : "",
+        repeat !== "" ? qsTr("Repeats %1").arg(repeat) : "",
+        reminder !== "" ? qsTr("Reminder at %1").arg(root.describeTime(reminder)) : ""].filter(s => s !== "").join(qsTr(", ", "between parts of a list"))
                                     Accessible.selectable: true
                                     Accessible.selected: isSelected
                                     // The list keeps the keyboard focus and moves its own
@@ -3294,8 +3314,8 @@ Item {
                                                 id: checkCircle
                                                 objectName: "checkCircle"
                                                 Accessible.role: Accessible.CheckBox
-                                                Accessible.name: (taskRow.canceled ? "Reopen " : "Complete ") + taskRow.title
-                                                Accessible.description: "Ctrl+."
+                                                Accessible.name: taskRow.canceled ? qsTr("Reopen %1").arg(taskRow.title) : qsTr("Complete %1").arg(taskRow.title)
+                                                Accessible.description: qsTr("Ctrl+.")
                                                 Accessible.checkable: true
                                                 Accessible.checked: taskRow.done
                                                 Accessible.onToggleAction: controller.toggleTask(taskRow.taskId)
@@ -3369,7 +3389,7 @@ Item {
                                             TextInput {
                                                 id: titleInput
                                                 objectName: "titleInput"
-                                                Accessible.name: "Title"
+                                                Accessible.name: qsTr("Title")
                                                 visible: taskRow.isExpanded
                                                 text: taskRow.title
                                                 font.pixelSize: 14
@@ -3444,7 +3464,7 @@ Item {
                                                     anchors.left: eveningIcon.right
                                                     anchors.leftMargin: 4
                                                     anchors.verticalCenter: parent.verticalCenter
-                                                    text: "Evening"
+                                                    text: qsTr("Evening")
                                                     font.pixelSize: 11
                                                     font.weight: Font.DemiBold
                                                     color: root.colEvening
@@ -3536,7 +3556,7 @@ Item {
                                                 size: 14
                                                 color: root.colTextSecondary
                                                 Accessible.role: Accessible.StaticText
-                                                Accessible.name: "Repeats: " + taskRow.repeat
+                                                Accessible.name: qsTr("Repeats: %1").arg(taskRow.repeat)
                                             }
 
                                             // A reminder (#60): a bell and its time.
@@ -3548,7 +3568,7 @@ Item {
                                                 radius: 4
                                                 color: root.colChip
                                                 Accessible.role: Accessible.StaticText
-                                                Accessible.name: "Reminder at " + reminderLabel.text
+                                                Accessible.name: qsTr("Reminder at %1").arg(reminderLabel.text)
 
                                                 Icon {
                                                     id: reminderIcon
@@ -3580,7 +3600,7 @@ Item {
                                                 size: 14
                                                 color: root.colTextSecondary
                                                 Accessible.role: Accessible.StaticText
-                                                Accessible.name: "Has notes"
+                                                Accessible.name: qsTr("Has notes")
                                             }
 
                                             // Checklist progress, while the row is closed.
@@ -3592,7 +3612,7 @@ Item {
                                                 radius: 4
                                                 color: root.colChip
                                                 Accessible.role: Accessible.StaticText
-                                                Accessible.name: "Checklist: " + taskRow.checklistDone + " of " + taskRow.checklistTotal + " done"
+                                                Accessible.name: qsTr("Checklist: %1 of %2 done").arg(taskRow.checklistDone).arg(taskRow.checklistTotal)
 
                                                 Icon {
                                                     id: checklistIcon
@@ -3628,7 +3648,7 @@ Item {
                                                 }
                                                 visible: rowHover.hovered && controller.currentView !== "trash"
                                                 ToolTip.visible: hovered
-                                                ToolTip.text: "Move to Trash"
+                                                ToolTip.text: qsTr("Move to Trash")
                                                 onClicked: {
                                                     root.showUndo("task", taskRow.taskId, taskRow.title);
                                                     controller.trashTask(taskRow.taskId);
@@ -3639,7 +3659,7 @@ Item {
                                             ToolButton {
                                                 objectName: "restoreButton"
                                                 focusPolicy: Qt.NoFocus
-                                                text: "Put Back"
+                                                text: qsTr("Put Back")
                                                 visible: controller.currentView === "trash"
                                                 font.pixelSize: 11
                                                 onClicked: controller.restoreTask(taskRow.taskId)
@@ -3673,7 +3693,7 @@ Item {
                                                 Text {
                                                     anchors.fill: parent
                                                     verticalAlignment: Text.AlignVCenter
-                                                    text: "New to-do"
+                                                    text: qsTr("New to-do")
                                                     color: root.colTextSecondary
                                                     font.pixelSize: 14
                                                     visible: !newBelowInput.text
@@ -3713,7 +3733,7 @@ Item {
                                             TextArea {
                                                 id: notesInput
                                                 objectName: "notesInput"
-                                                Accessible.name: "Notes"
+                                                Accessible.name: qsTr("Notes")
                                                 // Editing a task's notes selects that task.
                                                 onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
                                                 // Hidden (the task closed), it gives up the focus: the
@@ -3727,7 +3747,7 @@ Item {
                                                 // Grows with what is written, or with how it
                                                 // is shown.
                                                 Layout.preferredHeight: Math.max(44, (rendered ? notesView.contentHeight : contentHeight) + topPadding + bottomPadding)
-                                                placeholderText: "Notes"
+                                                placeholderText: qsTr("Notes")
                                                 font.pixelSize: 13
                                                 // The source is unseen under its formatted view.
                                                 color: rendered ? "transparent" : root.colTextPrimary
@@ -3757,7 +3777,7 @@ Item {
                                                     font.pixelSize: 13
                                                     color: root.colTextPrimary
                                                     Accessible.role: Accessible.StaticText
-                                                    Accessible.name: "Notes: " + getText(0, length)
+                                                    Accessible.name: qsTr("Notes: %1").arg(getText(0, length))
 
                                                     MouseArea {
                                                         objectName: "notesViewMouse"
@@ -3865,7 +3885,7 @@ Item {
                                                     id: checklistButton
                                                     objectName: "checklistButton"
                                                     focusPolicy: Qt.NoFocus
-                                                    Accessible.name: "Add a checklist item"
+                                                    Accessible.name: qsTr("Add a checklist item")
                                                     leftPadding: 8
                                                     rightPadding: 8
                                                     topPadding: 4
@@ -3885,7 +3905,7 @@ Item {
                                                         color: root.colTextSecondary
                                                     }
                                                     ToolTip.visible: hovered
-                                                    ToolTip.text: "Add a checklist item"
+                                                    ToolTip.text: qsTr("Add a checklist item")
                                                     onClicked: if (checklistLoader.editor) checklistLoader.editor.startAdding("")
                                                 }
 
@@ -3902,13 +3922,13 @@ Item {
                                                     hoverColor: root.colSidebarHover
                                                     downColor: root.colSidebarActive
                                                     ToolTip.visible: hovered
-                                                    ToolTip.text: "Change when (Ctrl+S)"
+                                                    ToolTip.text: qsTr("Change when (Ctrl+S)")
                                                     onClicked: root.openWhenFor(taskRow.taskId)
                                                 }
 
                                                 DatePill {
                                                     objectName: "schedule-deadline"
-                                                    label: taskRow.deadline === "" ? "Deadline"
+                                                    label: taskRow.deadline === "" ? qsTr("Deadline")
                                                         : root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
                                                     hasValue: taskRow.deadline !== ""
                                                     iconName: "deadline"
@@ -3918,7 +3938,7 @@ Item {
                                                     hoverColor: root.colSidebarHover
                                                     downColor: root.colSidebarActive
                                                     ToolTip.visible: hovered
-                                                    ToolTip.text: "Change the deadline (Ctrl+D)"
+                                                    ToolTip.text: qsTr("Change the deadline (Ctrl+D)")
                                                     onClicked: root.openDeadlineFor(taskRow.taskId)
                                                 }
                                             }
@@ -3963,10 +3983,11 @@ Item {
                 objectName: "undoText"
                 // Headings and checklist items are deleted, not trashed.
                 text: root.undoKind === "batch" ? root.undoTitle
-                    : root.undoKind === "heading" ? "Heading “" + root.undoTitle + "” deleted"
-                    : root.undoKind === "checklist" ? "Checklist item “" + root.undoTitle + "” deleted"
-                    : (root.undoKind === "project" ? "Project" : root.undoKind === "area" ? "Area" : "Task")
-                        + " “" + root.undoTitle + "” moved to Trash"
+                    : root.undoKind === "heading" ? qsTr("Heading “%1” deleted").arg(root.undoTitle)
+                    : root.undoKind === "checklist" ? qsTr("Checklist item “%1” deleted").arg(root.undoTitle)
+                    : root.undoKind === "project" ? qsTr("Project “%1” moved to Trash").arg(root.undoTitle)
+                    : root.undoKind === "area" ? qsTr("Area “%1” moved to Trash").arg(root.undoTitle)
+                    : qsTr("Task “%1” moved to Trash").arg(root.undoTitle)
                 color: root.colInverseText
                 font.pixelSize: 13
                 elide: Text.ElideMiddle
@@ -3975,7 +3996,7 @@ Item {
 
             Button {
                 objectName: "undoButton"
-                text: "Undo"
+                text: qsTr("Undo")
                 flat: true
                 onClicked: root.undo()
             }
@@ -4085,9 +4106,9 @@ Item {
             TextField {
                 id: searchInput
                 objectName: "searchInput"
-                Accessible.name: "Quick Find"
+                Accessible.name: qsTr("Quick Find")
                 Layout.fillWidth: true
-                placeholderText: "Find lists, areas, projects, tags and tasks..."
+                placeholderText: qsTr("Find lists, areas, projects, tags and tasks...")
                 font.pixelSize: 15
                 focus: true
                 onTextChanged: {
@@ -4124,14 +4145,14 @@ Item {
                     readonly property string kind: modelData.kind
                     // What the result is, as its row and screen readers say:
                     // nothing for a task.
-                    readonly property string kindName: ({ view: "List", area: "Area", project: "Project", tag: "Tag" })[kind] ?? ""
+                    readonly property string kindName: ({ view: qsTr("List"), area: qsTr("Area"), project: qsTr("Project"), tag: qsTr("Tag") })[kind] ?? ""
                     width: searchResultsList.width
                     height: 36
                     radius: 6
                     color: resultItem.ListView.isCurrentItem ? root.colSidebarActive
                         : resMouse.containsMouse ? root.colSidebarHover : "transparent"
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: (kindName !== "" ? kindName + ": " : "") + modelData.title
+                    Accessible.name: kindName !== "" ? qsTr("%1: %2", "the kind of a result, then its name").arg(kindName).arg(modelData.title) : modelData.title
 
                     RowLayout {
                         anchors.fill: parent
@@ -4201,7 +4222,7 @@ Item {
     Dialog {
         id: openLinkDialog
         objectName: "openLinkDialog"
-        title: "Open this link?"
+        title: qsTr("Open this link?")
         modal: true
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4223,11 +4244,11 @@ Item {
         footer: DialogButtonBox {
             Button {
                 objectName: "confirmOpenLink"
-                text: "Open"
+                text: qsTr("Open")
                 DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
             }
             Button {
-                text: "Cancel"
+                text: qsTr("Cancel")
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
         }
@@ -4264,7 +4285,7 @@ Item {
             close();
             if (name === "")
                 return;
-            root.actOn(taskIds, id => controller.tagByName("task", id, name), "%n tasks tagged " + name);
+            root.actOn(taskIds, id => controller.tagByName("task", id, name), n => qsTr("%n tasks tagged %1", "", n).arg(name));
         }
 
         background: Rectangle {
@@ -4276,7 +4297,7 @@ Item {
         contentItem: ColumnLayout {
             spacing: 8
             Text {
-                text: "Tag " + batchTagPopup.taskIds.length + " tasks"
+                text: qsTr("Tag %n tasks", "", batchTagPopup.taskIds.length)
                 font.pixelSize: 13
                 font.bold: true
                 color: root.colTextPrimary
@@ -4284,9 +4305,9 @@ Item {
             TextField {
                 id: batchTagInput
                 objectName: "batchTagInput"
-                Accessible.name: "Tag"
+                Accessible.name: qsTr("Tag")
                 Layout.fillWidth: true
-                placeholderText: "Tag"
+                placeholderText: qsTr("Tag")
                 Keys.onReturnPressed: batchTagPopup.commit()
                 Keys.onEnterPressed: batchTagPopup.commit()
             }
@@ -4307,7 +4328,7 @@ Item {
     Dialog {
         id: preferencesDialog
         objectName: "preferencesDialog"
-        title: "Preferences"
+        title: qsTr("Preferences")
         modal: true
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4322,7 +4343,7 @@ Item {
             spacing: 4
 
             Label {
-                text: "Move completed tasks to the Logbook"
+                text: qsTr("Move completed tasks to the Logbook")
                 font.bold: true
             }
 
@@ -4333,28 +4354,28 @@ Item {
             RadioButton {
                 id: whenLeavingButton
                 objectName: "logPolicy-when-leaving"
-                text: "When I leave the list"
+                text: qsTr("When I leave the list")
                 ButtonGroup.group: logPolicyGroup
                 checked: controller.logPolicy === "when-leaving"
                 onClicked: controller.chooseLogPolicy("when-leaving")
             }
             RadioButton {
                 objectName: "logPolicy-immediately"
-                text: "Immediately"
+                text: qsTr("Immediately")
                 ButtonGroup.group: logPolicyGroup
                 checked: controller.logPolicy === "immediately"
                 onClicked: controller.chooseLogPolicy("immediately")
             }
             RadioButton {
                 objectName: "logPolicy-daily"
-                text: "At the end of the day"
+                text: qsTr("At the end of the day")
                 ButtonGroup.group: logPolicyGroup
                 checked: controller.logPolicy === "daily"
                 onClicked: controller.chooseLogPolicy("daily")
             }
             RadioButton {
                 objectName: "logPolicy-manually"
-                text: "When I choose Log Completed (Ctrl+Shift+L)"
+                text: qsTr("When I choose Log Completed (Ctrl+Shift+L)")
                 ButtonGroup.group: logPolicyGroup
                 checked: controller.logPolicy === "manually"
                 onClicked: controller.chooseLogPolicy("manually")
@@ -4363,7 +4384,7 @@ Item {
             // Light or dark (#72).
             Label {
                 Layout.topMargin: 12
-                text: "Appearance"
+                text: qsTr("Appearance")
                 font.bold: true
             }
             ButtonGroup {
@@ -4371,9 +4392,9 @@ Item {
             }
             Repeater {
                 model: [
-                    { key: "system", text: "Follow the system" },
-                    { key: "light", text: "Light" },
-                    { key: "dark", text: "Dark" }
+                    { key: "system", text: qsTr("Follow the system") },
+                    { key: "light", text: qsTr("Light") },
+                    { key: "dark", text: qsTr("Dark") }
                 ]
                 delegate: RadioButton {
                     required property var modelData
@@ -4388,7 +4409,7 @@ Item {
             // surfaces.
             CheckBox {
                 objectName: "followAccentBox"
-                text: "Use the desktop's accent colour"
+                text: qsTr("Use the desktop's accent colour")
                 enabled: controller.systemAccent !== ""
                 checked: controller.followAccent
                 onClicked: controller.chooseFollowAccent(checked)
@@ -4398,7 +4419,7 @@ Item {
                 Layout.leftMargin: 24
                 Layout.fillWidth: true
                 visible: controller.systemAccent === ""
-                text: "Your desktop doesn't offer an accent colour."
+                text: qsTr("Your desktop doesn't offer an accent colour.")
                 wrapMode: Text.WordWrap
                 color: root.colTextSecondary
             }
@@ -4406,13 +4427,13 @@ Item {
             // Calendar events in Today and Upcoming (#62).
             Label {
                 Layout.topMargin: 12
-                text: "Calendar events"
+                text: qsTr("Calendar events")
                 font.bold: true
             }
             CheckBox {
                 id: showEventsBox
                 objectName: "showEventsBox"
-                text: "Show events in Today and Upcoming"
+                text: qsTr("Show events in Today and Upcoming")
                 checked: controller.showEvents
                 onClicked: controller.chooseShowEvents(checked)
             }
@@ -4444,7 +4465,7 @@ Item {
                 Layout.fillWidth: true
                 visible: text !== ""
                 text: controller.calendarProblem !== "" ? controller.calendarProblem
-                    : root.calendars.length === 0 ? "No calendars were found." : ""
+                    : root.calendars.length === 0 ? qsTr("No calendars were found.") : ""
                 wrapMode: Text.WordWrap
                 color: root.colTextSecondary
             }
@@ -4455,7 +4476,7 @@ Item {
     Dialog {
         id: emptyTrashDialog
         objectName: "emptyTrashDialog"
-        title: "Empty Trash?"
+        title: qsTr("Empty Trash?")
         modal: true
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4464,18 +4485,18 @@ Item {
         Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "Everything in the Trash will be permanently deleted, including the tasks in trashed projects. This can't be undone."
+            text: qsTr("Everything in the Trash will be permanently deleted, including the tasks in trashed projects. This can't be undone.")
         }
 
         footer: DialogButtonBox {
             Button {
                 objectName: "confirmEmptyTrash"
-                text: "Delete Permanently"
+                text: qsTr("Delete Permanently")
                 DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
             }
             Button {
                 objectName: "cancelEmptyTrash"
-                text: "Cancel"
+                text: qsTr("Cancel")
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
         }
@@ -4498,7 +4519,7 @@ Item {
         // "completed" or "canceled": what the project becomes.
         property string outcome: "completed"
         readonly property int openTasks: controller.currentProjectOpenTasks
-        title: (outcome === "completed" ? "Complete" : "Cancel") + " \u201C" + controller.currentTitle + "\u201D?"
+        title: outcome === "completed" ? qsTr("Complete “%1”?").arg(controller.currentTitle) : qsTr("Cancel “%1”?").arg(controller.currentTitle)
         modal: true
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4508,25 +4529,23 @@ Item {
             objectName: "finishProjectText"
             width: parent.width
             wrapMode: Text.WordWrap
-            text: (finishProjectDialog.openTasks === 1 ? "It has 1 open task." : "It has " + finishProjectDialog.openTasks + " open tasks.")
-                + " Complete or cancel " + (finishProjectDialog.openTasks === 1 ? "it" : "them")
-                + " with the project?"
+            text: qsTr("It has %n open tasks. Complete or cancel them with the project?", "", finishProjectDialog.openTasks)
         }
 
         footer: DialogButtonBox {
             Button {
                 objectName: "completeOpenTasks"
-                text: "Complete Tasks"
+                text: qsTr("Complete Tasks")
                 onClicked: finishProjectDialog.finishWith("completed")
             }
             Button {
                 objectName: "cancelOpenTasks"
-                text: "Cancel Tasks"
+                text: qsTr("Cancel Tasks")
                 onClicked: finishProjectDialog.finishWith("canceled")
             }
             Button {
                 objectName: "keepProjectOpen"
-                text: "Keep Open"
+                text: qsTr("Keep Open")
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
         }
@@ -4544,7 +4563,7 @@ Item {
     Dialog {
         id: tagsDialog
         objectName: "tagsDialog"
-        title: "Tags"
+        title: qsTr("Tags")
         modal: true
         x: (parent.width - width) / 2
         y: 80
@@ -4558,7 +4577,7 @@ Item {
 
             Label {
                 visible: root.allTags.length === 0
-                text: "No tags yet."
+                text: qsTr("No tags yet.")
                 color: root.colTextSecondary
             }
 
@@ -4585,16 +4604,16 @@ Item {
 
                     ToolButton {
                         objectName: "nestTag"
-                        text: "Nest"
+                        text: qsTr("Nest")
                         font.pixelSize: 11
                         ToolTip.visible: hovered
-                        ToolTip.text: "Put this tag under another, or at the top"
+                        ToolTip.text: qsTr("Put this tag under another, or at the top")
                         onClicked: nestMenu.popup()
 
                         Menu {
                             id: nestMenu
                             Instantiator {
-                                model: [{ id: "", name: "Top Level", depth: 0 }].concat(
+                                model: [{ id: "", name: qsTr("Top Level"), depth: 0 }].concat(
                                     root.allTags.filter(t => t.id !== tagRow.tagId))
                                 delegate: MenuItem {
                                     required property var modelData
@@ -4613,14 +4632,14 @@ Item {
 
                     ToolButton {
                         objectName: "deleteTag"
-                        Accessible.name: "Delete the tag " + tagRow.name
+                        Accessible.name: qsTr("Delete the tag %1").arg(tagRow.name)
                         contentItem: Icon {
                             name: "trash"
                             size: 14
                             color: root.colTextSecondary
                         }
                         ToolTip.visible: hovered
-                        ToolTip.text: "Delete the tag; what it was on is kept"
+                        ToolTip.text: qsTr("Delete the tag; what it was on is kept")
                         onClicked: controller.deleteTag(tagRow.tagId)
                     }
                 }
@@ -4628,9 +4647,9 @@ Item {
 
             TextField {
                 objectName: "newTagInput"
-                Accessible.name: "New tag"
+                Accessible.name: qsTr("New tag")
                 Layout.fillWidth: true
-                placeholderText: "New tag"
+                placeholderText: qsTr("New tag")
                 font.pixelSize: 13
                 onAccepted: {
                     if (controller.createTag(text, "") !== "")
@@ -4643,7 +4662,7 @@ Item {
     Dialog {
         id: newAreaDialog
         objectName: "newAreaDialog"
-        title: "Create New Area"
+        title: qsTr("Create New Area")
         standardButtons: Dialog.Ok | Dialog.Cancel
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4652,9 +4671,9 @@ Item {
         TextField {
             id: areaTitleInput
             objectName: "areaTitleInput"
-            Accessible.name: "Area name"
+            Accessible.name: qsTr("Area name")
             width: parent.width
-            placeholderText: "Area name, e.g. Home or Work"
+            placeholderText: qsTr("Area name, e.g. Home or Work")
             focus: true
         }
 
@@ -4670,9 +4689,9 @@ Item {
         // What is being named (`openRename`), and the heading's id.
         property string kind: "area"
         property string targetId: ""
-        title: kind === "project" ? "Rename Project"
-            : kind === "heading" ? "Rename Heading"
-            : kind === "newHeading" ? "New Heading" : "Rename Area"
+        title: kind === "project" ? qsTr("Rename Project")
+            : kind === "heading" ? qsTr("Rename Heading")
+            : kind === "newHeading" ? qsTr("New Heading") : qsTr("Rename Area")
         standardButtons: Dialog.Ok | Dialog.Cancel
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4681,7 +4700,7 @@ Item {
         TextField {
             id: renameInput
             objectName: "renameInput"
-            Accessible.name: renameDialog.kind === "area" ? "Area name" : renameDialog.kind === "project" ? "Project name" : "Heading"
+            Accessible.name: renameDialog.kind === "area" ? qsTr("Area name") : renameDialog.kind === "project" ? qsTr("Project name") : qsTr("Heading")
             width: parent.width
             focus: true
         }
@@ -4702,7 +4721,7 @@ Item {
     Dialog {
         id: newProjectDialog
         objectName: "newProjectDialog"
-        title: "Create New Project"
+        title: qsTr("Create New Project")
         standardButtons: Dialog.Ok | Dialog.Cancel
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4713,8 +4732,8 @@ Item {
             TextField {
                 id: projTitleInput
                 objectName: "projectTitleInput"
-                Accessible.name: "Project name"
-                placeholderText: "Project Title..."
+                Accessible.name: qsTr("Project name")
+                placeholderText: qsTr("Project Title...")
                 Layout.fillWidth: true
                 focus: true
             }
@@ -4863,7 +4882,7 @@ Item {
             spacing: 10
 
             Text {
-                text: "Move"
+                text: qsTr("Move")
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
                 color: root.colTextPrimary
@@ -4872,9 +4891,9 @@ Item {
             TextField {
                 id: moveFilter
                 objectName: "moveFilter"
-                Accessible.name: "Filter areas, projects and headings"
+                Accessible.name: qsTr("Filter areas, projects and headings")
                 Layout.fillWidth: true
-                placeholderText: "Filter areas, projects and headings"
+                placeholderText: qsTr("Filter areas, projects and headings")
                 font.pixelSize: 13
                 onTextChanged: moveList.currentIndex = 0
                 Keys.onUpPressed: moveList.decrementCurrentIndex()
@@ -4905,8 +4924,12 @@ Item {
                     color: destinationRow.ListView.isCurrentItem ? root.colSidebarActive
                         : destinationMouse.containsMouse ? root.colSidebarHover : "transparent"
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: (kind === "area" ? "Area: " : kind === "project" ? "Project: "
-                        : kind === "heading" ? "Heading: " : "") + modelData.title
+                    // The Inbox's name is the window's to give (in the user's
+                    // language); the rest are the user's own.
+                    readonly property string title: kind === "inbox" ? qsTr("Inbox") : modelData.title
+                    Accessible.name: kind === "area" ? qsTr("Area: %1").arg(title)
+                        : kind === "project" ? qsTr("Project: %1").arg(title)
+                        : kind === "heading" ? qsTr("Heading: %1").arg(title) : title
 
                     RowLayout {
                         anchors.fill: parent
@@ -4930,7 +4953,7 @@ Item {
                         }
 
                         Text {
-                            text: destinationRow.modelData.title
+                            text: destinationRow.title
                             font.pixelSize: 13
                             font.weight: destinationRow.kind === "area" || destinationRow.kind === "heading"
                                 ? Font.DemiBold : Font.Normal
@@ -4976,7 +4999,7 @@ Item {
     Dialog {
         id: repeatDialog
         objectName: "repeatDialog"
-        title: "Repeat"
+        title: qsTr("Repeat")
         modal: true
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
@@ -4988,8 +5011,9 @@ Item {
         property date anchor: new Date()
         // Whether the tasks repeat already (Paused is offered then).
         property bool existing: false
-        readonly property var weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        readonly property var weekdayNames: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        // Monday first; the locale's names (its Sunday is day 0).
+        readonly property var weekdays: [1, 2, 3, 4, 5, 6, 0].map(d => Qt.locale().dayName(d, Locale.ShortFormat))
+        readonly property var weekdayNames: [1, 2, 3, 4, 5, 6, 0].map(d => Qt.locale().dayName(d, Locale.LongFormat))
         // Monday is 1.
         readonly property int anchorWeekday: anchor.getDay() === 0 ? 7 : anchor.getDay()
         readonly property int anchorNth: Math.floor((anchor.getDate() - 1) / 7) + 1
@@ -5073,7 +5097,7 @@ Item {
             if (!usable)
                 return;
             root.actOn(taskIds, id => controller.setTaskRepeat(id, rule),
-                rule === "" ? "%n tasks no longer repeat" : "%n tasks repeat");
+                n => rule === "" ? qsTr("%n tasks no longer repeat", "", n) : qsTr("%n tasks repeat", "", n));
         }
         onOpened: {
             updateOk();
@@ -5090,25 +5114,27 @@ Item {
                 ComboBox {
                     id: frequencyBox
                     objectName: "repeatFrequency"
-                    Accessible.name: "Repeats"
-                    model: ["Never", "Daily", "Weekly", "Monthly", "Yearly"]
+                    Accessible.name: qsTr("Repeats")
+                    model: [qsTr("Never"), qsTr("Daily"), qsTr("Weekly"), qsTr("Monthly"), qsTr("Yearly")]
                 }
                 Label {
                     visible: frequencyBox.currentIndex > 0
-                    text: "every"
+                    text: qsTr("every")
                 }
                 SpinBox {
                     id: everyBox
                     objectName: "repeatEvery"
                     visible: frequencyBox.currentIndex > 0
-                    Accessible.name: "Every"
+                    Accessible.name: qsTr("Every")
                     from: 1
                     to: 999
                     editable: true
                 }
                 Label {
                     visible: frequencyBox.currentIndex > 0
-                    text: ["", "days", "weeks", "months", "years"][frequencyBox.currentIndex].replace(/s$/, everyBox.value === 1 ? "" : "s")
+                    // The unit after the count, in the plural form for it.
+                    text: ["", qsTr("days", "after a count", everyBox.value), qsTr("weeks", "after a count", everyBox.value),
+                        qsTr("months", "after a count", everyBox.value), qsTr("years", "after a count", everyBox.value)][frequencyBox.currentIndex]
                 }
             }
 
@@ -5143,13 +5169,14 @@ Item {
                 objectName: "repeatMonthly"
                 visible: frequencyBox.currentIndex === 3 && modeBox.currentIndex === 0
                 Layout.fillWidth: true
-                Accessible.name: "On"
+                Accessible.name: qsTr("On")
                 model: [
-                    "On day " + repeatDialog.anchor.getDate(),
-                    "On the " + ["first", "second", "third", "fourth", "fifth"][Math.min(repeatDialog.anchorNth, 5) - 1]
-                        + " " + repeatDialog.weekdayNames[repeatDialog.anchorWeekday - 1],
-                    "On the last " + repeatDialog.weekdayNames[repeatDialog.anchorWeekday - 1],
-                    "On the last day"
+                    qsTr("On day %1").arg(repeatDialog.anchor.getDate()),
+                    [qsTr("On the first %1"), qsTr("On the second %1"), qsTr("On the third %1"), qsTr("On the fourth %1"),
+                        qsTr("On the fifth %1")][Math.min(repeatDialog.anchorNth, 5) - 1]
+                        .arg(repeatDialog.weekdayNames[repeatDialog.anchorWeekday - 1]),
+                    qsTr("On the last %1").arg(repeatDialog.weekdayNames[repeatDialog.anchorWeekday - 1]),
+                    qsTr("On the last day")
                 ]
             }
 
@@ -5158,8 +5185,8 @@ Item {
                 objectName: "repeatMode"
                 visible: frequencyBox.currentIndex > 0
                 Layout.fillWidth: true
-                Accessible.name: "Counted"
-                model: ["On a schedule", "After each is completed"]
+                Accessible.name: qsTr("Counted")
+                model: [qsTr("On a schedule"), qsTr("After each is completed")]
             }
 
             RowLayout {
@@ -5168,29 +5195,29 @@ Item {
                 ComboBox {
                     id: endsBox
                     objectName: "repeatEnds"
-                    Accessible.name: "Ends"
-                    model: ["Never ends", "Ends on a day", "Ends after"]
+                    Accessible.name: qsTr("Ends")
+                    model: [qsTr("Never ends"), qsTr("Ends on a day"), qsTr("Ends after")]
                 }
                 TextField {
                     id: untilInput
                     objectName: "repeatUntil"
                     visible: endsBox.currentIndex === 1
                     Layout.fillWidth: true
-                    placeholderText: "dec 24, in 3 months"
-                    Accessible.name: "Ends on"
+                    placeholderText: qsTr("dec 24, in 3 months")
+                    Accessible.name: qsTr("Ends on")
                 }
                 SpinBox {
                     id: countBox
                     objectName: "repeatCount"
                     visible: endsBox.currentIndex === 2
-                    Accessible.name: "Times"
+                    Accessible.name: qsTr("Times")
                     from: 1
                     to: 999
                     editable: true
                 }
                 Label {
                     visible: endsBox.currentIndex === 2
-                    text: countBox.value === 1 ? "time" : "times"
+                    text: qsTr("times", "after a count", countBox.value)
                 }
             }
 
@@ -5198,16 +5225,16 @@ Item {
                 id: pausedBox
                 objectName: "repeatPaused"
                 visible: repeatDialog.existing && frequencyBox.currentIndex > 0
-                text: "Paused"
+                text: qsTr("Paused")
             }
 
             Label {
                 objectName: "repeatDescription"
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: repeatDialog.json === "" ? "Doesn't repeat"
+                text: repeatDialog.json === "" ? qsTr("Doesn't repeat")
                     : repeatDialog.usable ? controller.describeRepeat(repeatDialog.json)
-                    : "Choose at least one day, and an end after the start"
+                    : qsTr("Choose at least one day, and an end after the start")
                 color: repeatDialog.usable ? root.colTextPrimary : root.colTextSecondary
             }
         }
@@ -5243,12 +5270,12 @@ Item {
             for (const id of taskIds)
                 controller.setTaskReminderTyped(id, text);
             if (several)
-                root.showUndo("batch", "", "Reminder set for %n tasks".replace("%n", taskIds.length));
+                root.showUndo("batch", "", qsTr("Reminder set for %n tasks", "", taskIds.length));
             return true;
         }
 
         function clearReminder() {
-            root.actOn(taskIds, id => controller.clearTaskReminder(id), "Reminder cleared for %n tasks");
+            root.actOn(taskIds, id => controller.clearTaskReminder(id), n => qsTr("Reminder cleared for %n tasks", "", n));
         }
 
         // Set the When (a `Schedule::parse` key or ISO date) or, in deadline
@@ -5258,11 +5285,11 @@ Item {
                 if (forProject)
                     controller.setProjectDeadline(taskId, value);
                 else
-                    root.actOn(taskIds, id => controller.setTaskDeadline(id, value), "Deadline set for %n tasks");
+                    root.actOn(taskIds, id => controller.setTaskDeadline(id, value), n => qsTr("Deadline set for %n tasks", "", n));
             } else if (forProject) {
                 controller.scheduleProject(taskId, value);
             } else {
-                root.actOn(taskIds, id => controller.scheduleTask(id, value), "%n tasks scheduled");
+                root.actOn(taskIds, id => controller.scheduleTask(id, value), n => qsTr("%n tasks scheduled", "", n));
             }
         }
 
@@ -5283,7 +5310,8 @@ Item {
             for (const id of taskIds.slice(1))
                 typed(id);
             if (several)
-                root.showUndo("batch", "", (mode === "deadline" ? "Deadline set for %n tasks" : "%n tasks scheduled").replace("%n", taskIds.length));
+                root.showUndo("batch", "", mode === "deadline" ? qsTr("Deadline set for %n tasks", "", taskIds.length)
+                    : qsTr("%n tasks scheduled", "", taskIds.length));
             return true;
         }
 
@@ -5339,7 +5367,7 @@ Item {
 
             Label {
                 objectName: "whenTitle"
-                text: whenPopup.mode === "deadline" ? "Deadline" : "When"
+                text: whenPopup.mode === "deadline" ? qsTr("Deadline") : qsTr("When")
                 font.pixelSize: 15
                 font.weight: Font.DemiBold
                 color: root.colTextPrimary
@@ -5348,11 +5376,11 @@ Item {
             TextField {
                 id: whenInput
                 objectName: "whenInput"
-                Accessible.name: whenPopup.mode === "deadline" ? "Deadline" : "When"
+                Accessible.name: whenPopup.mode === "deadline" ? qsTr("Deadline") : qsTr("When")
                 Layout.fillWidth: true
                 placeholderText: whenPopup.mode === "deadline"
-                    ? "Due: tomorrow, fri, dec 24"
-                    : "Type a date: tomorrow, fri, dec 24"
+                    ? qsTr("Due: tomorrow, fri, dec 24")
+                    : qsTr("Type a date: tomorrow, fri, dec 24")
                 // Enter applies what was typed; a refused text keeps the
                 // popover open.
                 onAccepted: {
@@ -5371,7 +5399,7 @@ Item {
                     : controller.previewWhen(whenInput.text, root.monthFirst)
                 Layout.fillWidth: true
                 visible: whenInput.text.trim() !== ""
-                text: meaning === "" ? "Not a date" : root.describeWhen(meaning)
+                text: meaning === "" ? qsTr("Not a date") : root.describeWhen(meaning)
                 color: meaning === "" ? root.colTextSecondary : root.colAccent
                 font.pixelSize: 12
             }
@@ -5383,10 +5411,10 @@ Item {
                 // has no This Evening or Someday.
                 Repeater {
                     model: [
-                        { label: "Today", when: "today" },
-                        { label: "This Evening", when: "evening" },
-                        { label: "Someday", when: "someday" },
-                        { label: "Clear", when: "none" }
+                        { label: qsTr("Today"), when: "today" },
+                        { label: qsTr("This Evening"), when: "evening" },
+                        { label: qsTr("Someday"), when: "someday" },
+                        { label: qsTr("Clear"), when: "none" }
                     ]
                     delegate: Button {
                         required property var modelData
@@ -5414,7 +5442,7 @@ Item {
                 // from Matters' own light or dark scheme.
                 ToolButton {
                     objectName: "whenPrevMonth"
-                    Accessible.name: "Previous month"
+                    Accessible.name: qsTr("Previous month")
                     contentItem: Icon {
                         name: "chevron-left"
                         size: 16
@@ -5426,13 +5454,13 @@ Item {
                     objectName: "whenMonth"
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignHCenter
-                    text: Qt.formatDate(new Date(calendar.year, calendar.month, 1), "MMMM yyyy")
+                    text: root.localDate(new Date(calendar.year, calendar.month, 1), "month-year")
                     font.weight: Font.DemiBold
                     color: root.colTextPrimary
                 }
                 ToolButton {
                     objectName: "whenNextMonth"
-                    Accessible.name: "Next month"
+                    Accessible.name: qsTr("Next month")
                     contentItem: Icon {
                         name: "chevron-right"
                         size: 16
@@ -5539,9 +5567,9 @@ Item {
                     objectName: "reminderInput"
                     Layout.fillWidth: true
                     placeholderText: whenPopup.reminder === ""
-                        ? "Remind me at: 9:00, 2:30pm"
-                        : "Reminder at " + root.describeTime(whenPopup.reminder)
-                    Accessible.name: "Reminder time"
+                        ? qsTr("Remind me at: 9:00, 2:30pm")
+                        : qsTr("Reminder at %1").arg(root.describeTime(whenPopup.reminder))
+                    Accessible.name: qsTr("Reminder time")
                     onAccepted: {
                         if (whenPopup.applyReminder(text))
                             whenPopup.close();
@@ -5552,7 +5580,7 @@ Item {
                 Button {
                     objectName: "clearReminder"
                     visible: whenPopup.reminder !== ""
-                    text: "Clear"
+                    text: qsTr("Clear")
                     font.pixelSize: 11
                     onClicked: {
                         whenPopup.clearReminder();
@@ -5574,13 +5602,13 @@ Item {
                 Label {
                     objectName: "repeatSummary"
                     Layout.fillWidth: true
-                    text: whenPopup.repeat === "" ? "Doesn't repeat" : controller.describeRepeat(whenPopup.repeat)
+                    text: whenPopup.repeat === "" ? qsTr("Doesn't repeat") : controller.describeRepeat(whenPopup.repeat)
                     elide: Text.ElideRight
                     color: whenPopup.repeat === "" ? root.colTextSecondary : root.colTextPrimary
                 }
                 Button {
                     objectName: "repeatButton"
-                    text: "Repeat…"
+                    text: qsTr("Repeat…")
                     font.pixelSize: 11
                     onClicked: {
                         const ids = whenPopup.taskIds;
@@ -5596,7 +5624,7 @@ Item {
                 readonly property string meaning: controller.previewReminder(reminderInput.text)
                 Layout.fillWidth: true
                 visible: whenPopup.remindable && reminderInput.text.trim() !== ""
-                text: meaning === "" ? "Not a time" : "Remind at " + root.describeTime(meaning)
+                text: meaning === "" ? qsTr("Not a time") : qsTr("Remind at %1").arg(root.describeTime(meaning))
                 color: meaning === "" ? root.colTextSecondary : root.colAccent
                 font.pixelSize: 12
             }

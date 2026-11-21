@@ -245,6 +245,24 @@ These are checked by tests:
 * `tst_contrast.qml` computes the ratio of every pair in light and in dark, with and without higher contrast, and with Matters' accent or eight desktop accents, from white to black, set through the test-only `FakeDesktop`.
 * `qml_lint` fails on a colour literal outside the palette.
 
+### Languages
+
+Every string Matters shows can be translated (#75), through Qt Linguist:
+
+* **Marking strings:** QML marks its strings with `qsTr`, whole sentences with `%1` for what goes in them and `%n` for counts. The strings Rust shows (errors, reminders, how a task repeats, the calendar's problems) are declared in `matters_ui::strings`. The fixed lists' names are given by the window, not by `matters-core`.
+* **Catalogs:** `crates/matters-ui/translations/matters.ts` is the template, refreshed by `translations/update.sh` with `lupdate`. A translation is `matters_<lang>.ts` beside it, and `build.rs` compiles each into Matters with `lrelease` (qt6-linguist). `matters_en.ts` holds the English plural forms ("1 open task"), and is the catalog for languages Matters has none for. Qt's own catalog translates Qt's buttons (OK, Cancel).
+* **Choosing one:** the catalog for the first of the system's languages that has one is used.
+* **Dates and times:** they follow the locale's own long date format, keeping its order and the words between its parts, with the locale's names (`matters_ui::locale_format`). Times use the locale's short format.
+* **Right to left:** in a right-to-left language the window is mirrored.
+
+These are checked by tests:
+
+* `tst_translation.qml` switches to a pseudo-translation `build.rs` makes from the template: every string marked and a third longer. In every view and with every dialog and popover open, it fails on a string that isn't translated, apart from the locale's own names and the test's data. Long strings must fit the sidebar, popovers and dialogs, left to right and right to left, and the window must mirror.
+* `qml_lint` fails on a `qsTr` without a literal, which `lupdate` couldn't extract, and on a string with a count that has no English forms.
+* CI (`ci/hygiene.sh`) fails when the template is stale.
+
+Typed dates and times (`tomorrow`, `fri`, `9:00`) are read in English (`Schedule::parse_typed`), though the hints that show them can be translated; reading them in other languages is #227.
+
 ---
 
 ## 5. Technical Architecture

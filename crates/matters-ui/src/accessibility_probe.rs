@@ -3,7 +3,7 @@
 //!
 //! `AccessibilityProbe.report()` walks Qt's accessibility tree, the one the
 //! AT-SPI bridge gives Orca, from every visible window, and returns each
-//! element that isn't hidden as JSON: `{elements: [{role, name, focusable, focused,
+//! element that isn't hidden as JSON: `{elements: [{role, name, description, focusable, focused,
 //! disabled, objectName, type, within, inside}], mouseOnly: [within]}`.
 //! `role` and `inside` (the role of the nearest actionable element around
 //! it) are `QAccessible::Role` numbers;

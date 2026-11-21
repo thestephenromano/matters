@@ -195,15 +195,11 @@ impl EdsSource {
             (!handle.is_null()).then_some(handle)
         });
         let Some(handle) = handle else {
-            return Err(Unavailable(
-                "Calendar events come from Evolution Data Server, which isn't installed.".into(),
-            ));
+            return Err(Unavailable(crate::strings::EDS_MISSING.text()));
         };
         // SAFETY: the signatures match libecal 3.x and its dependencies.
         let api = unsafe { Api::load(handle) }.map_err(|missing| {
-            Unavailable(format!(
-                "This version of Evolution Data Server can't be used ({missing})."
-            ))
+            Unavailable(crate::strings::EDS_TOO_OLD.fill(&[&missing.to_string()]))
         })?;
         Ok(EdsSource {
             api,
@@ -233,10 +229,9 @@ impl EdsSource {
             registry
         };
         if registry.is_null() {
-            return Err(Unavailable(format!(
-                "Evolution Data Server couldn't be reached: {}.",
-                take_error(&self.api, error)
-            )));
+            return Err(Unavailable(
+                crate::strings::EDS_UNREACHABLE.fill(&[&take_error(&self.api, error)]),
+            ));
         }
         Ok(registry)
     }
@@ -295,7 +290,7 @@ impl CalendarSource for EdsSource {
         let seconds = |day: Date| {
             day.to_zoned(zone.clone())
                 .map(|z| z.timestamp().as_second())
-                .map_err(|err| Unavailable(format!("The calendar's days can't be read: {err}.")))
+                .map_err(|err| Unavailable(crate::strings::EDS_DAYS.fill(&[&err.to_string()])))
         };
         let (start, end) = (seconds(from)?, seconds(until)?);
         let mut events = Vec::new();

@@ -15,6 +15,7 @@ use matters_core::reminders::Reminder;
 use matters_core::Database;
 
 use crate::notify::{Notice, Notifier, OnAction};
+use crate::strings as s;
 
 /// More reminders than this at once are shown as one summary.
 pub const MOST_SHOWN_APART: usize = 3;
@@ -33,14 +34,20 @@ pub(crate) fn notifier() -> Option<&'static dyn Notifier> {
     NOTIFIER.get().map(Box::as_ref)
 }
 
-/// When a reminder was for, as its notice says: the time, with the day if
-/// it isn't `now`'s.
+/// When a reminder was for, as its notice says in the user's locale (#75):
+/// the time, with the day if it isn't `now`'s.
 fn when(reminder: &Reminder, now: Timestamp, zone: &TimeZone) -> String {
-    let time = reminder.due.time().strftime("%H:%M").to_string();
-    if reminder.due.date() == now.to_zoned(zone.clone()).date() {
+    let due = reminder.due;
+    let time = crate::locale_format::time("", due.hour(), due.minute());
+    if due.date() == now.to_zoned(zone.clone()).date() {
         time
     } else {
-        format!("{} at {time}", reminder.due.date().strftime("%a %-d %b"))
+        let day = crate::locale_format::date(
+            "",
+            due.date(),
+            crate::locale_format::Parts::SHORT_WEEKDAY_DAY_MONTH,
+        );
+        s::REMINDER_DAY_AT.fill(&[&day, &time])
     }
 }
 
@@ -55,11 +62,10 @@ pub fn notices(due: &[Reminder], now: Timestamp, zone: &TimeZone) -> Vec<Notice>
             .collect();
         return vec![Notice {
             task_id: String::new(),
-            summary: format!("{} reminders", due.len()),
-            body: format!(
-                "{} and {} more",
-                titles.join(", "),
-                due.len() - MOST_SHOWN_APART
+            summary: s::REMINDERS_MANY.count(due.len() as i64),
+            body: s::REMINDERS_AND_MORE.count_fill(
+                (due.len() - MOST_SHOWN_APART) as i64,
+                &[&titles.join(&s::LIST_SEPARATOR.text())],
             ),
         }];
     }
@@ -68,9 +74,9 @@ pub fn notices(due: &[Reminder], now: Timestamp, zone: &TimeZone) -> Vec<Notice>
             task_id: r.task_id.clone(),
             summary: r.title.clone(),
             body: if r.is_late(now) {
-                format!("Missed reminder, for {}", when(r, now, zone))
+                s::REMINDER_MISSED.fill(&[&when(r, now, zone)])
             } else {
-                format!("Reminder for {}", when(r, now, zone))
+                s::REMINDER_FOR.fill(&[&when(r, now, zone)])
             },
         })
         .collect()
@@ -138,6 +144,8 @@ mod tests {
 
     #[test]
     fn a_due_reminder_is_shown_once() {
+        // Written as British English writes times and days.
+        let _locale = crate::locale_format::LocaleGuard::new("en_GB");
         let db = Database::open_in_memory().unwrap();
         let id = reminded(&db, 1, 9);
         let notifier = RecordingNotifier::default();
@@ -165,6 +173,8 @@ mod tests {
 
     #[test]
     fn a_reminder_that_fails_to_show_is_tried_again() {
+        // Written as British English writes times and days.
+        let _locale = crate::locale_format::LocaleGuard::new("en_GB");
         let db = Database::open_in_memory().unwrap();
         reminded(&db, 1, 9);
         let notifier = RecordingNotifier::default();
@@ -180,6 +190,8 @@ mod tests {
 
     #[test]
     fn missed_reminders_say_when_they_were_for() {
+        // Written as British English writes times and days.
+        let _locale = crate::locale_format::LocaleGuard::new("en_GB");
         let db = Database::open_in_memory().unwrap();
         reminded(&db, 1, 9);
         let mut yesterday = Task::new(uuid::Uuid::from_u128(2).to_string(), "old", 0.0);
@@ -193,7 +205,7 @@ mod tests {
         assert_eq!(
             bodies,
             [
-                "Missed reminder, for Fri 20 Nov at 18:30",
+                "Missed reminder, for Fri, 20 Nov at 18:30",
                 "Missed reminder, for 09:00"
             ]
         );

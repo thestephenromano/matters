@@ -116,10 +116,10 @@ ColumnLayout {
         TextField {
             id: input
             objectName: "tagInput"
-            Accessible.name: "Tags"
+            Accessible.name: qsTr("Tags")
             width: 160
             height: 24
-            placeholderText: field.tags.length === 0 ? "Add tags" : "Add a tag"
+            placeholderText: field.tags.length === 0 ? qsTr("Add tags") : qsTr("Add a tag")
             font.pixelSize: 12
             leftPadding: 2
             topPadding: 2

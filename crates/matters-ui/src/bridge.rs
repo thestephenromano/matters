@@ -415,6 +415,12 @@ pub mod qobject {
         /// A rule (JSON) in words, or an empty string when it can't be used.
         #[qinvokable]
         fn describe_repeat(self: &AppController, rule: &QString) -> QString;
+        /// Day `iso` (YYYY-MM-DD) as the user's locale writes it (#75):
+        /// `style` is "day-month", "day-month-year", "weekday-day-month",
+        /// "weekday-day-month-year", "month-year" or "weekday" (its short
+        /// name). Empty for a day that isn't one.
+        #[qinvokable]
+        fn format_date(self: &AppController, iso: &QString, style: &QString) -> QString;
         /// Show the reminders now due (#60). Called every few seconds.
         #[qinvokable]
         fn check_reminders(self: Pin<&mut AppController>);
@@ -773,8 +779,34 @@ struct SettingsState {
     /// `None` when there is nowhere to keep them: they last until exit.
     file: Option<SettingsFile>,
     settings: Settings,
-    /// Why the settings are the defaults, when the file couldn't be read.
-    problem: Option<String>,
+    /// Why the settings are the defaults, said once the window is up.
+    problem: Option<SettingsTrouble>,
+}
+
+/// Why the settings are the defaults (#72), said in the user's language
+/// (#75) when it is reported, not when it is found: that is before the
+/// translations are installed.
+#[derive(Clone)]
+enum SettingsTrouble {
+    /// The file couldn't be read.
+    Unreadable(matters_core::SettingsProblem),
+    /// There is nowhere to keep them, and why.
+    NotKept(String),
+}
+
+impl SettingsTrouble {
+    fn message(&self) -> String {
+        match self {
+            SettingsTrouble::Unreadable(problem) => crate::strings::SETTINGS_UNREADABLE
+                .fill(&[&problem.path.display().to_string(), &problem.cause]),
+            SettingsTrouble::NotKept(cause) => crate::strings::SETTINGS_NOT_KEPT.fill(&[cause]),
+        }
+    }
+}
+
+/// "Your settings couldn't be saved", in the user's language.
+fn not_saved(err: &matters_core::MattersError) -> String {
+    crate::strings::SETTINGS_NOT_SAVED.fill(&[&err.to_string()])
 }
 
 impl SettingsState {
@@ -790,12 +822,15 @@ impl SettingsState {
 static SETTINGS: OnceLock<Mutex<SettingsState>> = OnceLock::new();
 
 /// Load the settings from `file` (`None`: nowhere to keep them, so the
-/// defaults, unsaved, with `problem` saying why). Call before QML starts;
+/// defaults, unsaved, with `not_kept` saying why). Call before QML starts;
 /// without it the defaults are used and nothing is saved.
-pub fn install_settings(file: Option<SettingsFile>, problem: Option<String>) {
+pub fn install_settings(file: Option<SettingsFile>, not_kept: Option<String>) {
     let (settings, problem) = match &file {
-        Some(file) => file.load(),
-        None => (Settings::default(), problem),
+        Some(file) => {
+            let (settings, problem) = file.load();
+            (settings, problem.map(SettingsTrouble::Unreadable))
+        }
+        None => (Settings::default(), not_kept.map(SettingsTrouble::NotKept)),
     };
     let state = SettingsState {
         file,
@@ -994,7 +1029,7 @@ impl cxx_qt::Initialize for qobject::AppController {
         self.as_mut().appearance_changed();
         let problem = settings().problem.clone();
         if let Some(problem) = problem {
-            self.report(problem);
+            self.report(problem.message());
         }
     }
 }
@@ -1013,8 +1048,7 @@ impl qobject::AppController {
         };
         self.as_mut().set_log_policy(QString::from(policy.key()));
         if let Err(err) = saved {
-            self.as_mut()
-                .report(format!("Your settings couldn't be saved: {err}"));
+            self.as_mut().report(not_saved(&err));
         }
         self.changed();
     }
@@ -1040,8 +1074,7 @@ impl qobject::AppController {
         };
         self.as_mut().set_show_events(shown);
         if let Err(err) = saved {
-            self.as_mut()
-                .report(format!("Your settings couldn't be saved: {err}"));
+            self.as_mut().report(not_saved(&err));
         }
         self.calendars_changed();
     }
@@ -1054,8 +1087,7 @@ impl qobject::AppController {
         };
         self.as_mut().set_hidden_calendars_json(hidden);
         if let Err(err) = saved {
-            self.as_mut()
-                .report(format!("Your settings couldn't be saved: {err}"));
+            self.as_mut().report(not_saved(&err));
         }
         self.calendars_changed();
     }
@@ -1071,7 +1103,7 @@ impl qobject::AppController {
         };
         self.as_mut().set_color_scheme(QString::from(scheme.key()));
         if let Err(err) = saved {
-            self.report(format!("Your settings couldn't be saved: {err}"));
+            self.report(not_saved(&err));
         }
     }
 
@@ -1083,7 +1115,7 @@ impl qobject::AppController {
         };
         self.as_mut().set_follow_accent(follow);
         if let Err(err) = saved {
-            self.report(format!("Your settings couldn't be saved: {err}"));
+            self.report(not_saved(&err));
         }
     }
 
@@ -1127,8 +1159,7 @@ impl qobject::AppController {
             state.save()
         };
         if let Err(err) = saved {
-            self.as_mut()
-                .report(format!("Your settings couldn't be saved: {err}"));
+            self.as_mut().report(not_saved(&err));
         }
         self.changed();
     }
@@ -1634,11 +1665,28 @@ impl qobject::AppController {
         ok
     }
 
+    pub fn format_date(&self, iso: &QString, style: &QString) -> QString {
+        use crate::locale_format::{self, Parts};
+        let Ok(day) = String::from(iso).parse::<jiff::civil::Date>() else {
+            return QString::default();
+        };
+        let text = match String::from(style).as_str() {
+            "day-month" => locale_format::date("", day, Parts::DAY_MONTH),
+            "day-month-year" => locale_format::date("", day, Parts::DAY_MONTH_YEAR),
+            "weekday-day-month" => locale_format::date("", day, Parts::WEEKDAY_DAY_MONTH),
+            "weekday-day-month-year" => locale_format::date("", day, Parts::WEEKDAY_DAY_MONTH_YEAR),
+            "month-year" => locale_format::date("", day, Parts::MONTH_YEAR),
+            "weekday" => locale_format::day_name("", day.weekday(), false),
+            _ => String::new(),
+        };
+        QString::from(text.as_str())
+    }
+
     pub fn describe_repeat(&self, rule: &QString) -> QString {
         let text = serde_json::from_str::<RepeatRule>(&String::from(rule))
             .ok()
             .filter(|r| r.check().is_ok())
-            .map(|r| r.describe())
+            .map(|r| crate::repeat_words::describe(&r, ""))
             .unwrap_or_default();
         QString::from(text.as_str())
     }
@@ -1680,7 +1728,7 @@ impl qobject::AppController {
                 // Said once, not on every check; they are tried again.
                 if self.reminder_problem.as_deref() != Some(err.as_str()) {
                     self.as_mut().rust_mut().reminder_problem = Some(err.clone());
-                    self.report(format!("Reminders can't be shown: {err}"));
+                    self.report(crate::strings::REMINDERS_NOT_SHOWN.fill(&[&err]));
                 }
             }
         }
@@ -1921,7 +1969,7 @@ impl qobject::AppController {
     pub fn reveal_task(self: Pin<&mut Self>, task_id: &QString) {
         match self.db.get_task(&String::from(task_id)) {
             Ok(Some(task)) => self.set_view(View::containing(&task, local_today())),
-            Ok(None) => self.report(format!("task '{task_id}' no longer exists")),
+            Ok(None) => self.report(crate::strings::TASK_GONE.text()),
             Err(err) => self.report(err.to_string()),
         }
     }
@@ -2173,7 +2221,8 @@ impl qobject::AppController {
     /// Report a command's outcome and publish the new state.
     fn finish(mut self: Pin<&mut Self>, result: matters_core::Result<()>) {
         if let Err(err) = result {
-            self.as_mut().report(err.to_string());
+            self.as_mut()
+                .report(crate::strings::NOT_SAVED.fill(&[&err.to_string()]));
         }
         self.changed();
     }
@@ -2961,7 +3010,7 @@ impl qobject::TaskListModel {
             Role::Repeat => QVariant::from(&QString::from(
                 task.repeat
                     .as_ref()
-                    .map(RepeatRule::describe)
+                    .map(|r| crate::repeat_words::describe(r, ""))
                     .unwrap_or_default()
                     .as_str(),
             )),
@@ -3033,7 +3082,7 @@ impl qobject::TaskListModel {
                 &task
                     .repeat
                     .as_ref()
-                    .map(RepeatRule::describe)
+                    .map(|r| crate::repeat_words::describe(r, ""))
                     .unwrap_or_default(),
             ),
             Role::Section => text(

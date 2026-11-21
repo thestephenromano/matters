@@ -243,72 +243,6 @@ impl RepeatRule {
         (!self.until.is_some_and(|until| next > until)).then_some(next)
     }
 
-    /// The rule in words, as the When popover and a row's tooltip say it:
-    /// "Every 2 weeks on Mon, Thu", "Every month on the last Friday",
-    /// "Every 3 days after completion, until 1 Dec 2026".
-    pub fn describe(&self) -> String {
-        let unit = match self.frequency {
-            Frequency::Daily => "day",
-            Frequency::Weekly { .. } => "week",
-            Frequency::MonthlyOnDay { .. } | Frequency::MonthlyOnWeekday { .. } => "month",
-            Frequency::Yearly { .. } => "year",
-        };
-        let mut text = if self.every == 1 {
-            format!("Every {unit}")
-        } else {
-            format!("Every {} {unit}s", self.every)
-        };
-        if self.after_completion {
-            text.push_str(" after completion");
-        } else {
-            match &self.frequency {
-                Frequency::Daily => {}
-                Frequency::Weekly { days } => {
-                    let mut days = days.clone();
-                    days.sort();
-                    days.dedup();
-                    let names: Vec<&str> = days
-                        .iter()
-                        .filter_map(|d| weekday(*d))
-                        .map(short_day)
-                        .collect();
-                    text.push_str(&format!(" on {}", names.join(", ")));
-                }
-                Frequency::MonthlyOnDay { day: -1 } => text.push_str(" on the last day"),
-                Frequency::MonthlyOnDay { day } => {
-                    text.push_str(&format!(" on the {}", ordinal(i32::from(*day))));
-                }
-                Frequency::MonthlyOnWeekday { nth, weekday: w } => {
-                    let which = if *nth == -1 {
-                        "last".to_string()
-                    } else {
-                        ordinal(i32::from(*nth))
-                    };
-                    let day = weekday(*w).map(long_day).unwrap_or("day");
-                    text.push_str(&format!(" on the {which} {day}"));
-                }
-                Frequency::Yearly { month, day } => {
-                    if let Ok(date) = Date::new(2000, *month, *day) {
-                        text.push_str(&format!(" on {}", date.strftime("%-d %b")));
-                    }
-                }
-            }
-        }
-        if let Some(until) = self.until {
-            text.push_str(&format!(", until {}", until.strftime("%-d %b %Y")));
-        }
-        match self.left {
-            Some(0) => text.push_str(", ending with this one"),
-            Some(1) => text.push_str(", once more"),
-            Some(n) => text.push_str(&format!(", {n} more times")),
-            None => {}
-        }
-        if self.paused {
-            text.push_str(" (paused)");
-        }
-        text
-    }
-
     /// The rule the next occurrence carries: one fewer left, or `None` when
     /// none are left (the series ends with the current one).
     pub fn passed_on(&self) -> Option<RepeatRule> {
@@ -322,42 +256,6 @@ impl RepeatRule {
             ..self.clone()
         })
     }
-}
-
-fn short_day(day: Weekday) -> &'static str {
-    match day {
-        Weekday::Monday => "Mon",
-        Weekday::Tuesday => "Tue",
-        Weekday::Wednesday => "Wed",
-        Weekday::Thursday => "Thu",
-        Weekday::Friday => "Fri",
-        Weekday::Saturday => "Sat",
-        Weekday::Sunday => "Sun",
-    }
-}
-
-fn long_day(day: Weekday) -> &'static str {
-    match day {
-        Weekday::Monday => "Monday",
-        Weekday::Tuesday => "Tuesday",
-        Weekday::Wednesday => "Wednesday",
-        Weekday::Thursday => "Thursday",
-        Weekday::Friday => "Friday",
-        Weekday::Saturday => "Saturday",
-        Weekday::Sunday => "Sunday",
-    }
-}
-
-/// 1st, 2nd, 3rd, 4th, 11th, 21st, 22nd...
-fn ordinal(n: i32) -> String {
-    let suffix = match (n % 10, n % 100) {
-        (_, 11..=13) => "th",
-        (1, _) => "st",
-        (2, _) => "nd",
-        (3, _) => "rd",
-        _ => "th",
-    };
-    format!("{n}{suffix}")
 }
 
 /// A future occurrence of a repeating task, as Upcoming previews it: the
