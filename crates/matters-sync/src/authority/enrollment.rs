@@ -122,7 +122,7 @@ impl std::fmt::Debug for InvitationSecret {
 }
 
 /// `HKDF-SHA384(salt = suite, ikm = secret, info = CBOR([label, route]))`.
-fn derive(secret: &[u8], route: &Route, label: &str, out: &mut [u8]) -> Result<()> {
+pub(super) fn derive(secret: &[u8], route: &Route, label: &str, out: &mut [u8]) -> Result<()> {
     let mut e = Encoder::new(Vec::new());
     e.array(4)?
         .str(label)?

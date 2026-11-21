@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Independent known answers for invitation codes, lookups and offers (#37).
+"""Independent known answers for invitation codes, lookups and offers, and
+for the seeds recovery words derive (#37).
 
 Python standard library only: HKDF (RFC 5869) and HMAC over SHA-384, and the
 few deterministic-CBOR items the formats use, written out by hand. Run with
@@ -70,3 +71,15 @@ print("code      ", code)
 print("lookup    ", key("matters-sync/v0/invitation-lookup", 16).hex())
 print("invitation", array(*head_items("invitation"), bstr(SECRET)).hex())
 print("offer     ", array(*head_items("invitation_offer"), bstr(tag)).hex())
+
+
+RECOVERY = bytes(range(32))
+
+
+def seed(label):
+    info = array(tstr(label), bstr(APP), bstr(TENANT), bstr(COLLECTION))
+    return hkdf_sha384(SUITE.encode(), RECOVERY, info, 32)
+
+
+print("root seed ", seed("matters-sync/v0/recovery-root").hex())
+print("kem seed  ", seed("matters-sync/v0/recovery-kem").hex())

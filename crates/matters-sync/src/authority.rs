@@ -13,9 +13,12 @@
 //!
 //! A device joins through a one-time invitation (`enrollment`): the admin
 //! accepts its signed, invitation-bound request and signs a transition that
-//! adds it. Out of scope here, and refused rather than inferred: admin
-//! transfer, recovery, nonempty closing frontiers and recovery-recipient
-//! envelopes. Durable state, chain position and engine admission belong to
+//! adds it. After every device is lost, the root key derived from the
+//! recovery words (`recovery`) signs a `root_recovery` that starts the next
+//! membership generation with one admin; transitions of earlier
+//! generations are then stale. Recovery envelopes carry each epoch's key to
+//! the recovery KEM key. Out of scope here, and refused rather than
+//! inferred: admin transfer and nonempty closing frontiers. Durable state, chain position and engine admission belong to
 //! the receiver. Ported from the prototype unchanged in wire behavior and
 //! budgets; the prototype's independent golden fixtures check it here too.
 
@@ -28,6 +31,7 @@ mod enrollment;
 mod envelope;
 mod identity;
 mod message;
+mod recovery;
 
 pub use enrollment::{
     request_enrollment, Invitation, InvitationSecret, CODE_LENGTH, INVITATION_SECRET_BYTES,
@@ -44,6 +48,9 @@ pub use message::{
     Membership, Message, ParsedControl, Route, WriterClaim, WriterHandoff, WriterStart,
     MAX_CONTROL_BYTES, MAX_ROSTER,
 };
+#[doc(hidden)]
+pub use recovery::recovery_seeds;
+pub use recovery::{genesis, RecoveryKeys, RecoverySecret, RECOVERY_WORDS};
 
 /// A SHA-384 hash or device ID.
 pub type Hash = [u8; 48];
@@ -167,6 +174,9 @@ pub struct WriterHistory {
 pub struct Authority {
     route: Route,
     root: Hash,
+    root_key: VerificationKey,
+    /// The accepted `root_recovery` of each generation it started.
+    recoveries: BTreeMap<u64, Vec<u8>>,
     current: Hash,
     states: BTreeMap<Hash, State>,
     successors: BTreeMap<Hash, Vec<u8>>,
@@ -224,6 +234,8 @@ impl Authority {
         Ok(Self {
             route: expected,
             root: p.message.signer,
+            root_key: pinned_root.clone(),
+            recoveries: BTreeMap::new(),
             current,
             states: BTreeMap::from([(current, state)]),
             successors: BTreeMap::new(),
@@ -287,6 +299,18 @@ impl Authority {
 
     pub fn sequence(&self) -> Result<u64> {
         Ok(self.active()?.sequence)
+    }
+
+    /// The membership generation: 0 from genesis, one more per recovery.
+    pub fn generation(&self) -> Result<u64> {
+        Ok(self.active()?.generation)
+    }
+
+    /// The generation of the newest accepted manifest, even while frozen.
+    fn top_generation(&self) -> u64 {
+        self.states
+            .get(&self.current)
+            .map_or(0, |state| state.generation)
     }
 
     pub fn is_forked(&self) -> bool {
@@ -391,7 +415,14 @@ impl Authority {
             .ok_or(Error::Unauthorized)?;
         p.verify(&signer.signing_key)?;
         validate_roster(&m.roster, &m.admin)?;
-        if m.generation != 0
+        let candidate = identity::sha384(bytes);
+        if self.states.contains_key(&candidate) {
+            return Ok(false);
+        }
+        // A recovery closed every earlier generation: its admins can no
+        // longer change membership, whatever they sign.
+        if old.generation != self.top_generation()
+            || m.generation != old.generation
             || Some(m.sequence) != old.sequence.checked_add(1)
             || Some(m.epoch) != old.epoch.checked_add(1)
         {
@@ -404,16 +435,12 @@ impl Authority {
         if m.admin != old.admin || m.recovery_key != old.recovery {
             return Err(Error::Unsupported);
         }
-        let candidate = identity::sha384(bytes);
-        if self.states.contains_key(&candidate) {
-            return Ok(false);
-        }
         if let Some(first) = self.successors.get(&m.previous) {
             self.fork_evidence = Some((first.clone(), bytes.to_vec()));
             return Err(Error::Fork);
         }
         // Every known non-head manifest already has a successor, handled above.
-        if self.successors.len() >= MAX_TRANSITIONS {
+        if self.successors.len() + self.recoveries.len() >= MAX_TRANSITIONS {
             return Err(Error::Limit);
         }
         self.states.insert(
@@ -431,6 +458,108 @@ impl Authority {
         self.successors.insert(m.previous, bytes.to_vec());
         self.current = candidate;
         Ok(true)
+    }
+
+    /// Admit a `root_recovery`: signed by the pinned root, it starts
+    /// generation N+1 from a known manifest of the newest generation N,
+    /// with one member who is its admin, the same recovery key and the
+    /// next sequence and epoch. `Ok(true)` makes it current, `Ok(false)` is
+    /// an exact replay. It is admitted even while a membership fork freezes
+    /// the authority, and clears that freeze: generation N is closed. A
+    /// second, different recovery to the same generation retains both and
+    /// returns `Fork`.
+    pub fn apply_recovery(&mut self, bytes: &[u8]) -> Result<bool> {
+        let p = parse(bytes)?;
+        if p.message.route != self.route {
+            return Err(Error::Context);
+        }
+        let Body::RootRecovery(m) = &p.message.body else {
+            return Err(Error::Unsupported);
+        };
+        if p.message.signer != self.root {
+            return Err(Error::Unauthorized);
+        }
+        p.verify(&self.root_key)?;
+        validate_roster(&m.roster, &m.admin)?;
+        let candidate = identity::sha384(bytes);
+        if self.states.contains_key(&candidate) {
+            return Ok(false);
+        }
+        let old = self.states.get(&m.previous).ok_or(Error::MissingPrevious)?;
+        if Some(m.generation) != old.generation.checked_add(1)
+            || Some(m.sequence) != old.sequence.checked_add(1)
+            || Some(m.epoch) != old.epoch.checked_add(1)
+        {
+            return Err(Error::Stale);
+        }
+        if m.roster.len() != 1 || m.recovery_key != old.recovery {
+            return Err(Error::Unsupported);
+        }
+        // A valid, different recovery to a generation already started is
+        // a fork the root signed: freeze, keeping both. Only recoveries
+        // start generations, so once this passes, `old` is in the newest.
+        if let Some(first) = self.recoveries.get(&m.generation) {
+            self.fork_evidence = Some((first.clone(), bytes.to_vec()));
+            return Err(Error::Fork);
+        }
+        if self.successors.len() + self.recoveries.len() >= MAX_TRANSITIONS {
+            return Err(Error::Limit);
+        }
+        self.states.insert(
+            candidate,
+            State {
+                sequence: m.sequence,
+                generation: m.generation,
+                epoch: m.epoch,
+                key_commitment: m.key_commitment,
+                roster: m.roster.clone(),
+                admin: m.admin,
+                recovery: m.recovery_key.clone(),
+            },
+        );
+        self.recoveries.insert(m.generation, bytes.to_vec());
+        self.current = candidate;
+        self.fork_evidence = None;
+        Ok(true)
+    }
+
+    /// Sign the `root_recovery` that makes `device` the sole member and
+    /// admin of the next generation, from the newest known manifest, with
+    /// `key` as its first epoch's content key. The keys must be the ones
+    /// this collection pinned: wrong words fail here with `Identity`,
+    /// before anything is signed. `signing_randomness` must be fresh OS
+    /// entropy; retries resend the bytes returned here.
+    pub fn recover(
+        &self,
+        recovery: &RecoveryKeys,
+        device: &DeviceKeys,
+        key: &ContentKey,
+        signing_randomness: [u8; 32],
+    ) -> Result<Vec<u8>> {
+        let old = self
+            .states
+            .get(&self.current)
+            .ok_or(Error::MissingPrevious)?;
+        if recovery.root_id()? != self.root || recovery.kem_public_key() != &old.recovery {
+            return Err(Error::Identity);
+        }
+        let generation = old.generation.checked_add(1).ok_or(Error::Limit)?;
+        let epoch = old.epoch.checked_add(1).ok_or(Error::Limit)?;
+        let message = Message {
+            route: self.route.clone(),
+            signer: self.root,
+            body: Body::RootRecovery(Membership {
+                generation,
+                sequence: old.sequence.checked_add(1).ok_or(Error::Limit)?,
+                previous: self.current,
+                roster: vec![device.member(true)],
+                admin: device.id(),
+                epoch,
+                recovery_key: old.recovery.clone(),
+                key_commitment: key_commitment(&self.route, generation, epoch, key)?,
+            }),
+        };
+        sign(&message, recovery.signing_key(), signing_randomness)
     }
 
     /// The competing signed writer claims that froze a device's lineage.
@@ -632,12 +761,37 @@ impl Authority {
         }
         let member = self.member(&recipient)?;
         let state = self.states.get(&manifest).ok_or(Error::MissingPrevious)?;
+        let kem = member.kem_key.clone();
+        self.seal_envelope(
+            admin,
+            manifest,
+            state,
+            recipient,
+            &kem,
+            key,
+            signing_randomness,
+        )
+    }
+
+    /// HPKE-seal `key` for `recipient_kem` under `state`'s epoch and sign
+    /// the envelope as `admin`, the current admin.
+    #[allow(clippy::too_many_arguments)]
+    fn seal_envelope(
+        &self,
+        admin: &DeviceKeys,
+        manifest: Hash,
+        state: &State,
+        recipient: Hash,
+        recipient_kem: &KemPublicKey,
+        key: &ContentKey,
+        signing_randomness: [u8; 32],
+    ) -> Result<Vec<u8>> {
         self.check_commitment(state, key)?;
         let mut envelope = KeyEnvelope {
             manifest,
             epoch: state.epoch,
             recipient,
-            recipient_key_fingerprint: fingerprint(KEM_KEY_LABEL, member.kem_key.as_bytes())?,
+            recipient_key_fingerprint: fingerprint(KEM_KEY_LABEL, recipient_kem.as_bytes())?,
             encapsulation: vec![],
             ciphertext: vec![],
             authority: self.admin()?,
@@ -651,7 +805,7 @@ impl Authority {
         let aad = envelope_aad(&unsealed)?;
         let mut plaintext = envelope::key_plaintext(envelope.epoch, key)?;
         let sealed = identity::hpke()?.seal(
-            &hpke_rs::HpkePublicKey::from(member.kem_key.as_bytes()),
+            &hpke_rs::HpkePublicKey::from(recipient_kem.as_bytes()),
             &info,
             &aad,
             &plaintext,
@@ -688,6 +842,74 @@ impl Authority {
         self.unwrap(bytes, recipient, true)
     }
 
+    /// Wrap the content key of the epoch named by `manifest` for the
+    /// collection's recovery KEM key, as the current admin. The manifest
+    /// must be one this admin administers, so the envelope's signer is
+    /// that epoch's admin. Keep one per epoch, so the words alone recover
+    /// every epoch's records.
+    pub fn wrap_recovery_key(
+        &self,
+        admin: &DeviceKeys,
+        manifest: Hash,
+        key: &ContentKey,
+        signing_randomness: [u8; 32],
+    ) -> Result<Vec<u8>> {
+        if admin.id() != self.admin()? {
+            return Err(Error::Unauthorized);
+        }
+        let state = self.states.get(&manifest).ok_or(Error::MissingPrevious)?;
+        if state.admin != admin.id() {
+            return Err(Error::Unauthorized);
+        }
+        let recipient = fingerprint(KEM_KEY_LABEL, state.recovery.as_bytes())?;
+        let kem = state.recovery.clone();
+        self.seal_envelope(
+            admin,
+            manifest,
+            state,
+            recipient,
+            &kem,
+            key,
+            signing_randomness,
+        )
+    }
+
+    /// Unwrap a recovery envelope with the keys the words derive. The
+    /// envelope must name a known manifest and its epoch, be signed by that
+    /// epoch's admin and name the collection's recovery key as recipient;
+    /// the key must match that epoch's commitment. Works while the
+    /// authority is frozen: reading back is what recovery is for.
+    pub fn unwrap_recovery_key(&self, bytes: &[u8], recovery: &RecoveryKeys) -> Result<EpochKey> {
+        let p = parse(bytes)?;
+        if p.message.route != self.route {
+            return Err(Error::Context);
+        }
+        let Body::KeyEnvelope(k) = &p.message.body else {
+            return Err(Error::Unsupported);
+        };
+        let state = self.states.get(&k.manifest).ok_or(Error::Stale)?;
+        if k.epoch != state.epoch {
+            return Err(Error::Stale);
+        }
+        if p.message.signer != state.admin || k.authority != state.admin {
+            return Err(Error::Unauthorized);
+        }
+        let admin = state
+            .roster
+            .iter()
+            .find(|m| m.id == state.admin)
+            .ok_or(Error::Unauthorized)?;
+        p.verify(&admin.signing_key)?;
+        let recipient = fingerprint(KEM_KEY_LABEL, state.recovery.as_bytes())?;
+        if k.recipient != recipient
+            || k.recipient_key_fingerprint != recipient
+            || recovery.kem_public_key() != &state.recovery
+        {
+            return Err(Error::Identity);
+        }
+        self.open_envelope(&p.message, k, state, recovery.kem_private_key())
+    }
+
     fn unwrap(&self, bytes: &[u8], recipient: &DeviceKeys, history: bool) -> Result<EpochKey> {
         let current = self.active()?;
         let p = parse(bytes)?;
@@ -715,12 +937,24 @@ impl Authority {
         {
             return Err(Error::Identity);
         }
+        self.open_envelope(&p.message, k, state, recipient.kem_private_key())
+    }
+
+    /// HPKE-open an authenticated envelope and check the key against
+    /// `state`'s signed commitment.
+    fn open_envelope(
+        &self,
+        message: &Message,
+        k: &KeyEnvelope,
+        state: &State,
+        private: &KemPrivateKey,
+    ) -> Result<EpochKey> {
         let mut plaintext = identity::hpke()?
             .open(
                 &k.encapsulation,
-                recipient.kem_private_key().hpke(),
-                &envelope_info(&p.message)?,
-                &envelope_aad(&p.message)?,
+                private.hpke(),
+                &envelope_info(message)?,
+                &envelope_aad(message)?,
                 &k.ciphertext,
                 None,
                 None,

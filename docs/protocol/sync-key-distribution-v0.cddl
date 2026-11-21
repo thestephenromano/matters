@@ -1,6 +1,7 @@
 ; Structural key-distribution messages. Canonical CBOR and all authorization
 ; rules are additional requirements; zero signature fixtures are structural only.
-control = [genesis / membership / writer-start / writer-handoff / key-envelope / enrollment-request,
+control = [genesis / membership / root-recovery / writer-start / writer-handoff / key-envelope /
+  enrollment-request,
   signature: bstr .size 3309]
 prefix = (version: 0, suite: "matters-sync-pq-v0")
 route = (application: id16, tenant: id16, collection: id16)
@@ -8,6 +9,10 @@ genesis = [prefix, "genesis", route, signer: hash48,
   [root-key: sig-key, recovery-key: kem-key, generation: u64, roster, admin: hash48, epoch: u64, checkpoint: hash48 / null,
    key-commitment: hash48]]
 membership = [prefix, "membership", route, signer: hash48,
+  [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key, [],
+   key-commitment: hash48]]
+; Signed by the root after every device is lost; the membership body, one admin member.
+root-recovery = [prefix, "root_recovery", route, signer: hash48,
   [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key, [],
    key-commitment: hash48]]
 ; key-commitment = SHA-384(canonical CBOR of

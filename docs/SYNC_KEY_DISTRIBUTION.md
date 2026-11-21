@@ -160,7 +160,51 @@ The secret's 128 bits face no offline attack before the admin uses it once; quan
 
 **Not covered yet:**
 - admitting earlier-epoch records into the engine;
-- persistence and secure storage of device keys and authority state;
-- recovery.
+- persistence and secure storage of device keys and authority state.
 
 These remain open in #37.
+
+## Recovery
+
+When every device is lost, a 256-bit recovery secret restores the collection. This follows the maintainer decisions of 2026-11-21 on [#37](https://github.com/thestephenromano/matters/issues/37). The user keeps the secret as 24 English BIP39 words; nothing else holds the private keys it derives. [The recovery module](../crates/matters-sync/src/authority/recovery.rs) implements it.
+
+```text
+seed(label)  = HKDF-SHA384(salt = suite, ikm = secret32,
+                           info = CBOR([label, app16, tenant16, collection16])), 32 bytes
+root key     = ML-DSA-65 KeyGen(seed("matters-sync/v0/recovery-root"))
+recovery KEM = MLKEM768-P256 DeriveKeyPair(seed("matters-sync/v0/recovery-kem"))
+root_recovery body = membership body, signed by the root under "matters-sync/v0/root_recovery"
+```
+
+- **Words.** The bip39 crate (3.0.0, CC0-1.0) converts the 256-bit entropy to 24 words with an 8-bit checksum and back. BIP39's PBKDF2 seed step is not used: the words carry the secret itself. Parsing accepts any case and whitespace. It requires exactly 24 words from the English list with a matching checksum, so a typo fails with `Format` rather than deriving other keys.
+- **Bootstrap.** The first device derives both keys and signs the genesis with the root key (`genesis`). The genesis commits to the recovery KEM key. The device then shows the words once and keeps neither private key. The root ID the collection pins is therefore a function of the words and the route.
+- **Recovery envelopes.** The admin keeps one recovery envelope per epoch (`wrap_recovery_key`). It is an ordinary `key_envelope` whose recipient and recipient-key fingerprint are both the recovery KEM key's fingerprint. `unwrap_recovery_key` requires:
+  - a known manifest and its epoch;
+  - the signature of that epoch's admin;
+  - the collection's recovery key;
+  - the epoch's key commitment.
+
+  It works while the authority is frozen, because reading history back is what recovery is for.
+- **A new generation.** A recovering device bootstraps from the genesis with the root key derived from the words, so other words fail with `Identity`. It replays the control records the relay holds, opens the recovery envelopes, then signs a `root_recovery` (`Authority::recover`). The transition starts generation N+1 from the newest manifest it knows of generation N:
+  - the next sequence and epoch;
+  - one member, who is the admin;
+  - the same recovery key;
+  - a commitment to a fresh content key.
+- **Admitting a recovery** (`apply_recovery`). Every device checks the root signature against its pin. The recovery then becomes current even if generation N had later transitions the recoverer did not see, or was frozen by a membership fork, and it clears that freeze. From then on, any membership transition of an earlier generation is `Stale`, whoever signed it. Exact replays of accepted records still return a duplicate result. Two different valid recoveries to one generation retain both and freeze; a recovery to the next generation clears the freeze.
+- **After recovery.** Earlier devices are no longer members: they re-enroll through an invitation from the new admin. Until then they keep their unsent work for explicit recovery.
+
+**Material that fails safely.** Wrong words derive another root and recovery key, which bootstrap, `recover` and `unwrap_recovery_key` all refuse with `Identity`. An epoch whose recovery envelope was never written cannot be read from the words alone, and that loss is explicit rather than silent. If both the words and every device are gone, the content cannot be recovered; there is no server-held bypass.
+
+**Evidence:** `authority_tests.rs` covers:
+- the four published 256-bit English BIP39 vectors, loose typing, and bad checksums, counts and words;
+- known-answer root and KEM seeds from `tests/vectors/invitation_kat.py`, and their binding to the route;
+- the full flow: grow and rotate, lose everything, recover from the words, unwrap every epoch, start generation 1, and have a retained device follow it;
+- wrong words, missing envelopes, and forged or misdated recovery envelopes;
+- recoveries signed by the admin, with two members, another recovery key, a skipped generation or epoch, a repeated sequence or an unknown previous;
+- recovery from a stale view, competing recoveries and the way out, and a recovery clearing a membership fork;
+- redaction of the secret and keys.
+
+**Not covered yet:**
+- writing the words and recovery envelopes into the app;
+- storing envelopes on the relay (#38);
+- restore-testing the bundle as epochs change.
