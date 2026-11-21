@@ -363,6 +363,8 @@ fn a_record_after_its_writers_signed_close_is_kept_and_never_applied() {
         p.a.receive_record(&record).unwrap(),
         Received::Pending(Waiting::AfterClose)
     );
+    // Its predecessor, signed before the close, did apply.
+    assert!(titles(&p.a).contains(&"before the close".to_owned()));
     // Later deliveries retry it and still never apply it.
     for r in records(&b) {
         p.a.receive_record(&r).unwrap();
@@ -411,4 +413,23 @@ fn a_cloned_device_freezes_its_writer_lineage_and_its_records_wait() {
         Received::Pending(Waiting::Frozen)
     );
     assert!(!titles(&p.a).contains(&"from the clone".to_owned()));
+}
+
+#[test]
+fn another_devices_envelope_is_accepted_and_stored_nowhere() {
+    let p = pair();
+    let b_id = keys(&p.b_keys).id();
+    let before = p.b.sync_envelopes().unwrap();
+    // A's recovery envelopes and history for others are not B's to keep.
+    for o in p.a.outgoing_controls().unwrap() {
+        if let Body::KeyEnvelope(k) = parse(&o.bytes).unwrap().message.body {
+            if k.recipient != b_id {
+                assert_eq!(
+                    p.b.apply_control(&o.bytes, None).unwrap(),
+                    SyncStanding::Active
+                );
+            }
+        }
+    }
+    assert_eq!(p.b.sync_envelopes().unwrap(), before);
 }

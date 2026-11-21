@@ -240,14 +240,16 @@ fn keep(conn: &Connection, joined: &Joined, bytes: &[u8], waiting: Waiting) -> R
     Ok(())
 }
 
-/// Retry every retryable pending record until nothing more applies.
+/// Retry the pending records until a pass applies none. Each pass that
+/// applies something shortens the chains it waited on, so at most one pass
+/// per pending record, and one more, can make progress.
 pub(super) fn drain(
     conn: &mut Connection,
     engine: &mut Option<Document>,
     joined: &Joined,
-) -> Result<usize> {
-    let mut applied = 0;
-    loop {
+) -> Result<()> {
+    let passes: i64 = conn.query_row("SELECT COUNT(*) FROM sync_pending", [], |r| r.get(0))?;
+    for _ in 0..=passes {
         let pending: Vec<(Vec<u8>, String)> = {
             let mut stmt = conn.prepare("SELECT bytes, reason FROM sync_pending ORDER BY seq")?;
             let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -265,7 +267,6 @@ pub(super) fn drain(
                     update,
                 } => {
                     apply(conn, engine, &bytes, record_id, incarnation, &update)?;
-                    applied += 1;
                     progress = true;
                 }
                 Attempt::Duplicate => {
@@ -279,9 +280,10 @@ pub(super) fn drain(
             }
         }
         if !progress {
-            return Ok(applied);
+            break;
         }
     }
+    Ok(())
 }
 
 impl Database {
