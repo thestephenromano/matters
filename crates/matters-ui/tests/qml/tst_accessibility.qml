@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import matters
+import "sweep.js" as Sweep
 
 // What a screen reader is told (#74). Qt's accessibility tree, the one Orca
 // reads over AT-SPI, is checked in each view and with each dialog and
@@ -78,14 +79,7 @@ Item {
         }
 
         function initTestCase() {
-            // Turns accessibility on, as a screen reader starting would.
-            probe.report();
-            // Something in every kind of row and list.
-            controller.selectView("today");
-            view.captureTask("a11y today");
-            controller.selectView("inbox");
-            view.captureTask("a11y inbox");
-            controller.createArea("a11y area");
+            Sweep.setup(testCase, view, s => "a11y " + s);
             settle();
         }
 
@@ -103,41 +97,6 @@ Item {
                     now[problem].push(where);
             }
             found = now;
-        }
-
-        function rowFor(title) {
-            for (let i = 0; i < list.count; ++i) {
-                const item = list.itemAtIndex(i);
-                if (item && item.title === title)
-                    return item;
-            }
-            return null;
-        }
-
-        function taskId(title) {
-            wait(0);
-            tryVerify(() => rowFor(title) !== null, 2000, title + " is listed");
-            return rowFor(title).taskId;
-        }
-
-        function popup(name, open, where) {
-            const p = findChild(view, name);
-            verify(p, name + " exists");
-            open(p);
-            tryVerify(() => p.opened, 2000, name + " opens");
-            look(where || name);
-            p.close();
-            tryVerify(() => !p.visible, 2000, name + " closes");
-        }
-
-        function menu(name, button, where) {
-            const m = findChild(view, name);
-            verify(m, name + " exists");
-            mouseClick(findChild(view, button));
-            tryVerify(() => m.opened, 2000, name + " opens");
-            look(where || name);
-            m.close();
-            tryVerify(() => !m.visible, 2000, name + " closes");
         }
 
         function ring(item) {
@@ -218,83 +177,7 @@ Item {
 
         function test_everything_a_screen_reader_meets() {
             found = {};
-            for (const v of ["inbox", "today", "upcoming", "anytime", "someday", "logbook", "trash"]) {
-                controller.selectView(v);
-                look(v);
-            }
-
-            // A project with a heading, a task with a checklist, a repeating
-            // task (previewed in Upcoming) and a finished one.
-            controller.createProject("a11y project");
-            const project = JSON.parse(controller.projectsJson).find(p => p.title === "a11y project");
-            controller.selectProject(project.id);
-            settle();
-            controller.addHeading("a11y heading");
-            const projectTask = controller.addTask("a11y project task");
-            controller.addChecklistItem(projectTask, "a11y step", "");
-            controller.setTaskRepeat(projectTask, JSON.stringify({
-                every: 1, frequency: { kind: "daily" }, after_completion: false,
-                start: Qt.formatDate(new Date(), "yyyy-MM-dd")
-            }));
-            const done = controller.addTask("a11y finished");
-            controller.toggleTask(done);
-            settle();
-            look("project");
-            list.expandedTaskId = projectTask;
-            look("an open task with a checklist");
-            list.expandedTaskId = "";
-            menu("projectMenu", "containerMenuButton");
-            view.askFinishProject("completed");
-            const finish = findChild(view, "finishProjectDialog");
-            tryVerify(() => finish.opened, 2000, "finishProjectDialog opens");
-            look("finishProjectDialog");
-            finish.close();
-            tryVerify(() => !finish.visible, 2000);
-
-            // A project filed in the area, listed under it in the sidebar.
-            const areas = JSON.parse(controller.areasJson);
-            controller.createProject("a11y filed project");
-            const filed = JSON.parse(controller.projectsJson).find(p => p.title === "a11y filed project");
-            controller.setProjectArea(filed.id, areas[0].id);
-            controller.selectArea(areas[0].id);
-            look("area");
-            menu("areaMenu", "containerMenuButton");
-
-            controller.chooseShowEvents(true);
-            controller.selectView("today");
-            look("today with events");
-            controller.selectView("upcoming");
-            look("upcoming with events and repeats");
-            controller.chooseShowEvents(false);
-
-            controller.selectView("inbox");
-            const id = taskId("a11y inbox");
-            list.expandedTaskId = id;
-            look("an open task");
-            list.expandedTaskId = "";
-            view.showUndo("task", id, "a11y inbox");
-            look("the Undo notice");
-            view.hideUndo();
-
-            popup("quickFindDialog", p => p.open());
-            popup("preferencesDialog", p => p.open());
-            popup("tagsDialog", p => p.open());
-            popup("newAreaDialog", p => p.open());
-            popup("newProjectDialog", p => p.open());
-            popup("renameDialog", () => view.openRename("area", areas[0].id, "a11y area"));
-            popup("whenPopup", () => view.openWhenFor(id), "the When popover");
-            popup("whenPopup", () => view.openDeadlineFor(id), "the Deadline popover");
-            popup("movePopup", () => view.openMoveFor(id));
-            popup("taskMenu", () => view.openTaskMenu(id, Qt.point(40, 40), list));
-            popup("repeatDialog", p => p.edit([id], "", ""));
-            popup("repeatDialog", p => p.edit([id], JSON.stringify({
-                every: 2, frequency: { kind: "weekly", days: [1, 3] }, after_completion: false,
-                start: "2026-01-05", until: "2027-01-01"
-            }), "2026-01-05"), "the Repeat dialog, weekly until a day");
-            popup("batchTagPopup", p => { p.taskIds = [id]; p.open(); });
-            popup("openLinkDialog", () => view.openLink("file:///etc/hosts"));
-            controller.selectView("trash");
-            popup("emptyTrashDialog", p => p.open());
+            Sweep.run(testCase, view, look, s => "a11y " + s);
 
             // QtTest shortens long failure messages, so each problem is
             // also reported on its own.

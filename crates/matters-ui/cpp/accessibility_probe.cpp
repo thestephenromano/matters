@@ -67,6 +67,7 @@ void walk(QAccessibleInterface *iface, QJsonArray &out, int depth, int inside)
     QJsonObject element;
     element[QStringLiteral("role")] = int(iface->role());
     element[QStringLiteral("name")] = iface->text(QAccessible::Name);
+    element[QStringLiteral("description")] = iface->text(QAccessible::Description);
     element[QStringLiteral("focusable")] = bool(state.focusable);
     element[QStringLiteral("disabled")] = bool(state.disabled);
     element[QStringLiteral("focused")] = bool(state.focused);

@@ -364,12 +364,15 @@ fn an_unreadable_file_gives_the_defaults_and_says_so() {
     std::fs::write(file.path(), "[logbook]\npolicy = \"weekly\"\n").unwrap();
     let (settings, problem) = file.load();
     assert_eq!(settings, Settings::default());
-    let problem = problem.expect("a message");
+    let problem = problem.expect("a problem");
+    assert_eq!(problem.path, file.path());
+    assert!(problem.cause.contains("weekly"), "{problem:?}");
+    let message = problem.to_string();
     assert!(
-        problem.contains(&file.path().display().to_string()),
-        "{problem}"
+        message.contains(&file.path().display().to_string()),
+        "{message}"
     );
-    assert!(problem.contains("defaults"), "{problem}");
+    assert!(message.contains("defaults"), "{message}");
 
     // Not a file at all.
     let file = SettingsFile::new(dir.path());

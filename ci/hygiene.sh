@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Repository hygiene: no tracked files that .gitignore says to ignore, the
-# CI scripts pass shellcheck, and the pinned versions agree.
+# CI scripts pass shellcheck, the pinned versions agree, and the
+# translation catalogs hold every string Matters shows.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . ci/lib.sh
@@ -39,4 +40,10 @@ echo "Flatpak toolchain $channel"
 for tool in cargo-deny cargo-mutants cargo-llvm-cov; do
     echo "$tool $(pinned_version "$tool")"
 done
+endgroup
+
+group "translation catalogs"
+# lupdate extracts the strings again and compares (#75).
+crates/matters-ui/translations/update.sh --check \
+    || refuse "crates/matters-ui/translations is stale: run crates/matters-ui/translations/update.sh"
 endgroup
