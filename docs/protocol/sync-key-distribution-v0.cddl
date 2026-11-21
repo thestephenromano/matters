@@ -1,6 +1,7 @@
 ; Structural key-distribution messages. Canonical CBOR and all authorization
 ; rules are additional requirements; zero signature fixtures are structural only.
-control = [genesis / membership / writer-start / writer-handoff / key-envelope, signature: bstr .size 3309]
+control = [genesis / membership / writer-start / writer-handoff / key-envelope / enrollment-request,
+  signature: bstr .size 3309]
 prefix = (version: 0, suite: "matters-sync-pq-v0")
 route = (application: id16, tenant: id16, collection: id16)
 genesis = [prefix, "genesis", route, signer: hash48,
@@ -20,6 +21,11 @@ writer-handoff = [prefix, "writer_handoff", route, signer: hash48,
 key-envelope = [prefix, "key_envelope", route, signer: hash48,
   [manifest: hash48, epoch: u64, recipient: hash48, recipient-key-fingerprint: hash48,
    "content-key", encapsulation: bstr .size 1153, ciphertext: bstr .size (16..77), authority: hash48]]
+enrollment-request = [prefix, "enrollment_request", route, signer: hash48,
+  [manifest: hash48, sig-key, kem-key, binding: hash48]]
+; Shown or published by the admin device; not signed control records.
+invitation = [prefix, "invitation", route, root: hash48, manifest: hash48, secret: bstr .size 16]
+invitation-offer = [prefix, "invitation_offer", route, root: hash48, manifest: hash48, tag: hash48]
 key-plaintext = [epoch: u64, key: bstr .size 32, "whole-collection"]
 roster = [1*16 member]
 member = [device: hash48, sig-key, kem-key, role: 0 / 1]

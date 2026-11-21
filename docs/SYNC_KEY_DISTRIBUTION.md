@@ -112,3 +112,55 @@ The [writer lifecycle extension](SYNC_WRITER_LIFECYCLE.md) adds a distinct `writ
 ## Production code
 
 [`matters-sync`'s authority module](../crates/matters-sync/src/authority.rs) carries this contract into production for [#37](https://github.com/thestephenromano/matters/issues/37): the same message codec, authority rules, envelope transcripts, key commitment and budgets, on the content-record keys and codec of the same crate. [Its tests](../crates/matters-sync/tests/authority_tests.rs) check the independent golden fixtures above in place. The first-record Loro import gate stays prototype test support; chain position and engine admission belong to the durable receiver.
+
+## Enrollment
+
+Production code extends the experiment for [#37](https://github.com/thestephenromano/matters/issues/37), following the maintainer decision of 2026-11-21 recorded there. A new device joins through a one-time invitation from the admin device. The construction uses only HKDF-SHA384 and HMAC-SHA384 (libcrux 0.0.9, the provider family already pinned) and ML-DSA-65, with no classical key agreement and no PAKE. [The enrollment module](../crates/matters-sync/src/authority/enrollment.rs) implements it.
+
+```text
+invitation = [0, suite, "invitation", app16, tenant16, collection16, root48, manifest48, secret16]
+offer      = [0, suite, "invitation_offer", app16, tenant16, collection16, root48, manifest48, tag48]
+code       = Crockford base32 of secret16: 26 characters, the first 0-7
+key(label) = HKDF-SHA384(salt = suite, ikm = secret16, info = CBOR([label, app16, tenant16, collection16]))
+lookup16   = key("matters-sync/v0/invitation-lookup")
+tag        = HMAC-SHA384(key("matters-sync/v0/invitation-offer"), offer's first eight items as an array)
+enrollment_request body = [manifest48, signing_key1952, kem_key1249, binding48], signer = device48
+binding    = HMAC-SHA384(key("matters-sync/v0/enrollment"),
+             CBOR(["matters-sync/v0/enrollment", suite, app16, tenant16, collection16,
+                   root48, manifest48, device48, signing_key1952, kem_key1249]))
+```
+
+- **Invitation.** The admin draws 16 bytes of OS entropy and shows the invitation as a QR code. Alternatively it shows the 26-character code and publishes the offer under the lookup, so a device that has only the code can fetch the route, root ID and manifest. The code-holding device checks the offer's tag before using anything in it. The secret is one-time, and the admin's application forgets it after one accepted request.
+- **Request.** The new device pins the root by the invitation's root ID (`Authority::bootstrap_from_invitation`) and signs an `enrollment_request` with its own signing key, as the device ID of its two keys.
+- **Acceptance.** `Authority::accept_enrollment` checks, before the admin signs anything:
+  - the invitation's route, root and current manifest;
+  - the request's route, kind and manifest;
+  - that the signer is the device ID of the named keys;
+  - the signature, under the named key, which proves possession;
+  - the binding, compared in constant time, which proves the requester saw the secret;
+  - that the device is not already a member, and that the roster has room.
+
+  It returns the roster entry, and the admin then signs an ordinary `membership` transition that adds it.
+- **Membership.** A membership transition may now add members as well as remove them. Admin transfer and recovery-key changes are still refused.
+- **Retained history.** `wrap_history_key` and `unwrap_history_key` carry the content key of any known earlier manifest, as an ordinary `key_envelope` naming that manifest and epoch. The envelope is signed by the *current* admin, its recipient must be a *current* member, and the key must match the commitment of that epoch. The resulting epoch-key handle is bound to the old epoch, so it can never seal. `unwrap_key` still refuses any envelope that doesn't name the current manifest.
+
+The server never knows the secret. An account reset therefore can't produce a valid binding, and a substituted key directory can't either: swapping in the server's keys fails the binding, and swapping only one key breaks the device ID.
+
+The secret's 128 bits face no offline attack before the admin uses it once; quantum search would leave 64 bits of work against a secret that lives for minutes.
+
+**Evidence:** `authority_tests.rs` covers:
+- QR and typed-code enrollment end to end, including retained keys for two earlier epochs;
+- server-substituted keys, requests without the secret, and requests made for other invitations, collections and roots;
+- stale invitations and requests;
+- a full roster, and offers that are forged, non-canonical or from other versions;
+- history envelopes for removed devices, wrong keys and mismatched epochs;
+- redaction of the secret.
+
+`tests/vectors/invitation_kat.py` independently computes the code, the lookup, the invitation bytes and the offer tag with the Python standard library, and the test checks all four.
+
+**Not covered yet:**
+- admitting earlier-epoch records into the engine;
+- persistence and secure storage of device keys and authority state;
+- recovery.
+
+These remain open in #37.
