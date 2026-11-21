@@ -253,9 +253,10 @@ fn finishing_waits_for_the_admins_transition_and_a_current_envelope() {
     let shown = a.invite().unwrap();
     let request = b.start_enrollment(&b_keys, &shown).unwrap();
     let genesis_only = a.sync_controls().unwrap();
+    // Refused for not being added yet, before envelopes are considered.
     assert!(matches!(
         b.finish_enrollment(&b_keys, &genesis_only, &[]),
-        Err(MattersError::Validation(_))
+        Err(MattersError::Validation(m)) if m.contains("not added this device")
     ));
     a.admit(&request, &shown).unwrap();
     let controls = a.sync_controls().unwrap();
@@ -273,6 +274,24 @@ fn finishing_waits_for_the_admins_transition_and_a_current_envelope() {
         Err(MattersError::Validation(_))
     ));
     assert!(!b.sync_enabled(), "nothing half-joined");
+    // While joining, an invitation differing in any one of application,
+    // tenant, collection or root is another collection's, and refused.
+    for field in 0..4 {
+        let mut other = Invitation::parse(&shown.encode().unwrap()).unwrap();
+        match field {
+            0 => other.route.application = [9; 16],
+            1 => other.route.tenant = [9; 16],
+            2 => other.route.collection = [9; 16],
+            _ => other.root = [9; 48],
+        }
+        assert!(
+            matches!(
+                b.start_enrollment(&b_keys, &other),
+                Err(MattersError::Validation(m)) if m.contains("another collection")
+            ),
+            "field {field}"
+        );
+    }
     // Another collection's invitation while joining is refused.
     let other = Database::open(dir.path().join("c.db")).unwrap();
     let mut elsewhere = route();
