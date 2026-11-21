@@ -26,8 +26,41 @@ pub(crate) const TASK_COLUMNS: &str =
 pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
 
 /// Columns read by [`Database::map_project_row`], in its expected order.
-/// The newest schema version this build migrates to.
-pub const LATEST_SCHEMA: i64 = 17;
+/// Every migration after v1, in order. Add new ones here only: the newest
+/// version this build knows follows from the list.
+const MIGRATIONS: &[(i64, &str)] = &[
+    (2, MIGRATION_V2),
+    (3, MIGRATION_V3),
+    (4, MIGRATION_V4),
+    (5, MIGRATION_V5),
+    (6, MIGRATION_V6),
+    (7, MIGRATION_V7),
+    (8, MIGRATION_V8),
+    (9, MIGRATION_V9),
+    (10, MIGRATION_V10),
+    (11, MIGRATION_V11),
+    (12, MIGRATION_V12),
+    (13, MIGRATION_V13),
+    (14, MIGRATION_V14),
+    (15, MIGRATION_V15),
+    (16, MIGRATION_V16),
+    (17, MIGRATION_V17),
+];
+
+/// The newest schema version this build migrates to: the last migration's.
+pub const LATEST_SCHEMA: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+
+// Versions run 2, 3, 4, … with no gap or repeat.
+const _: () = {
+    let mut i = 0;
+    while i < MIGRATIONS.len() {
+        assert!(
+            MIGRATIONS[i].0 == i as i64 + 2,
+            "migration versions must be consecutive from 2"
+        );
+        i += 1;
+    }
+};
 
 pub(crate) const PROJECT_COLUMNS: &str =
     "id, area_id, title, notes, start_date, time_of_day, is_someday,
@@ -144,24 +177,7 @@ impl Database {
                 supported: LATEST_SCHEMA,
             });
         }
-        for (target, migration) in [
-            (2, MIGRATION_V2),
-            (3, MIGRATION_V3),
-            (4, MIGRATION_V4),
-            (5, MIGRATION_V5),
-            (6, MIGRATION_V6),
-            (7, MIGRATION_V7),
-            (8, MIGRATION_V8),
-            (9, MIGRATION_V9),
-            (10, MIGRATION_V10),
-            (11, MIGRATION_V11),
-            (12, MIGRATION_V12),
-            (13, MIGRATION_V13),
-            (14, MIGRATION_V14),
-            (15, MIGRATION_V15),
-            (16, MIGRATION_V16),
-            (17, MIGRATION_V17),
-        ] {
+        for &(target, migration) in MIGRATIONS {
             if version < target {
                 let tx = conn.transaction()?;
                 tx.execute_batch(migration)?;
