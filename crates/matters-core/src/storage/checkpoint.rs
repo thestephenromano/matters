@@ -178,7 +178,8 @@ fn writers(conn: &Connection, joined: &Joined) -> Result<Vec<Writer>> {
     let mut out = Vec::new();
     for (incarnation, history) in joined.authority.writer_histories(HOME_DOCUMENT) {
         let held = chain(conn, &incarnation)?;
-        if let (true, Some(head)) = (held.records > 0, held.head) {
+        // A chain this device holds no record of has no head.
+        if let Some(head) = held.head {
             out.push(Writer {
                 author: history.device,
                 incarnation,

@@ -648,3 +648,205 @@ fn deletions_survive_a_checkpoint_and_a_stale_edit_after_it() {
     assert_eq!(view(&c), view(&p.a));
     assert!(c.pending_records().unwrap().is_empty());
 }
+
+fn parts_kept(db: &Database) -> i64 {
+    db.with_conn(|c| {
+        Ok(
+            c.query_row("SELECT COUNT(*) FROM sync_checkpoint_parts", [], |r| {
+                r.get(0)
+            })?,
+        )
+    })
+    .unwrap()
+}
+
+/// `c` with `edit` applied to its coverage, sealed by A under a new ID.
+fn reworked(
+    a: &Database,
+    device: &DeviceKeys,
+    c: &Checkpoint,
+    edit: impl FnOnce(&mut checkpoint::Statement),
+) -> Vec<Vec<u8>> {
+    let mut statement = checkpoint::Statement {
+        engine: c.coverage.engine.clone(),
+        schema: c.coverage.schema,
+        epoch: c.coverage.epoch,
+        writers: c.coverage.writers.clone(),
+        version: c.coverage.version.clone(),
+        frontiers: c.coverage.frontiers.clone(),
+        cursor: c.coverage.cursor.clone(),
+    };
+    // Sealed now, under A's current epoch.
+    statement.epoch = current_key(a, device).2;
+    edit(&mut statement);
+    let rebuilt = Checkpoint::new(statement, c.snapshot.clone(), c.pending.clone()).unwrap();
+    sealed_by(a, device, &rebuilt)
+}
+
+#[test]
+fn a_started_device_judges_checkpoints_against_chains_it_knows_by_length() {
+    // A's chain at one record (C1), then two (C2). C starts from C2, then
+    // receives A's records 3 and 4: it knows records 1 and 2 by length only.
+    let dir = tempfile::tempdir().unwrap();
+    let a = Database::open(dir.path().join("a.db")).unwrap();
+    let a_keys = MemoryKeyStore::default();
+    a.create_collection(&a_keys, route()).unwrap();
+    let a_dev = keys(&a_keys);
+    a.add_task(&mut Task::new(id(1), "one", 0.0)).unwrap();
+    acknowledge_all(&a);
+    a.create_checkpoint(cursor(1)).unwrap().unwrap();
+    let c1 = parts(&a);
+    for (id, _) in a.outgoing_checkpoint_parts().unwrap() {
+        a.acknowledge_checkpoint_part(&id).unwrap();
+    }
+    a.add_task(&mut Task::new(id(2), "two", 1.0)).unwrap();
+    let second = records(&a).pop().unwrap();
+    acknowledge_all(&a);
+    a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    let c2_parts = parts(&a);
+    let c2 = opened(&a, &a_dev);
+    let (c, _) = join(&a, &dir.path().join("c.db"));
+    assert!(c.holds_nothing_synced().unwrap());
+    assert!(c.start_from_checkpoint(&c2_parts, GENERATION).unwrap());
+    assert!(
+        !c.holds_nothing_synced().unwrap(),
+        "it holds the collection now"
+    );
+    a.add_task(&mut Task::new(id(3), "three", 2.0)).unwrap();
+    a.add_task(&mut Task::new(id(4), "four", 3.0)).unwrap();
+    let later = records(&a);
+    let third = record_hash(&later[0]);
+    for r in &later {
+        assert_eq!(c.receive_record(r).unwrap(), Received::Applied);
+    }
+    // At a length inside what C knows only by length: an older checkpoint,
+    // kept, never the latest. Delivered again, it is still that.
+    assert_eq!(
+        outcome(c.receive_record(&c1[0]).unwrap()),
+        Checkpointed::Superseded
+    );
+    assert_eq!(
+        outcome(c.receive_record(&c1[0]).unwrap()),
+        Checkpointed::Superseded
+    );
+    assert_eq!(parts_kept(&c), 0, "a decided checkpoint keeps no parts");
+    // At the start's length: the head C started from, or a fork.
+    let at_base = reworked(&a, &a_dev, &c2, |s| s.cursor = cursor(3));
+    assert_eq!(
+        outcome(c.receive_record(&at_base[0]).unwrap()),
+        Checkpointed::Accepted
+    );
+    let forked = reworked(&a, &a_dev, &c2, |s| {
+        s.cursor = cursor(4);
+        s.writers[0].head = [7; 48];
+    });
+    assert!(matches!(
+        outcome(c.receive_record(&forked[0]).unwrap()),
+        Checkpointed::Refused(r) if r.contains("another head")
+    ));
+    assert_eq!(
+        parts_kept(&c),
+        1,
+        "a refused checkpoint's parts are kept as evidence"
+    );
+    // Past the start's length: a head C received, or a fork.
+    let held = reworked(&a, &a_dev, &c2, |s| {
+        s.cursor = cursor(5);
+        s.writers[0].records = 3;
+        s.writers[0].head = third;
+    });
+    assert_eq!(
+        outcome(c.receive_record(&held[0]).unwrap()),
+        Checkpointed::Accepted
+    );
+    let unknown = reworked(&a, &a_dev, &c2, |s| {
+        s.cursor = cursor(6);
+        s.writers[0].records = 3;
+        s.writers[0].head = record_hash(&second);
+    });
+    assert!(matches!(
+        outcome(c.receive_record(&unknown[0]).unwrap()),
+        Checkpointed::Refused(r) if r.contains("another head")
+    ));
+}
+
+#[test]
+fn a_checkpoint_from_a_newer_layout_is_kept_and_never_used() {
+    let p = pair();
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    let a_dev = keys(&p.a_keys);
+    let honest = opened(&p.a, &a_dev);
+    let newer = reworked(&p.a, &a_dev, &honest, |s| s.schema = DOCUMENT_SCHEMA + 1);
+    assert_eq!(
+        outcome(p.b.receive_record(&newer[0]).unwrap()),
+        Checkpointed::Superseded
+    );
+    assert!(p.b.latest_checkpoint().unwrap().is_none());
+    // The current layout is judged as usual.
+    let same = reworked(&p.a, &a_dev, &honest, |s| s.schema = DOCUMENT_SCHEMA);
+    assert_eq!(
+        outcome(p.b.receive_record(&same[0]).unwrap()),
+        Checkpointed::Accepted
+    );
+}
+
+#[test]
+fn a_checkpoint_naming_a_writer_not_yet_admitted_waits_for_it() {
+    let p = pair();
+    let (d, _) = join(&p.a, &p.dir.path().join("d.db"));
+    // A restarts: a new writer, whose claim D has not received but B has.
+    let path = p.dir.path().join("a.db");
+    drop(p.a);
+    let a = Database::open(&path).unwrap();
+    a.resume_sync(&p.a_keys).unwrap();
+    a.add_task(&mut Task::new(id(5), "after the restart", 4.0))
+        .unwrap();
+    deliver_controls(&a, &p.b);
+    for r in records(&a) {
+        p.b.receive_record(&r).unwrap();
+    }
+    // B, a writer D knows, makes a checkpoint listing A's new chain.
+    acknowledge_all(&p.b);
+    p.b.create_checkpoint(cursor(5)).unwrap().unwrap();
+    assert_eq!(
+        outcome(d.receive_record(&parts(&p.b)[0]).unwrap()),
+        Checkpointed::Part,
+        "complete, but naming a writer D cannot check yet"
+    );
+    assert!(d.latest_checkpoint().unwrap().is_none());
+    assert_eq!(parts_kept(&d), 1);
+    // The claim arrives: the waiting checkpoint is judged.
+    deliver_controls(&a, &d);
+    assert!(
+        d.latest_checkpoint().unwrap().is_some(),
+        "accepted once the writer is known"
+    );
+    assert_eq!(parts_kept(&d), 0);
+}
+
+#[test]
+fn frontiers_encode_in_one_canonical_order() {
+    use matters_core::crdt::encode_frontiers;
+    let one = loro::LoroDoc::new();
+    one.set_peer_id(9).unwrap();
+    one.get_map("m").insert("a", 1).unwrap();
+    one.commit();
+    let two = loro::LoroDoc::new();
+    two.set_peer_id(3).unwrap();
+    two.get_map("m").insert("b", 2).unwrap();
+    two.commit();
+    one.import(&two.export(loro::ExportMode::all_updates()).unwrap())
+        .unwrap();
+    two.import(&one.export(loro::ExportMode::all_updates()).unwrap())
+        .unwrap();
+    let bytes = encode_frontiers(&one.oplog_frontiers());
+    assert_eq!(bytes, encode_frontiers(&two.oplog_frontiers()));
+    // Two heads, ascending by actor: (3, 0) then (9, 0).
+    let mut expected = Vec::new();
+    for (peer, counter) in [(3u64, 0i32), (9, 0)] {
+        expected.extend(peer.to_be_bytes());
+        expected.extend(counter.to_be_bytes());
+    }
+    assert_eq!(bytes, expected);
+}
