@@ -7,6 +7,9 @@
 //! Chains, durable receive and domain checks belong to the receiver.
 
 pub mod authority;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 pub mod record;
 pub mod wire;
 

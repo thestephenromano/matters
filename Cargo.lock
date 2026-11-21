@@ -2437,6 +2437,7 @@ dependencies = [
  "libcrux-hmac",
  "libcrux-ml-dsa",
  "libcrux-sha2",
+ "matters-sync",
  "minicbor",
  "serde_json",
  "subtle",
