@@ -1289,7 +1289,8 @@ impl qobject::AppController {
         let arrived = health == "up-to-date" && String::from(&self.sync_health) != "up-to-date";
         self.as_mut().set_sync_phase(QString::from(phase));
         self.as_mut().set_sync_health(QString::from(health));
-        self.as_mut().set_sync_detail(QString::from(detail.as_str()));
+        self.as_mut()
+            .set_sync_detail(QString::from(detail.as_str()));
         self.as_mut().set_sync_unsent(v.unsent as i32);
         self.as_mut()
             .set_sync_endpoint(QString::from(v.endpoint.as_deref().unwrap_or("")));
@@ -1370,12 +1371,12 @@ impl qobject::AppController {
         let hex = String::from(id);
         let bytes: Option<Vec<u8>> = (0..hex.len())
             .step_by(2)
-            .map(|i| hex.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+            .map(|i| {
+                hex.get(i..i + 2)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            })
             .collect();
-        if let (Some(sync), Some(Ok(id))) = (
-            SYNC.get(),
-            bytes.map(<[u8; 48]>::try_from),
-        ) {
+        if let (Some(sync), Some(Ok(id))) = (SYNC.get(), bytes.map(<[u8; 48]>::try_from)) {
             let _ = sync.remove_device(&id);
         }
         self.sync_changed();

@@ -3,6 +3,7 @@
 //! The binary (`src/main.rs`) only calls [`run`]; the UI lives in this
 //! library so tests can build and drive it.
 
+mod sync;
 mod task_row;
 #[cfg(test)]
 mod tests;
@@ -30,9 +31,50 @@ pub fn run() -> glib::ExitCode {
         }
     };
 
+    // Sync (#42), when the desktop has a keyring for this device's keys.
+    // Without one, Matters works as before and Sync says why it can't.
+    let (dirty, notice) = sync::SyncPanel::notice();
+    let sync = match matters_keyring::Oo7KeyStore::open() {
+        Ok(keys) => {
+            let data_dir = Database::default_path()
+                .ok()
+                .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                .unwrap_or_else(std::env::temp_dir);
+            let settings = matters_core::SettingsFile::in_config_dir().ok();
+            let endpoint = settings.as_ref().and_then(|f| f.load().0.sync.endpoint);
+            let save = move |endpoint: Option<String>| {
+                if let Some(file) = &settings {
+                    let mut current = file.load().0;
+                    current.sync.endpoint = endpoint;
+                    if let Err(err) = file.save(&current) {
+                        eprintln!("matters-gtk: the relay's address was not saved: {err}");
+                    }
+                }
+            };
+            match matters_sync_app::SyncApp::open(
+                std::sync::Arc::new(db.clone()),
+                std::sync::Arc::new(keys),
+                endpoint,
+                data_dir,
+                notice,
+                save,
+            ) {
+                Ok(app) => Some((app, dirty)),
+                Err(err) => {
+                    eprintln!("matters-gtk: sync is unavailable: {err}");
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("matters-gtk: sync is unavailable without a keyring: {err}");
+            None
+        }
+    };
+
     let app = Application::builder().application_id(APP_ID).build();
     app.connect_activate(move |app| {
-        ui::Ui::build(Some(app), db.clone());
+        ui::Ui::build(Some(app), db.clone(), sync.clone());
     });
     app.run()
 }

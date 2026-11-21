@@ -3152,6 +3152,9 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "matters-core",
+ "matters-keyring",
+ "matters-sync-app",
+ "tempfile",
  "uuid",
 ]
 
