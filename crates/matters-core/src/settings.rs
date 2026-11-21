@@ -114,6 +114,42 @@ impl CalendarSettings {
     }
 }
 
+/// Light or dark (#72): the desktop's choice, or one of Matters' own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColorScheme {
+    /// Whatever the desktop chooses, following it when it changes.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ColorScheme {
+    /// Every scheme, in the order a frontend offers them.
+    pub const ALL: [ColorScheme; 3] = [ColorScheme::System, ColorScheme::Light, ColorScheme::Dark];
+
+    /// Stable identifier, as stored and used across the UI boundary.
+    pub fn key(self) -> &'static str {
+        match self {
+            ColorScheme::System => "system",
+            ColorScheme::Light => "light",
+            ColorScheme::Dark => "dark",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<ColorScheme> {
+        ColorScheme::ALL.into_iter().find(|s| s.key() == key)
+    }
+}
+
+/// How Matters looks on this device.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct AppearanceSettings {
+    pub scheme: ColorScheme,
+}
+
 /// Everything this device remembers. Missing keys take their defaults and
 /// unknown ones are ignored, so files written by other versions still load.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +157,7 @@ impl CalendarSettings {
 pub struct Settings {
     pub logbook: LogbookSettings,
     pub calendar: CalendarSettings,
+    pub appearance: AppearanceSettings,
 }
 
 impl Settings {

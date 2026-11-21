@@ -21,10 +21,10 @@ use cxx_qt_lib::{
     QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant,
 };
 use matters_core::{
-    local_today, Area, ChecklistItem, ChecklistProgress, Database, DateOrder, DayTracker,
-    DeadlineStatus, DeletedHeading, Heading, Home, ListRow, LogPolicy, Outcome, Project,
-    QueryEngine, Schedule, Settings, SettingsFile, Status, Tag, Tagged, Task, TaskSnapshot, View,
-    Visit,
+    local_today, Area, ChecklistItem, ChecklistProgress, ColorScheme, Database, DateOrder,
+    DayTracker, DeadlineStatus, DeletedHeading, Heading, Home, ListRow, LogPolicy, Outcome,
+    Project, QueryEngine, Schedule, Settings, SettingsFile, Status, Tag, Tagged, Task,
+    TaskSnapshot, View, Visit,
 };
 use uuid::Uuid;
 
@@ -123,6 +123,9 @@ pub mod qobject {
         #[qproperty(QString, calendar_problem)]
         /// Whether Today and Upcoming show calendar events.
         #[qproperty(bool, show_events)]
+        /// Light or dark (#72), as a `ColorScheme` key; chosen with
+        /// `choose_color_scheme`.
+        #[qproperty(QString, color_scheme)]
         type AppController = super::AppControllerRust;
 
         /// Choose when finished tasks move to the Logbook (a `LogPolicy`
@@ -146,6 +149,10 @@ pub mod qobject {
         /// Show or hide the events of calendar `id`, and keep the choice.
         #[qinvokable]
         fn show_calendar(self: Pin<&mut AppController>, id: &QString, shown: bool);
+        /// Choose light, dark or the desktop's scheme (a `ColorScheme`
+        /// key), and keep the choice (#72).
+        #[qinvokable]
+        fn choose_color_scheme(self: Pin<&mut AppController>, scheme: &QString);
 
         #[qinvokable]
         fn select_view(self: Pin<&mut AppController>, view: &QString);
@@ -866,6 +873,7 @@ pub struct AppControllerRust {
     hidden_calendars_json: QString,
     calendar_problem: QString,
     show_events: bool,
+    color_scheme: QString,
     visit: i32,
     reorderable: bool,
     accepts_new_tasks: bool,
@@ -892,12 +900,13 @@ impl Default for AppControllerRust {
         let view = View::Today;
         // One lock: a guard taken inside the struct expression would live
         // to its end, and a second `settings()` there would wait on it.
-        let (log_policy, show_events, hidden) = {
+        let (log_policy, show_events, hidden, scheme) = {
             let state = settings();
             (
                 state.settings.logbook.policy.key(),
                 state.settings.calendar.show_events,
                 to_json(&state.settings.calendar.hidden),
+                state.settings.appearance.scheme.key(),
             )
         };
         Self {
@@ -938,6 +947,7 @@ impl Default for AppControllerRust {
             hidden_calendars_json: hidden,
             calendar_problem: QString::default(),
             show_events,
+            color_scheme: QString::from(scheme),
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -1021,6 +1031,21 @@ impl qobject::AppController {
                 .report(format!("Your settings couldn't be saved: {err}"));
         }
         self.calendars_changed();
+    }
+
+    pub fn choose_color_scheme(mut self: Pin<&mut Self>, scheme: &QString) {
+        let Some(scheme) = ColorScheme::from_key(&String::from(scheme)) else {
+            return self.report(format!("unknown colour scheme '{scheme}'"));
+        };
+        let saved = {
+            let mut state = settings();
+            state.settings.appearance.scheme = scheme;
+            state.save()
+        };
+        self.as_mut().set_color_scheme(QString::from(scheme.key()));
+        if let Err(err) = saved {
+            self.report(format!("Your settings couldn't be saved: {err}"));
+        }
     }
 
     /// Show what the calendars hold now, and reload the lists.
