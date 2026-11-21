@@ -169,34 +169,36 @@ Item {
             verify(ratio(view.colBorder, view.colBg) >= 3);
         }
 
-        function test_text_is_readable_data() {
-            const rows = [];
+        // Every combination in one test (ci/ui-lane.sh counts test
+        // functions, so no data rows): light and dark, with and without
+        // higher contrast, Matters' accent and each desktop's.
+        function test_text_is_readable() {
+            const low = [];
             for (const scheme of ["light", "dark"]) {
                 for (const high of [false, true]) {
-                    for (const accent of accents)
-                        rows.push({ tag: scheme + (high ? ", high contrast" : "") + ", accent " + (accent || "none"),
-                                    scheme: scheme, high: high, accent: accent });
+                    for (const accent of accents) {
+                        const where = scheme + (high ? ", high contrast" : "") + ", accent " + (accent || "none");
+                        controller.chooseColorScheme(scheme);
+                        desktop.set(accent, high);
+                        tryCompare(controller, "systemAccent", accent);
+                        tryCompare(controller, "highContrast", high);
+                        compare(view.isDark, scheme === "dark");
+                        for (const [text, on, need] of pairs(high)) {
+                            for (const s of on) {
+                                const r = ratio(view[text], view[s]);
+                                if (r < need)
+                                    low.push(where + ": " + text + " on " + s + ": " + r.toFixed(2) + ":1, needs "
+                                        + need + " (" + view[text] + " on " + view[s] + ")");
+                            }
+                        }
+                    }
                 }
             }
-            return rows;
-        }
-
-        function test_text_is_readable(data) {
-            controller.chooseColorScheme(data.scheme);
-            desktop.set(data.accent, data.high);
-            tryCompare(controller, "systemAccent", data.accent);
-            tryCompare(controller, "highContrast", data.high);
-            compare(view.isDark, data.scheme === "dark");
-            const low = [];
-            for (const [text, on, need] of pairs(data.high)) {
-                for (const s of on) {
-                    const r = ratio(view[text], view[s]);
-                    if (r < need)
-                        low.push(text + " on " + s + ": " + r.toFixed(2) + ":1, needs " + need
-                            + " (" + view[text] + " on " + view[s] + ")");
-                }
-            }
-            compare(low.length, 0, "\n" + low.join("\n"));
+            // QtTest shortens long failure messages, so each pair is also
+            // reported on its own.
+            for (const line of low)
+                warn(line);
+            verify(low.length === 0, low.length + " pairs too faint, listed above; the first: " + low[0]);
         }
     }
 }
