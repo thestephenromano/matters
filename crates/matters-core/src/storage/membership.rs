@@ -309,6 +309,10 @@ impl Database {
         let genesis = authority::genesis(&route, &keys, &device, &content, random32())?;
         let authority = Authority::bootstrap(&genesis, route.clone(), keys.root_key())?;
         let envelope = authority.wrap_key(&device, device.id(), &content, random32())?;
+        // The words must recover epoch 0 too: its recovery envelope is
+        // published like every later epoch's.
+        let recovery_envelope =
+            authority.wrap_recovery_key(&device, authority.manifest(), &content, random32())?;
         let document = HOME_DOCUMENT;
         let key_name = format!("matters-sync/device/{}", uuid::Uuid::new_v4());
         store.store(&key_name, &seeds)?;
@@ -339,6 +343,10 @@ impl Database {
             tx.execute(
                 "INSERT INTO sync_envelopes (manifest, bytes) VALUES (?1, ?2)",
                 params![authority.manifest().as_slice(), envelope],
+            )?;
+            tx.execute(
+                "INSERT INTO sync_publish (bytes) VALUES (?1)",
+                params![recovery_envelope],
             )?;
             super::sync::crash_point("collection-before-commit");
             tx.commit()?;

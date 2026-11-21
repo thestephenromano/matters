@@ -257,3 +257,27 @@ It verifies all of them, requires an envelope for the current epoch, and turns s
 - finishing before the admission, or without a current envelope;
 - another collection's invitation while joining;
 - a crash before an admission commits.
+
+## Recovering, pausing and leaving
+
+**Recovering onto a new device.** `recover_collection` takes the 24 words, the collection's control records as the relay holds them, and its recovery envelopes. Then:
+1. It bootstraps from the root the words derive; other words fail with `Identity` before anything is stored.
+2. It opens every epoch key it has an envelope for.
+3. It signs the root recovery that makes the new device the sole admin of the next generation.
+4. It keeps its own envelopes of the new key and the recovered ones, so later admissions can hand on history.
+5. It queues the recovery and its recovery envelope for publishing, all in one transaction.
+
+It reports the manifests of epochs that had no recovery envelope. Their records cannot be read again, and the report makes that loss explicit. Every epoch has one from the start: creating a collection now publishes epoch 0's recovery envelope too.
+
+**Pausing.** Pausing sync is a transport matter (#39). A joined device keeps sealing every write, so the records wait in the outbox and go out when sending resumes. Nothing is ever journalled unsealed on a device that is still a member.
+
+**Leaving.** A device that leaves its collection never loses unsent work:
+- One the admin removed, or that a recovery superseded, stops sealing. Its later writes are journalled and kept. Its sealed but unacknowledged records stay in the outbox.
+- Its rows remain the user's local data.
+- Rejoining is a fresh enrollment, under new device keys.
+
+**Evidence:** `tests/enrollment_tests.rs` covers:
+- recovering a collection whose only device was lost, reading its epoch-0 records and sealing for generation 1;
+- refusing wrong words and a database that already syncs;
+- a surviving device following the recovery;
+- an epoch without its envelope being reported unrecoverable.

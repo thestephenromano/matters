@@ -36,7 +36,10 @@ fn mirror(db: &Database) -> Authority {
     };
     let mut a = Authority::bootstrap(&controls[0], route(), &g.root_key).unwrap();
     for c in &controls[1..] {
-        let _ = a.apply_membership(c);
+        match parse(c).unwrap().message.body {
+            Body::RootRecovery(_) => a.apply_recovery(c).unwrap(),
+            _ => a.apply_membership(c).unwrap(),
+        };
     }
     a
 }
@@ -141,12 +144,13 @@ fn a_second_device_joins_and_both_seal_under_the_new_epoch_with_history() {
     assert_eq!(ma.members, mb.members);
     assert_eq!(ma.members.len(), 2);
     assert_eq!(ma.document, mb.document, "one document for the collection");
-    // The admin published the transition, B's envelope, the recovery
+    // The admin published epoch 0's recovery envelope when it created the
+    // collection, then the transition, B's envelope, epoch 1's recovery
     // envelope and B's history for epoch 0.
     let outgoing = p.a.outgoing_controls().unwrap();
-    assert_eq!(outgoing.len(), 4);
+    assert_eq!(outgoing.len(), 5);
     assert!(matches!(
-        parse(&outgoing[0].bytes).unwrap().message.body,
+        parse(&outgoing[1].bytes).unwrap().message.body,
         Body::Membership(_)
     ));
     // Both seal under epoch 1 with the same key.
@@ -382,9 +386,10 @@ fn a_crash_before_an_admission_commits_publishes_nothing_and_can_be_redone() {
         Some(0),
         "nothing applied"
     );
-    assert!(
-        a.outgoing_controls().unwrap().is_empty(),
-        "nothing to publish"
+    assert_eq!(
+        a.outgoing_controls().unwrap().len(),
+        1,
+        "only epoch 0's recovery envelope, from creation"
     );
     a.admit(&request, &shown).unwrap();
     assert_eq!(
@@ -396,4 +401,128 @@ fn a_crash_before_an_admission_commits_publishes_nothing_and_can_be_redone() {
         .unwrap(),
         SyncStanding::Active
     );
+}
+
+/// The recovery envelopes among what `db` published.
+fn recovery_envelopes(db: &Database) -> Vec<Vec<u8>> {
+    db.outgoing_controls()
+        .unwrap()
+        .into_iter()
+        .filter(|o| {
+            matches!(parse(&o.bytes).unwrap().message.body,
+                Body::KeyEnvelope(ref k) if k.recipient == k.recipient_key_fingerprint)
+        })
+        .map(|o| o.bytes)
+        .collect()
+}
+
+#[test]
+fn after_every_device_is_lost_the_words_recover_the_collection_onto_a_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Database::open(dir.path().join("a.db")).unwrap();
+    let a_keys = MemoryKeyStore::default();
+    let words = a.create_collection(&a_keys, route()).unwrap();
+    a.add_task(&mut Task::new(id(1), "epoch 0", 0.0)).unwrap();
+    a.rotate_epoch().unwrap();
+    let envelopes = recovery_envelopes(&a);
+    assert_eq!(envelopes.len(), 2, "one per epoch, epoch 0 included");
+    // A is lost. A new device recovers from the words and what the relay
+    // holds.
+    let c = Database::open(dir.path().join("c.db")).unwrap();
+    let c_keys = MemoryKeyStore::default();
+    let wrong = matters_sync::authority::RecoverySecret::new([7; 32])
+        .words()
+        .unwrap();
+    assert!(matches!(
+        c.recover_collection(
+            &c_keys,
+            &wrong,
+            route(),
+            &a.sync_controls().unwrap(),
+            &envelopes
+        ),
+        Err(MattersError::Authority(
+            matters_sync::authority::Error::Identity
+        ))
+    ));
+    assert!(!c.sync_enabled(), "wrong words store nothing");
+    let recovered = c
+        .recover_collection(
+            &c_keys,
+            &words,
+            route(),
+            &a.sync_controls().unwrap(),
+            &envelopes,
+        )
+        .unwrap();
+    assert_eq!(recovered.standing, SyncStanding::Active);
+    assert!(recovered.unrecoverable.is_empty());
+    assert!(
+        matches!(
+            c.recover_collection(
+                &c_keys,
+                &words,
+                route(),
+                &a.sync_controls().unwrap(),
+                &envelopes
+            ),
+            Err(MattersError::Validation(_))
+        ),
+        "a syncing database is not recovered over"
+    );
+    let m = c.sync_membership().unwrap();
+    assert_eq!((m.generation, m.epoch), (Some(1), Some(2)));
+    assert_eq!(m.members, vec![keys(&c_keys).id()]);
+    // It reads what A sealed at epoch 0, and seals for the new generation.
+    let kc = keys(&c_keys);
+    let first = a.outgoing_records().unwrap()[0].clone();
+    let view = mirror(&c);
+    let epoch0 = matters_sync::record_hash(&a.sync_controls().unwrap()[0]);
+    let old = key_of(&c, &view, &kc, epoch0);
+    let ka = keys(&a_keys);
+    let parsed = wire::parse(&first.bytes, route().content(&m.document)).unwrap();
+    verify(parsed, ka.verification_key())
+        .unwrap()
+        .open(&old)
+        .unwrap();
+    c.add_task(&mut Task::new(id(2), "recovered", 1.0)).unwrap();
+    // The recovery and its envelope wait to be published; a device that
+    // survives after all follows it and is no longer a member.
+    let outgoing = c.outgoing_controls().unwrap();
+    assert_eq!(outgoing.len(), 2);
+    assert!(matches!(
+        parse(&outgoing[0].bytes).unwrap().message.body,
+        Body::RootRecovery(_)
+    ));
+    assert_eq!(
+        a.apply_control(&outgoing[0].bytes, None).unwrap(),
+        SyncStanding::Revoked
+    );
+}
+
+#[test]
+fn an_epoch_without_a_recovery_envelope_is_reported_unrecoverable() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Database::open(dir.path().join("a.db")).unwrap();
+    let words = a
+        .create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    a.rotate_epoch().unwrap();
+    let mut envelopes = recovery_envelopes(&a);
+    let removed = envelopes.remove(0);
+    let Body::KeyEnvelope(missing) = parse(&removed).unwrap().message.body else {
+        unreachable!()
+    };
+    let c = Database::open(dir.path().join("c.db")).unwrap();
+    let recovered = c
+        .recover_collection(
+            &MemoryKeyStore::default(),
+            &words,
+            route(),
+            &a.sync_controls().unwrap(),
+            &envelopes,
+        )
+        .unwrap();
+    assert_eq!(recovered.unrecoverable, vec![missing.manifest]);
+    assert_eq!(recovered.standing, SyncStanding::Active);
 }
