@@ -18,4 +18,8 @@ exclude_re = [
     # which tests/typed_when_tests.rs pins.
     'delete match arm "" in Schedule::parse_typed$',
     'delete match arm "today" in Schedule::parse_typed$',
+    # Zeroing a device's key seeds as they are freed (#37) is defence in
+    # depth against later memory disclosure; no safe test can read freed
+    # memory, so skipping it changes nothing a test can observe.
+    'replace <impl Drop for DeviceSeeds>::drop with \(\)$',
 ]

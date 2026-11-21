@@ -250,14 +250,22 @@ impl Authority {
     /// it, and the route must be the invitation's. The invitation is the
     /// trusted path here.
     pub fn bootstrap_from_invitation(genesis: &[u8], invitation: &Invitation) -> Result<Self> {
+        Self::bootstrap_by_root_id(genesis, invitation.route.clone(), invitation.root)
+    }
+
+    /// Start from `genesis`, pinning the root by its signer ID: the
+    /// genesis's root key must hash to `root`. For a device that stored
+    /// the ID when it first pinned the root (an invitation, or its own
+    /// genesis), so the ID is the trusted path.
+    pub fn bootstrap_by_root_id(genesis: &[u8], expected: Route, root: Hash) -> Result<Self> {
         let p = parse(genesis)?;
         let Body::Genesis(g) = &p.message.body else {
             return Err(Error::Unsupported);
         };
-        if root_id(&g.root_key)? != invitation.root {
+        if root_id(&g.root_key)? != root {
             return Err(Error::Identity);
         }
-        Self::bootstrap(genesis, invitation.route.clone(), &g.root_key)
+        Self::bootstrap(genesis, expected, &g.root_key)
     }
 
     pub fn route(&self) -> &Route {
