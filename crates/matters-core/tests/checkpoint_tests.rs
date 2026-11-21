@@ -625,3 +625,26 @@ fn versions_encode_canonically_whatever_order_they_were_built_in() {
     assert!(decode_version(&swapped).is_err(), "out of order");
     assert!(decode_version(&[0; 13]).is_err(), "a partial entry");
 }
+
+#[test]
+fn deletions_survive_a_checkpoint_and_a_stale_edit_after_it() {
+    let p = pair();
+    // A deletes a task for good; B has not heard yet, and edits it.
+    p.a.trash_task(&id(2)).unwrap();
+    p.a.empty_trash().unwrap();
+    p.b.rename_task(&id(2), "edited while A deleted it")
+        .unwrap();
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(4)).unwrap().unwrap();
+    let (c, _) = join(&p.a, &p.dir.path().join("c.db"));
+    deliver_controls(&p.b, &c);
+    assert!(c.start_from_checkpoint(&parts(&p.a), GENERATION).unwrap());
+    assert_eq!(c.get_task(&id(2)).unwrap(), None, "the deletion travelled");
+    // B's stale edit reaches both: they agree, as the merge policy says.
+    for r in records(&p.b) {
+        p.a.receive_record(&r).unwrap();
+        c.receive_record(&r).unwrap();
+    }
+    assert_eq!(view(&c), view(&p.a));
+    assert!(c.pending_records().unwrap().is_empty());
+}

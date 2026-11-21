@@ -113,6 +113,7 @@ The policy must be based on measured checkpoint size, bootstrap latency and hist
 - a fresh device starting from one and following the tail from both writers;
 - a checkpoint from another relay generation starting nothing;
 - pending records travelling with a checkpoint and applying later;
+- a deletion travelling with a checkpoint, with a stale edit from another device after it merging the same on the source and on the device that started from it;
 - covered records met again after a relay restore, recognised by their chains;
 - dishonest checkpoints refused and kept as evidence: another head, a version the snapshot does not hold, another author, a counter that disagrees, another epoch;
 - an older checkpoint never replacing a newer one;
