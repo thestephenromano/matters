@@ -81,7 +81,9 @@ pub(super) fn identity_owners<'a>(
 /// their checklists, are hidden rather than shown as conflict copies.
 /// Nodes that differ in anything visible stay conflict copies, so no edit is
 /// lost. The repeat rule and timestamps are not compared: a device hands
-/// the rule on, and stamps, as it generates the next occurrence. Returns the
+/// the rule on, and stamps, as it generates the next occurrence. The goal
+/// is compared (ADR 0004, G07): generating never rewrites it, so twins
+/// differ in it only after a concurrent edit. Returns the
 /// hidden nodes, with every node under them, and each merged ID.
 pub(super) fn merged_occurrences(doc: &LoroDoc) -> Result<(BTreeSet<TreeID>, BTreeSet<String>)> {
     let tree = doc.get_tree(HOME);
@@ -138,6 +140,7 @@ fn visible_occurrence(tree: &LoroTree, node: TreeID) -> Result<Option<Value>> {
         "trashed_at",
         "reminder",
         "occurrence",
+        "goal",
     ]
     .iter()
     .map(|key| value.get(*key).cloned().unwrap_or(Value::Null))
@@ -206,6 +209,29 @@ fn optional_json<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Re
 
 fn json<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Result<T> {
     serde_json::from_str(&text(value, key)?).map_err(engine)
+}
+
+/// The goal a project or task serves (ADR 0004). A value that is neither
+/// a goal ID nor null only a damaged or hostile document holds: it projects
+/// as no goal, with the repair `goal-invalid:{id}`, and never stops
+/// projection.
+fn goal(value: &Value, id: &str, repairs: &mut BTreeSet<String>) -> Option<String> {
+    let stored = match value.get("goal") {
+        None | Some(Value::Null) => return None,
+        Some(Value::String(stored)) => stored,
+        Some(_) => {
+            repairs.insert(format!("goal-invalid:{id}"));
+            return None;
+        }
+    };
+    match serde_json::from_str::<Option<String>>(stored) {
+        Ok(None) => None,
+        Ok(Some(goal)) if super::is_goal_id(&goal) => Some(goal),
+        _ => {
+            repairs.insert(format!("goal-invalid:{id}"));
+            None
+        }
+    }
 }
 
 fn int(value: &Value, key: &str) -> i64 {
@@ -359,6 +385,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
                     status,
                     completed_at,
                     trashed_at: json(v, "trashed_at")?,
+                    goal_id: goal(v, &n.id, &mut out.repairs),
                     sort_order,
                     created_at,
                     updated_at,
@@ -406,6 +433,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
                     repeat: optional_json(v, "repeat")?.flatten(),
                     series: occurrence.as_ref().map(|(series, _)| series.clone()),
                     occurrence: occurrence.map(|(_, date)| date),
+                    goal_id: goal(v, &n.id, &mut out.repairs),
                     status,
                     completed_at,
                     trashed_at: json(v, "trashed_at")?,

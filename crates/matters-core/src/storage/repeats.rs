@@ -10,7 +10,7 @@
 //!   one in the same transaction ([`Database::complete_task_on`]).
 //!
 //! A new occurrence is a copy of the one before: title, notes, home, This
-//! Evening, reminder, tags, and the checklist unticked, with its deadline
+//! Evening, reminder, goal (ADR 0004), tags, and the checklist unticked, with its deadline
 //! as far from its date as before. Its id is derived from its series and
 //! date (`repeat::occurrence_id`), and it is inserted only if missing, so a
 //! crash, a second run or a second device never makes two.
@@ -276,12 +276,12 @@ fn create_occurrence(
             id, area_id, project_id, heading_id, title, notes, start_date, time_of_day,
             is_someday, deadline, status, completed_at, sort_order, created_at, updated_at,
             trashed_at, today_order, closed_by_project, reminder_time,
-            repeat_rule, repeat_series, repeat_date
+            repeat_rule, repeat_series, repeat_date, goal_id
          )
          SELECT ?2, area_id, project_id, heading_id, title, notes, ?3, time_of_day,
             0, ?4, 'open', NULL, ?5, ?6, ?6,
             NULL, ?7, 0, reminder_time,
-            ?8, ?9, ?3
+            ?8, ?9, ?3, goal_id
          FROM tasks WHERE id = ?1",
         params![
             head.id,

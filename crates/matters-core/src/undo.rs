@@ -91,6 +91,10 @@ fn restore_task(db: &Database, old: &Task, tags: &[String], today: Date) -> Resu
     if old.reminder != now.reminder {
         db.set_task_reminder(id, old.reminder)?;
     }
+    // Only a series' newest occurrence changes its goal (ADR 0004).
+    if old.goal_id != now.goal_id && now.repeat.is_some() {
+        db.set_series_goal(id, old.goal_id.as_deref())?;
+    }
     if old.status != now.status {
         match old.status {
             Status::Open => db.uncomplete_task(id)?,

@@ -249,6 +249,14 @@ CREATE TABLE IF NOT EXISTS sync_envelopes (
 );
 "#;
 
+/// v15: goal references (#212, ADR 0004). A project, or the newest
+/// occurrence of a repeating series, can name the goal in the Goals app it
+/// serves. Only the ID is stored; the goal itself lives in the Goals app.
+pub const MIGRATION_V15: &str = r#"
+ALTER TABLE projects ADD COLUMN goal_id TEXT;
+ALTER TABLE tasks ADD COLUMN goal_id TEXT;
+"#;
+
 /// v14: joining a collection and publishing what an admin signs (#37). A
 /// joining device keeps its request until the admin's transition arrives;
 /// an admin keeps every control and envelope it signed for others, to

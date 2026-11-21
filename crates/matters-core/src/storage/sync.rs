@@ -269,6 +269,12 @@ pub(crate) fn create_project(tx: &Transaction<'_>, project: &Project) -> Result<
         project.completed_at,
         project.trashed_at,
     ));
+    if project.goal_id.is_some() {
+        commands.push(Command::SetGoal {
+            id: project.id.clone(),
+            goal: project.goal_id.clone(),
+        });
+    }
     Ok(commands)
 }
 
@@ -351,6 +357,12 @@ pub(crate) fn create_task(tx: &Transaction<'_>, task: &Task) -> Result<Vec<Comma
         commands.push(Command::SetRepeat {
             id: task.id.clone(),
             rule: task.repeat.clone(),
+        });
+    }
+    if task.goal_id.is_some() {
+        commands.push(Command::SetGoal {
+            id: task.id.clone(),
+            goal: task.goal_id.clone(),
         });
     }
     // Placed in Today's order within its section, once its When is known.
@@ -788,8 +800,9 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
     for p in &s.projects {
         tx.execute(
             "INSERT INTO projects (id, area_id, title, notes, start_date, time_of_day, is_someday,
-                deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at,
+                goal_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 p.id,
                 p.area_id,
@@ -804,7 +817,8 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
                 p.sort_order,
                 p.created_at,
                 p.updated_at,
-                p.trashed_at
+                p.trashed_at,
+                p.goal_id
             ],
         )?;
     }
@@ -827,9 +841,9 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
             "INSERT INTO tasks (id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order, created_at,
                 updated_at, trashed_at, today_order, closed_by_project, reminder_time,
-                repeat_rule, repeat_series, repeat_date)
+                repeat_rule, repeat_series, repeat_date, goal_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                ?19, ?20, ?21, ?22)",
+                ?19, ?20, ?21, ?22, ?23)",
             params![
                 t.id,
                 t.area_id,
@@ -852,7 +866,8 @@ fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
                 t.reminder.map(crate::reminders::stored_time),
                 crate::repeat::stored_rule(t.repeat.as_ref()),
                 t.series,
-                t.occurrence.map(|d| d.to_string())
+                t.occurrence.map(|d| d.to_string()),
+                t.goal_id
             ],
         )?;
     }

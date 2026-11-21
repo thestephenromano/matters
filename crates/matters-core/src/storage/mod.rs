@@ -1,5 +1,6 @@
 pub mod db;
 pub mod enrollment;
+mod goals;
 pub mod membership;
 mod repeats;
 pub mod schema;

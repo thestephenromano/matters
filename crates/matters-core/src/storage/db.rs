@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::schema::{
-    MIGRATION_V10, MIGRATION_V11, MIGRATION_V12, MIGRATION_V13, MIGRATION_V14, MIGRATION_V2,
-    MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7, MIGRATION_V8,
-    MIGRATION_V9, SCHEMA_V1,
+    MIGRATION_V10, MIGRATION_V11, MIGRATION_V12, MIGRATION_V13, MIGRATION_V14, MIGRATION_V15,
+    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7,
+    MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -20,7 +20,7 @@ pub(crate) const TASK_COLUMNS: &str =
     "id, area_id, project_id, heading_id, title, notes, start_date,
      time_of_day, is_someday, deadline, status, completed_at, sort_order,
      created_at, updated_at, trashed_at, today_order, reminder_time,
-     repeat_rule, repeat_series, repeat_date";
+     repeat_rule, repeat_series, repeat_date, goal_id";
 
 /// Columns read by [`Database::map_area_row`], in its expected order.
 pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
@@ -28,7 +28,7 @@ pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, update
 /// Columns read by [`Database::map_project_row`], in its expected order.
 pub(crate) const PROJECT_COLUMNS: &str =
     "id, area_id, title, notes, start_date, time_of_day, is_someday,
-     deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at";
+     deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at, goal_id";
 
 #[derive(Clone)]
 pub struct Database {
@@ -147,6 +147,7 @@ impl Database {
             (12, MIGRATION_V12),
             (13, MIGRATION_V13),
             (14, MIGRATION_V14),
+            (15, MIGRATION_V15),
         ] {
             if version < target {
                 let tx = conn.transaction()?;
@@ -454,6 +455,7 @@ impl Database {
     }
 
     pub fn create_project(&self, project: &Project) -> Result<()> {
+        super::goals::check_goal(project.goal_id.as_deref())?;
         self.write(
             project.updated_at,
             |conn| {
@@ -464,8 +466,9 @@ impl Database {
                 conn.execute(
                     "INSERT INTO projects (
                 id, area_id, title, notes, start_date, time_of_day, is_someday,
-                deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at,
+                goal_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         project.id,
                         project.area_id,
@@ -481,6 +484,7 @@ impl Database {
                         project.created_at,
                         project.updated_at,
                         project.trashed_at,
+                        project.goal_id,
                     ],
                 )?;
                 Ok(())
@@ -933,6 +937,7 @@ impl Database {
     /// valid: at most one of an area or a project, and a heading only of
     /// its own project ([`Home::of`]); nothing is stored otherwise.
     pub fn create_task(&self, task: &Task) -> Result<()> {
+        super::goals::check_goal(task.goal_id.as_deref())?;
         self.write(
             task.updated_at,
             |conn| {
@@ -946,9 +951,9 @@ impl Database {
                 id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order,
                 created_at, updated_at, trashed_at, today_order, reminder_time,
-                repeat_rule, repeat_series, repeat_date
+                repeat_rule, repeat_series, repeat_date, goal_id
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                ?18, ?19, ?20, ?21)",
+                ?18, ?19, ?20, ?21, ?22)",
                     params![
                         task.id,
                         task.area_id,
@@ -971,6 +976,7 @@ impl Database {
                         crate::repeat::stored_rule(task.repeat.as_ref()),
                         task.series,
                         task.occurrence.map(|d| d.to_string()),
+                        task.goal_id,
                     ],
                 )?;
                 Ok(())
@@ -1543,6 +1549,7 @@ impl Database {
             created_at: row.get(11)?,
             updated_at: row.get(12)?,
             trashed_at: row.get(13)?,
+            goal_id: row.get(14)?,
         })
     }
 
@@ -1598,6 +1605,7 @@ impl Database {
             occurrence: row
                 .get::<_, Option<String>>(20)?
                 .and_then(|s| crate::clock::parse_iso_date(&s)),
+            goal_id: row.get(21)?,
         })
     }
 
