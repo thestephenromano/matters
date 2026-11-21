@@ -1025,6 +1025,64 @@ impl Authority {
         self.authenticate_record(bytes, key, document, false)
     }
 
+    /// Authenticate a `data` record at the epoch it was sealed in, which
+    /// `key` names (current or earlier, as history envelopes give them):
+    /// the record names the key's manifest and epoch, its author was a
+    /// member of that epoch's roster, and its writer is admitted for the
+    /// document, signed by the author. Retired writers' records pass, as
+    /// history; the receiver enforces chain position and closing prefixes.
+    /// A frozen authority or writer lineage refuses with `Fork`.
+    pub fn authenticate_at<'a>(
+        &self,
+        bytes: &'a [u8],
+        key: &'a EpochKey,
+        document: &[u8; 16],
+    ) -> Result<AuthenticatedData<'a>> {
+        if self.fork_evidence.is_some() {
+            return Err(Error::Fork);
+        }
+        if key.route != self.route {
+            return Err(Error::Context);
+        }
+        let state = self.states.get(&key.manifest).ok_or(Error::Stale)?;
+        if key.epoch != state.epoch {
+            return Err(Error::Stale);
+        }
+        let p = wire::parse(bytes, self.route.content(document)).map_err(|_| Error::Format)?;
+        let h = p.header;
+        if h.kind != wire::Kind::Data {
+            return Err(Error::Unsupported);
+        }
+        if *h.manifest != key.manifest || h.epoch != key.epoch {
+            return Err(Error::Stale);
+        }
+        let author = state
+            .roster
+            .iter()
+            .find(|m| &m.id == h.author)
+            .ok_or(Error::Unauthorized)?;
+        // A frozen lineage holds every record of the device for the
+        // document, even one whose competing writer was never admitted.
+        if self.lineage_frozen(*document, h.author) {
+            verify_record(p, &author.signing_key)?;
+            return Err(Error::Fork);
+        }
+        let Some(writer) = self.writers.get(&(*document, *h.incarnation)) else {
+            // A member's authenticated record may wait for its writer's
+            // admission; forged or unsigned bytes are rejected now.
+            verify_record(p, &author.signing_key)?;
+            return Err(Error::MissingWriter);
+        };
+        if writer.claim.device != *h.author {
+            return Err(Error::Actor);
+        }
+        Ok(AuthenticatedData {
+            verified: verify_record(p, &author.signing_key)?,
+            key,
+            actor: writer.claim.actor,
+        })
+    }
+
     fn authenticate_record<'a>(
         &self,
         bytes: &'a [u8],

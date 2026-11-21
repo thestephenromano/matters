@@ -53,6 +53,9 @@ fn mirror(db: &Database) -> Authority {
             Body::RootRecovery(_) => {
                 a.apply_recovery(c).unwrap();
             }
+            Body::WriterStart(_) | Body::WriterHandoff(_) => {
+                let _ = a.admit_writer(c, db.sync_membership().unwrap().document);
+            }
             _ => unreachable!(),
         }
     }
@@ -290,7 +293,13 @@ fn a_fork_freezes_sealing_and_its_evidence_survives_restart() {
     drop(db);
     let db = Database::open(&path).unwrap();
     assert_eq!(db.resume_sync(&store).unwrap(), SyncStanding::Frozen);
-    assert_eq!(db.sync_controls().unwrap().len(), 3, "both successors kept");
+    let transitions = db
+        .sync_controls()
+        .unwrap()
+        .iter()
+        .filter(|c| matches!(parse(c).unwrap().message.body, Body::Membership(_)))
+        .count();
+    assert_eq!(transitions, 2, "both successors kept");
 }
 
 /// Child process for the crash test: create a collection and crash just

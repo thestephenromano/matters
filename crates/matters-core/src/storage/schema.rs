@@ -278,3 +278,26 @@ CREATE TABLE IF NOT EXISTS sync_publish (
     acked INTEGER NOT NULL DEFAULT 0 CHECK (acked IN (0, 1))
 );
 "#;
+
+/// v16: receiving other devices' sealed records (#39). Each writer's
+/// records apply in its signed chain order, once each; a record that waits
+/// for its key, its writer's admission or its predecessor is kept pending,
+/// and one that can never apply (after its writer's closing head, or under
+/// a frozen lineage) is kept too, never applied and never discarded.
+pub const MIGRATION_V16: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_received (
+    record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
+    incarnation BLOB NOT NULL CHECK (length(incarnation) = 32),
+    digest BLOB NOT NULL CHECK (length(digest) = 48)
+);
+CREATE TABLE IF NOT EXISTS sync_receive_heads (
+    incarnation BLOB PRIMARY KEY CHECK (length(incarnation) = 32),
+    head BLOB NOT NULL CHECK (length(head) = 48)
+);
+CREATE TABLE IF NOT EXISTS sync_pending (
+    record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
+    bytes BLOB NOT NULL,
+    reason TEXT NOT NULL,
+    seq INTEGER NOT NULL
+);
+"#;

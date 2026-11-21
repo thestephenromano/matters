@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use super::schema::{
     MIGRATION_V10, MIGRATION_V11, MIGRATION_V12, MIGRATION_V13, MIGRATION_V14, MIGRATION_V15,
-    MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7,
-    MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
+    MIGRATION_V16, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
+    MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -148,6 +148,7 @@ impl Database {
             (13, MIGRATION_V13),
             (14, MIGRATION_V14),
             (15, MIGRATION_V15),
+            (16, MIGRATION_V16),
         ] {
             if version < target {
                 let tx = conn.transaction()?;

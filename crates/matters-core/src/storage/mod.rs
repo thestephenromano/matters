@@ -2,6 +2,7 @@ pub mod db;
 pub mod enrollment;
 mod goals;
 pub mod membership;
+pub mod receive;
 mod repeats;
 pub mod schema;
 pub mod sealing;

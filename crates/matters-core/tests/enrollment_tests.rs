@@ -38,6 +38,9 @@ fn mirror(db: &Database) -> Authority {
     for c in &controls[1..] {
         match parse(c).unwrap().message.body {
             Body::RootRecovery(_) => a.apply_recovery(c).unwrap(),
+            Body::WriterStart(_) | Body::WriterHandoff(_) => a
+                .admit_writer(c, db.sync_membership().unwrap().document)
+                .unwrap(),
             _ => a.apply_membership(c).unwrap(),
         };
     }
@@ -78,6 +81,24 @@ fn envelopes_for(admin: &Database, device: &Hash) -> Vec<Vec<u8>> {
                 Body::KeyEnvelope(ref k) if k.recipient == *device)
         })
         .map(|o| o.bytes)
+        .collect()
+}
+
+/// What `db` queued to publish, in order, by kind.
+fn kinds(db: &Database) -> Vec<&'static str> {
+    db.outgoing_controls()
+        .unwrap()
+        .iter()
+        .map(|o| match parse(&o.bytes).unwrap().message.body {
+            Body::Membership(_) => "transition",
+            Body::RootRecovery(_) => "recovery",
+            Body::WriterStart(_) | Body::WriterHandoff(_) => "writer",
+            Body::KeyEnvelope(k) if k.recipient == k.recipient_key_fingerprint => {
+                "recovery-envelope"
+            }
+            Body::KeyEnvelope(_) => "envelope",
+            _ => "other",
+        })
         .collect()
 }
 
@@ -148,11 +169,20 @@ fn a_second_device_joins_and_both_seal_under_the_new_epoch_with_history() {
     // collection, then the transition, B's envelope, epoch 1's recovery
     // envelope and B's history for epoch 0.
     let outgoing = p.a.outgoing_controls().unwrap();
-    assert_eq!(outgoing.len(), 5);
-    assert!(matches!(
-        parse(&outgoing[1].bytes).unwrap().message.body,
-        Body::Membership(_)
-    ));
+    assert_eq!(
+        kinds(&p.a),
+        [
+            // Creation: epoch 0's recovery envelope, A's writer.
+            "recovery-envelope",
+            "writer",
+            // The admission: B's envelope, epoch 1's recovery envelope,
+            // B's history of epoch 0.
+            "transition",
+            "envelope",
+            "recovery-envelope",
+            "envelope",
+        ]
+    );
     // Both seal under epoch 1 with the same key.
     let (ka, kb) = (keys(&p.a_keys), keys(&p.b_keys));
     let a = mirror(&p.a);
@@ -169,13 +199,15 @@ fn a_second_device_joins_and_both_seal_under_the_new_epoch_with_history() {
         "current and retained"
     );
     // Epoch 0's manifest is the one the admission transition names.
-    let Body::Membership(admission) = parse(&p.a.sync_controls().unwrap()[1])
-        .unwrap()
-        .message
-        .body
-    else {
-        unreachable!()
-    };
+    let admission =
+        p.a.sync_controls()
+            .unwrap()
+            .iter()
+            .find_map(|c| match parse(c).unwrap().message.body {
+                Body::Membership(m) => Some(m),
+                _ => None,
+            })
+            .unwrap();
     let old = key_of(&p.b, &mirror(&p.b), &kb, admission.previous);
     let parsed = wire::parse(&first.bytes, route().content(&ma.document)).unwrap();
     verify(parsed, ka.verification_key())
@@ -386,10 +418,10 @@ fn a_crash_before_an_admission_commits_publishes_nothing_and_can_be_redone() {
         Some(0),
         "nothing applied"
     );
-    assert_eq!(
-        a.outgoing_controls().unwrap().len(),
-        1,
-        "only epoch 0's recovery envelope, from creation"
+    assert!(
+        !kinds(&a).contains(&"transition"),
+        "no admission was published: {:?}",
+        kinds(&a)
     );
     a.admit(&request, &shown).unwrap();
     assert_eq!(
@@ -488,12 +520,8 @@ fn after_every_device_is_lost_the_words_recover_the_collection_onto_a_new_one() 
     c.add_task(&mut Task::new(id(2), "recovered", 1.0)).unwrap();
     // The recovery and its envelope wait to be published; a device that
     // survives after all follows it and is no longer a member.
+    assert_eq!(kinds(&c), ["recovery", "recovery-envelope", "writer"]);
     let outgoing = c.outgoing_controls().unwrap();
-    assert_eq!(outgoing.len(), 2);
-    assert!(matches!(
-        parse(&outgoing[0].bytes).unwrap().message.body,
-        Body::RootRecovery(_)
-    ));
     assert_eq!(
         a.apply_control(&outgoing[0].bytes, None).unwrap(),
         SyncStanding::Revoked
