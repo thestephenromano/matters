@@ -323,6 +323,26 @@ fn the_colour_scheme_is_kept_and_follows_the_desktop_by_default() {
 }
 
 #[test]
+fn the_desktops_accent_is_followed_unless_turned_off() {
+    assert!(Settings::default().appearance.follow_accent);
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = SettingsFile::new(dir.path().join("settings.toml"));
+    // A file from before the setting follows the accent.
+    std::fs::write(file.path(), "[appearance]\nscheme = \"light\"\n").unwrap();
+    let (mut settings, problem) = file.load();
+    assert_eq!(problem, None);
+    assert_eq!(settings.appearance.scheme, ColorScheme::Light);
+    assert!(settings.appearance.follow_accent);
+
+    settings.appearance.follow_accent = false;
+    file.save(&settings).unwrap();
+    let text = std::fs::read_to_string(file.path()).unwrap();
+    assert!(text.contains("follow-accent = false"), "{text}");
+    assert_eq!(file.load(), (settings, None));
+}
+
+#[test]
 fn missing_keys_take_defaults_and_unknown_ones_are_ignored() {
     let dir = tempfile::tempdir().unwrap();
     let file = SettingsFile::new(dir.path().join("settings.toml"));

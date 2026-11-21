@@ -254,6 +254,70 @@ Item {
     // surface they are drawn on, and the accent, which also marks focus and
     // ticked boxes, 3:1 on all of them; tst_contrast.qml checks each pair.
     // A colour literal anywhere else in the QML fails qml_lint.
+    //
+    // The desktop's accent (#76), when it has one and Preferences follow
+    // it, takes the place of Matters' blue, made as dark (in light mode) or
+    // as light (in dark mode) as those limits need; the selection is tinted
+    // with it. When the desktop asks for higher contrast, text and the
+    // accent are held to 7:1 (WCAG's AAA) and lines to 3:1. Without either,
+    // the colours below are used as they are.
+    readonly property string desktopAccent: controller.followAccent ? controller.systemAccent : ""
+    readonly property bool highContrast: controller.highContrast
+    readonly property real textContrast: highContrast ? 7 : 4.5
+    // Matters' own colours, which the desktop's choices adjust.
+    readonly property color ownTextPrimary: isDark ? "#F8F9FA" : "#1A1B1E"
+    readonly property color ownTextSecondary: isDark ? "#A0A2A5" : "#5E656C"
+    readonly property color ownAccent: isDark ? "#4DABF7" : "#1864AB"
+    readonly property color ownDanger: isDark ? "#FFA8A8" : "#C02828"
+    readonly property color ownEvening: isDark ? "#FAB005" : "#845D03"
+    readonly property color ownBorder: isDark ? "#2C2E33" : "#E9ECEF"
+
+    function luminance(c) {
+        c = Qt.color(c);
+        const linear = v => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        return 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b);
+    }
+
+    function contrast(a, b) {
+        const la = luminance(a), lb = luminance(b);
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    }
+
+    // `c` itself if it has `need`:1 against each of `on`, or else the
+    // nearest colour of its hue and saturation that has: darker in light
+    // mode, lighter in dark mode.
+    function readable(c, on, need) {
+        c = Qt.color(c);
+        // A little over, so rounding to the colour's channels keeps it.
+        const enough = x => on.every(s => contrast(x, s) >= need + 0.02);
+        if (enough(c))
+            return c;
+        const hue = Math.max(c.hslHue, 0), saturation = c.hslSaturation;
+        for (let l = c.hslLightness; l >= 0 && l <= 1; l += isDark ? 0.005 : -0.005) {
+            const x = Qt.hsla(hue, saturation, l, 1);
+            if (enough(x))
+                return x;
+        }
+        return isDark ? Qt.rgba(1, 1, 1, 1) : Qt.rgba(0, 0, 0, 1);
+    }
+
+    // `over` with `tint` laid on it at `amount` (0 to 1).
+    function tinted(over, tint, amount) {
+        const a = Qt.color(over), b = Qt.color(tint);
+        return Qt.rgba(a.r + (b.r - a.r) * amount, a.g + (b.g - a.g) * amount, a.b + (b.b - a.b) * amount, 1);
+    }
+
+    // `over` tinted with `tint` up to `amount`, but no further than
+    // `texts` stay readable on it (4.5:1).
+    function readableTint(over, tint, amount, texts) {
+        for (let a = amount; a > 0; a -= 0.01) {
+            const x = tinted(over, tint, a);
+            if (texts.every(c => contrast(c, x) >= 4.52))
+                return x;
+        }
+        return Qt.color(over);
+    }
+
     // Surfaces.
     readonly property color colBg: isDark ? "#1A1B1E" : "#FFFFFF"
     readonly property color colSidebarBg: isDark ? "#141517" : "#F7F8FA"
@@ -261,7 +325,9 @@ Item {
     readonly property color colSidebarActive: isDark ? "#2C2E33" : "#E2E4E8"
     readonly property color colCardBg: isDark ? "#202124" : "#FFFFFF"
     readonly property color colRowHover: isDark ? "#25262B" : "#F8F9FA"
-    readonly property color colRowSelected: isDark ? "#1C3B5A" : "#D0E4F7"
+    readonly property color colRowSelected: desktopAccent === "" ? (isDark ? "#1C3B5A" : "#D0E4F7")
+        : readableTint(colBg, desktopAccent, isDark ? 0.25 : 0.16,
+            [ownTextPrimary, ownTextSecondary, ownDanger, ownEvening])
     readonly property color colChip: isDark ? "#2C2E33" : "#E9ECEF"
     readonly property color colBadge: isDark ? "#2C2E33" : "#DEE2E6"
     readonly property color colField: isDark ? "#25262B" : "#FFFFFF"
@@ -272,18 +338,37 @@ Item {
     readonly property color colTooltipBg: isDark ? "#373A40" : "#25262B"
     readonly property color colInverseBg: isDark ? "#E9ECEF" : "#212529"
     // Text, and what is drawn like it.
-    readonly property color colTextPrimary: isDark ? "#F8F9FA" : "#1A1B1E"
-    readonly property color colTextSecondary: isDark ? "#A0A2A5" : "#5E656C"
-    readonly property color colAccent: isDark ? "#4DABF7" : "#1864AB"
-    // On a fill of the accent: a tick, a selected count.
-    readonly property color colOnAccent: isDark ? "#101113" : "#FFFFFF"
-    readonly property color colDanger: isDark ? "#FFA8A8" : "#C02828"
-    readonly property color colEvening: isDark ? "#FAB005" : "#845D03" // Warm gold for evening
+    readonly property color colTextPrimary: ownTextPrimary
+    // What text is drawn on, for the limits above.
+    readonly property var textSurfaces: [colBg, colSidebarBg, colSidebarHover, colSidebarActive, colCardBg,
+        colRowHover, colRowSelected, colChip, colBadge, colField, colControl, colInputBar, colDangerBg, colEveningBg]
+    readonly property color colTextSecondary: !highContrast ? ownTextSecondary
+        : readable(ownTextSecondary, textSurfaces, 7)
+    // The accent as text (selected entries, headings, previews) and as a
+    // ring, tick or mark on every surface.
+    readonly property color colAccent: {
+        if (desktopAccent === "" && !highContrast)
+            return ownAccent;
+        const asText = readable(desktopAccent !== "" ? desktopAccent : ownAccent,
+            [colBg, colSidebarBg, colSidebarHover, colSidebarActive, colCardBg, colField, colControl, colInputBar, colChip],
+            textContrast);
+        return readable(asText, textSurfaces, highContrast ? 4.5 : 3);
+    }
+    // On a fill of the accent: a tick, a selected count. Whichever of white
+    // and near-black reads better on it.
+    readonly property color colOnAccent: contrast("#FFFFFF", colAccent) >= contrast("#101113", colAccent) ? "#FFFFFF" : "#101113"
+    readonly property color colDanger: !highContrast ? ownDanger : readable(ownDanger, textSurfaces, 7)
+    // Warm gold for evening.
+    readonly property color colEvening: !highContrast ? ownEvening
+        : readable(ownEvening, [colBg, colCardBg, colEveningBg, colRowHover, colRowSelected], 7)
     readonly property color colTooltipText: "#F8F9FA"
     readonly property color colInverseText: isDark ? "#212529" : "#F8F9FA"
-    // Lines that only separate or frame, which nothing needs to read.
-    readonly property color colBorder: isDark ? "#2C2E33" : "#E9ECEF"
-    readonly property color colRowSelectedBorder: isDark ? "#2F5F8F" : "#A5C8EC"
+    // Lines that only separate or frame, which nothing needs to read;
+    // with higher contrast, lines that can be seen (3:1).
+    readonly property color colBorder: !highContrast ? ownBorder
+        : readable(ownBorder, [colBg, colCardBg, colSidebarBg], 3)
+    readonly property color colRowSelectedBorder: desktopAccent === "" && !highContrast ? (isDark ? "#2F5F8F" : "#A5C8EC")
+        : highContrast ? colAccent : tinted(colBg, desktopAccent, isDark ? 0.45 : 0.4)
     // Each list's own colour, for its icon beside its name.
     readonly property var viewColors: ({
         inbox: "#339AF0", today: "#FCC419", upcoming: "#FF6B6B", anytime: "#20C997",
@@ -4298,6 +4383,24 @@ Item {
                     checked: controller.colorScheme === modelData.key
                     onClicked: controller.chooseColorScheme(modelData.key)
                 }
+            }
+            // The desktop's accent colour (#76), made readable on Matters'
+            // surfaces.
+            CheckBox {
+                objectName: "followAccentBox"
+                text: "Use the desktop's accent colour"
+                enabled: controller.systemAccent !== ""
+                checked: controller.followAccent
+                onClicked: controller.chooseFollowAccent(checked)
+            }
+            Label {
+                objectName: "noAccent"
+                Layout.leftMargin: 24
+                Layout.fillWidth: true
+                visible: controller.systemAccent === ""
+                text: "Your desktop doesn't offer an accent colour."
+                wrapMode: Text.WordWrap
+                color: root.colTextSecondary
             }
 
             // Calendar events in Today and Upcoming (#62).

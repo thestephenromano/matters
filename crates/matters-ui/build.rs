@@ -37,6 +37,8 @@ fn main() {
         // What a screen reader is told, for the accessibility tests (#74).
         builder = builder
             .file("src/accessibility_probe.rs")
+            // A desktop whose accent and contrast the tests set (#76).
+            .file("src/fake_desktop.rs")
             .qt_module("QuickTest");
         // SAFETY: only adds source files; no compiler flags are changed.
         builder = unsafe {

@@ -2635,6 +2635,7 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "futures-core",
  "jiff",
  "matters-core",
  "notify-rust",
@@ -2642,6 +2643,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+ "zbus",
 ]
 
 [[package]]

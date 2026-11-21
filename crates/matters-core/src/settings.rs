@@ -144,10 +144,22 @@ impl ColorScheme {
 }
 
 /// How Matters looks on this device.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct AppearanceSettings {
     pub scheme: ColorScheme,
+    /// Whether the desktop's accent colour (#76) replaces Matters' blue,
+    /// when the desktop has one.
+    pub follow_accent: bool,
+}
+
+impl Default for AppearanceSettings {
+    fn default() -> Self {
+        Self {
+            scheme: ColorScheme::System,
+            follow_accent: true,
+        }
+    }
 }
 
 /// Everything this device remembers. Missing keys take their defaults and
