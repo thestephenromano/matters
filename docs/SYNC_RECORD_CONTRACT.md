@@ -131,3 +131,36 @@ Conformance coverage includes independent golden H/B bytes, KDF/AAD/AES values, 
 Remaining release gates include complete lifecycle/recipient-envelope bytes, independent exact-suite HPKE interoperability, nonce reservation crash/clone/restore implementation, authenticated actor admission, snapshot coverage, resource/security budget review, aarch64 execution, secret lifecycle and independent protocol review. #33/#34/#36 remain open; merging this bounded contract does not enable encrypted sync.
 
 The [active execution record](../experiments/sync-prototype/evidence/record-contract-2026-11-18.json) records the tested source, commands, oracle identities and limitations. CI runs independent fixture regeneration and verifies the listed hashes against the actual checkout, including this final document. Finalize source/docs before capturing the record; the subsequent evidence commit changes only the record itself. [Review dispositions](../experiments/sync-prototype/REVIEW_RECORD_CONTRACT.md) distinguish confirmed gaps from historical-source and design qualifications.
+
+## Production receiving
+
+[`matters_core::storage::receive`](../crates/matters-core/src/storage/receive.rs) (#39, migration v15) is the receiver's half of this contract.
+
+**Writer claims.** Each open that seals is a new writer. It signs a writer control for its incarnation and engine actor (`SYNC_WRITER_LIFECYCLE.md`), admits it locally, and queues it to publish with the device's other controls.
+- A device's later writers hand off from its active admitted incarnation, naming the exact closing head of its record chain.
+- A copied database therefore names the same predecessor as its original. Two competing handoffs freeze that device's writer lineage on every receiver.
+
+**Checks.** `Database::receive_record` checks a record in this order:
+1. route and document;
+2. that it is not already applied (by record ID, the device's own records included);
+3. that this device holds an envelope of the key of the epoch the record was sealed in;
+4. signature, the author's membership in that epoch's roster, and the writer's admission (`Authority::authenticate_at`);
+5. position in the writer's signed chain, and that it does not follow the writer's closing head;
+6. that its engine update carries only the writer's admitted actor, and is an update, not a snapshot.
+
+It then applies in one transaction: journalled as received, merged, the rows rebuilt, and the writer's chain head advanced.
+
+**Records that wait.** A record waiting for its key, its writer's claim or its predecessor stays in `sync_pending`, across restarts. It is retried whenever a record, writer claim, transition or envelope arrives. A record after its writer's close, or of a frozen lineage, is kept there as well, never applied and never discarded. Forged or malformed bytes are refused and not kept.
+
+**Limit.** A writer claim is admitted only under the manifest it was signed under. A claim signed just before a concurrent rotation therefore arrives stale everywhere, and its writer must claim again under the new epoch. That is the sync client's job (#39).
+
+**Evidence:**
+- `tests/receive_tests.rs` covers:
+  - two devices converging, including records the newcomer received from before it joined;
+  - duplicates and the device's own records;
+  - out-of-order records across a restart;
+  - records waiting for a writer claim or for an epoch key;
+  - forged records, a foreign actor, a snapshot in place of an update;
+  - a record after its writer's close;
+  - a cloned device freezing its lineage.
+- matters-sync's `authority_tests.rs` covers authentication at a record's own epoch after rotation and removal.

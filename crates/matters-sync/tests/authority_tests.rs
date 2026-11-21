@@ -2066,3 +2066,75 @@ fn recovery_secrets_and_keys_never_print() {
     let keys = secret.keys(&route()).unwrap();
     assert_eq!(format!("{keys:?}"), "RecoveryKeys(redacted)");
 }
+
+#[test]
+fn records_authenticate_at_their_own_epoch_after_rotation_and_removal() {
+    let mut s = setup();
+    let inc = fresh();
+    let start = writer(&s.authority, &s.b, inc, 81, None);
+    s.authority
+        .admit_writer(&signed(&start, s.b.signing_key()), DOC)
+        .unwrap();
+    let envelope0 = wrap(&s.authority, &s.a, s.b.id(), &epoch_key(0)).unwrap();
+    let key0 = s.authority.unwrap_key(&envelope0, &s.b).unwrap();
+    let (author, manifest0, record) = (s.b.id(), s.authority.manifest(), fresh());
+    let sealed = seal_as(
+        header(&s.authority, &author, &inc, &record, &manifest0),
+        &epoch_key(0),
+        PLAINTEXT,
+        &s.b,
+    );
+    // B is removed in the next epoch; its epoch-0 record still reads at
+    // epoch 0, with epoch 0's key.
+    let mut revoke = transition(&s);
+    let a = s.a.id();
+    membership(&mut revoke).roster.retain(|m| m.id == a);
+    s.authority
+        .apply_membership(&signed(&revoke, s.a.signing_key()))
+        .unwrap();
+    let history = s
+        .authority
+        .wrap_history_key(&s.a, s.a.id(), manifest0, &epoch_key(0), fresh())
+        .unwrap();
+    let old_key = s.authority.unwrap_history_key(&history, &s.a).unwrap();
+    let read = s
+        .authority
+        .authenticate_at(&sealed, &old_key, &DOC)
+        .unwrap();
+    assert_eq!(read.actor(), 81);
+    assert_eq!(read.open().unwrap(), PLAINTEXT);
+    // The current-epoch path refuses it as stale; authenticate_at refuses
+    // a key of another epoch, another document and an outsider's record.
+    assert_eq!(
+        s.authority
+            .authenticate_history(&sealed, &old_key, &DOC)
+            .map(|_| ()),
+        Err(Error::Stale)
+    );
+    let current = wrap(&s.authority, &s.a, s.a.id(), &epoch_key(1)).unwrap();
+    let key1 = s.authority.unwrap_key(&current, &s.a).unwrap();
+    assert_eq!(
+        s.authority
+            .authenticate_at(&sealed, &key1, &DOC)
+            .map(|_| ()),
+        Err(Error::Stale)
+    );
+    assert_eq!(
+        s.authority
+            .authenticate_at(&sealed, &old_key, &[5; 16])
+            .map(|_| ()),
+        Err(Error::Format)
+    );
+    let outsider = device();
+    let (outsider_id, theirs_id) = (outsider.id(), fresh());
+    let mut theirs_header = header(&s.authority, &outsider_id, &inc, &theirs_id, &manifest0);
+    theirs_header.epoch = 0;
+    let theirs = seal_as(theirs_header, &epoch_key(0), PLAINTEXT, &outsider);
+    let _ = key0;
+    assert_eq!(
+        s.authority
+            .authenticate_at(&theirs, &old_key, &DOC)
+            .map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+}

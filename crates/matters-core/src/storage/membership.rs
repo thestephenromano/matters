@@ -20,21 +20,21 @@ use std::collections::BTreeMap;
 
 #[cfg(feature = "test-support")]
 use matters_sync::authority::RecoverySecret;
-use matters_sync::authority::{self, Authority, Body, DeviceKeys, Route};
+use matters_sync::authority::{
+    self, Authority, Body, DeviceKeys, Message, Route, WriterHandoff, WriterStart,
+};
 use matters_sync::generate_signing_key;
 #[cfg(feature = "test-support")]
 use matters_sync::ContentKey;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use super::db::Database;
-#[cfg(feature = "test-support")]
 use super::sealing::random32;
 use super::sealing::{Sealing, SealingIdentity, SyncKeys};
 use crate::error::{MattersError, Result};
 
 /// The one document a Matters collection holds: every device seals its
 /// records for it, so a joining device needs nothing more to find it.
-#[cfg(feature = "test-support")]
 pub(super) const HOME_DOCUMENT: [u8; 16] = *b"matters/home\0\0\0\0";
 
 /// Overwrite secret bytes before they are freed (best effort: the
@@ -241,6 +241,9 @@ pub(super) fn apply(authority: &mut Authority, bytes: &[u8]) -> authority::Resul
     match parsed.message.body {
         Body::Membership(_) => authority.apply_membership(bytes),
         Body::RootRecovery(_) => authority.apply_recovery(bytes),
+        Body::WriterStart(_) | Body::WriterHandoff(_) => {
+            authority.admit_writer(bytes, HOME_DOCUMENT)
+        }
         _ => Err(authority::Error::Unsupported),
     }
 }
@@ -270,15 +273,104 @@ fn set_standing(tx: &Transaction<'_>, standing: SyncStanding) -> Result<()> {
     Ok(())
 }
 
+/// Sign, admit, store and queue the writer control for `incarnation`:
+/// a handoff from this device's active admitted incarnation, with the
+/// exact closing head of its record chain, or the device's first start.
+fn claim_writer(
+    conn: &Connection,
+    joined: &mut Joined,
+    incarnation: [u8; 32],
+    actor: u64,
+) -> Result<()> {
+    let me = joined.device.id();
+    let previous = joined
+        .authority
+        .writer_histories(HOME_DOCUMENT)
+        .into_iter()
+        .find(|(_, h)| h.device == me && h.closed.is_none())
+        .map(|(id, _)| id);
+    let manifest = joined.authority.manifest();
+    let body = match previous {
+        None => Body::WriterStart(WriterStart {
+            manifest,
+            document: HOME_DOCUMENT,
+            device: me,
+            incarnation,
+            actor,
+            previous: None,
+        }),
+        Some(previous) => {
+            let head: Option<Option<Vec<u8>>> = conn
+                .query_row(
+                    "SELECT head FROM sync_writers WHERE incarnation = ?1",
+                    params![previous.as_slice()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match head {
+                // Its chain is here: close it exactly.
+                Some(head) => Body::WriterHandoff(WriterHandoff {
+                    manifest,
+                    document: HOME_DOCUMENT,
+                    device: me,
+                    incarnation,
+                    actor,
+                    previous,
+                    closing: head
+                        .map(|h| h.try_into())
+                        .transpose()
+                        .map_err(|_| MattersError::Validation("stored chain head".into()))?,
+                }),
+                // Another copy's writer: retire it without a known prefix.
+                None => Body::WriterStart(WriterStart {
+                    manifest,
+                    document: HOME_DOCUMENT,
+                    device: me,
+                    incarnation,
+                    actor,
+                    previous: Some(previous),
+                }),
+            }
+        }
+    };
+    let message = Message {
+        route: joined.route.clone(),
+        signer: me,
+        body,
+    };
+    let control = authority::sign(&message, joined.device.signing_key(), random32())?;
+    joined.authority.admit_writer(&control, HOME_DOCUMENT)?;
+    conn.execute(
+        "INSERT INTO sync_controls (bytes) VALUES (?1)",
+        params![control],
+    )?;
+    conn.execute(
+        "INSERT INTO sync_publish (bytes) VALUES (?1)",
+        params![control],
+    )?;
+    Ok(())
+}
+
 impl SyncKeys {
     /// Seal (or stop sealing) for `joined`'s standing after a change.
-    pub(super) fn settle(&mut self, conn: &Connection, joined: Joined) -> Result<SyncStanding> {
+    /// `actor` is the engine actor this open's writes carry: a new sealing
+    /// writer claims it in a signed writer control, queued to publish.
+    pub(super) fn settle(
+        &mut self,
+        conn: &Connection,
+        actor: u64,
+        mut joined: Joined,
+    ) -> Result<SyncStanding> {
         let standing = joined.standing();
         if standing == SyncStanding::Active {
             let identity = joined.identity(conn)?;
             match self.sealing.as_mut() {
                 Some(sealing) => sealing.rekey(identity),
-                None => self.sealing = Some(Sealing::begin(conn, identity)?),
+                None => {
+                    let sealing = Sealing::begin(conn, identity)?;
+                    claim_writer(conn, &mut joined, sealing.incarnation(), actor)?;
+                    self.sealing = Some(sealing);
+                }
             }
         } else {
             self.sealing = None;
@@ -350,9 +442,11 @@ impl Database {
             )?;
             super::sync::crash_point("collection-before-commit");
             tx.commit()?;
+            let actor = doc.peer();
             *engine = Some(doc);
             sync.settle(
                 conn,
+                actor,
                 Joined {
                     route,
                     document,
@@ -423,8 +517,10 @@ impl Database {
                 ));
             }
             let authority = replay(conn, &route, root)?;
+            let actor = engine.as_ref().map_or(0, |d| d.peer());
             sync.settle(
                 conn,
+                actor,
                 Joined {
                     route,
                     document,
@@ -436,18 +532,44 @@ impl Database {
         })
     }
 
-    /// Accept a signed membership transition or root recovery received for
-    /// this collection, with this device's key envelope for the new epoch
-    /// when it stays a member. The control, the envelope and the device's
+    /// Accept a signed membership transition, root recovery or writer claim
+    /// received for this collection, with this device's key envelope for
+    /// the new epoch when a transition keeps it a member. A key envelope
+    /// addressed to this device (a later history envelope) is stored;
+    /// anyone else's is ignored. The control, the envelope and the device's
     /// standing commit together; sealing then continues under the new
     /// epoch, or stops if the device was removed. Competing histories
     /// freeze it: the evidence is kept and `Err(Fork)` returned. Anything
     /// else refused changes nothing.
     pub fn apply_control(&self, control: &[u8], envelope: Option<&[u8]>) -> Result<SyncStanding> {
-        self.with_sealing(|conn, _, sync| {
+        self.with_sealing(|conn, engine, sync| {
             let Some(mut joined) = sync.membership.take() else {
                 return Err(MattersError::Validation("sync is not resumed".into()));
             };
+            // A key envelope is no control: keep it if it is this device's.
+            if let Ok(parsed) = authority::parse(control) {
+                if let Body::KeyEnvelope(k) = &parsed.message.body {
+                    let mine = k.recipient == joined.device.id();
+                    let stored = (|| {
+                        if mine {
+                            let key = joined.authority.unwrap_history_key(control, &joined.device)?;
+                            conn.execute(
+                                "INSERT OR IGNORE INTO sync_envelopes (manifest, bytes) VALUES (?1, ?2)",
+                                params![key.manifest().as_slice(), control],
+                            )?;
+                        }
+                        Ok::<_, MattersError>(())
+                    })();
+                    let standing = joined.standing();
+                    sync.membership = Some(joined);
+                    stored?;
+                    // Records may have waited for this key.
+                    if let Some(joined) = sync.membership.as_ref() {
+                        super::receive::drain(conn, engine, joined)?;
+                    }
+                    return Ok(standing);
+                }
+            }
             let before = joined.authority.clone();
             let outcome = apply(&mut joined.authority, control);
             let result = (|| {
@@ -466,7 +588,9 @@ impl Database {
                     "INSERT INTO sync_controls (bytes) VALUES (?1)",
                     params![control],
                 )?;
-                if standing == SyncStanding::Active {
+                // Only a new epoch needs this device's envelope of its key;
+                // a writer claim changes no epoch.
+                if standing == SyncStanding::Active && before.manifest() != manifest {
                     let envelope = envelope.ok_or_else(|| {
                         MattersError::Validation("the new epoch's key envelope is missing".into())
                     })?;
@@ -482,7 +606,12 @@ impl Database {
             })();
             match result {
                 Ok(true) => {
-                    let standing = sync.settle(conn, joined)?;
+                    let actor = engine.as_ref().map_or(0, |d| d.peer());
+                    let standing = sync.settle(conn, actor, joined)?;
+                    // Records may have waited for this writer or epoch.
+                    if let Some(joined) = sync.membership.as_ref() {
+                        super::receive::drain(conn, engine, joined)?;
+                    }
                     match outcome {
                         Err(authority::Error::Fork) => Err(authority::Error::Fork.into()),
                         _ => Ok(standing),

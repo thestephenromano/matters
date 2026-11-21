@@ -133,7 +133,7 @@ impl Database {
         &self,
         change: impl FnOnce(&Joined) -> Result<(Vec<Member>, Option<Hash>)>,
     ) -> Result<()> {
-        self.with_sealing(|conn, _, sync| {
+        self.with_sealing(|conn, engine, sync| {
             let joined = sync.membership.as_ref().ok_or_else(not_resumed)?;
             joined.require_admin()?;
             let (mut roster, newcomer) = change(joined)?;
@@ -209,7 +209,8 @@ impl Database {
             tx.commit()?;
             let mut joined = sync.membership.take().ok_or_else(not_resumed)?;
             joined.authority = next;
-            sync.settle(conn, joined)?;
+            let actor = engine.as_ref().map_or(0, |d| d.peer());
+            sync.settle(conn, actor, joined)?;
             Ok(())
         })
     }
@@ -351,12 +352,14 @@ mod joining {
                 let mut authority = Authority::bootstrap(genesis, route.clone(), keys.root_key())?;
                 let mut epochs = vec![authority.manifest()];
                 for control in rest {
+                    let before = authority.manifest();
                     match super::super::membership::apply(&mut authority, control) {
-                        Ok(true) | Err(authority::Error::Fork) => {
-                            epochs.push(matters_sync::record_hash(control));
-                        }
-                        Ok(false) => {}
+                        Ok(_) | Err(authority::Error::Fork) => {}
                         Err(error) => return Err(error.into()),
+                    }
+                    // Writer claims change no epoch; transitions do.
+                    if authority.manifest() != before {
+                        epochs.push(authority.manifest());
                     }
                 }
                 let mut recovered = Vec::new();
@@ -422,9 +425,11 @@ mod joining {
                 }
                 super::super::sync::crash_point("recovery-before-commit");
                 tx.commit()?;
+                let actor = doc.peer();
                 *engine = Some(doc);
                 let standing = sync.settle(
                     conn,
+                    actor,
                     Joined {
                         route,
                         document: HOME_DOCUMENT,
@@ -544,9 +549,11 @@ mod joining {
                 tx.execute("DELETE FROM sync_enrolling", [])?;
                 super::super::sync::crash_point("enrollment-before-commit");
                 tx.commit()?;
+                let actor = doc.peer();
                 *engine = Some(doc);
                 sync.settle(
                     conn,
+                    actor,
                     Joined {
                         route,
                         document: HOME_DOCUMENT,

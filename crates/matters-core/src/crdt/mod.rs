@@ -247,6 +247,19 @@ pub(super) fn kind_of(stored: &str) -> Result<Option<Kind>> {
     Ok(serde_json::from_value(serde_json::Value::String(name)).ok())
 }
 
+/// The engine actors whose operations an update carries, so a receiver
+/// can check them against the writer the update's record was signed by.
+/// Only an updates blob qualifies: a snapshot carries other actors' history.
+pub fn update_peers(update: &[u8]) -> Result<BTreeSet<u64>> {
+    let meta = LoroDoc::decode_import_blob_meta(update, true).map_err(engine)?;
+    if !matches!(meta.mode, loro::EncodedBlobMode::Updates) {
+        return Err(invalid("not an engine update"));
+    }
+    // The partial version vectors list only the peers the blob holds
+    // operations of.
+    Ok(meta.partial_end_vv.keys().copied().collect())
+}
+
 /// The document, with an index from entity and tag UUIDs to tree nodes.
 pub struct Document {
     doc: LoroDoc,

@@ -775,7 +775,7 @@ impl Database {
 /// their cascades. They are kept aside and put back for the rows that still
 /// exist; any later local-only table that references a domain table needs
 /// the same.
-fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
+pub(crate) fn rebuild_rows(tx: &Transaction<'_>, s: &crate::crdt::Snapshot) -> Result<()> {
     tx.execute_batch(
         "CREATE TEMP TABLE kept_reminder_deliveries AS SELECT * FROM reminder_deliveries;
          DELETE FROM task_tags; DELETE FROM project_tags; DELETE FROM area_tags;

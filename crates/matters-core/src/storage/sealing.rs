@@ -155,6 +155,11 @@ impl Sealing {
         })
     }
 
+    /// This writer's incarnation.
+    pub(crate) fn incarnation(&self) -> [u8; 32] {
+        self.incarnation
+    }
+
     /// Continue this writer's chain under a new epoch's identity.
     pub(crate) fn rekey(&mut self, identity: SealingIdentity) {
         self.identity = identity;
