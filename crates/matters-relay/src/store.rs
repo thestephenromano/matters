@@ -215,6 +215,30 @@ impl Relay {
         Ok(Self { pool })
     }
 
+    /// Whether the relay can serve: its database answers within a second.
+    pub async fn ready(&self) -> bool {
+        matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&self.pool),
+            )
+            .await,
+            Ok(Ok(1))
+        )
+    }
+
+    /// Storage across every route: routes, records stored and record bytes
+    /// stored. Totals only, for metrics.
+    pub async fn totals(&self) -> Result<(i64, i64, i64)> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS routes, COALESCE(SUM(record_high_water), 0)::BIGINT AS records,
+                    COALESCE(SUM(used_bytes), 0)::BIGINT AS bytes FROM routes",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((row.get("routes"), row.get("records"), row.get("bytes")))
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }

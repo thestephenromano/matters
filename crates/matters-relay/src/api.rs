@@ -57,6 +57,8 @@ pub struct Options {
     pub rate_limit: Option<RateLimit>,
     /// The operator credential for export, compared as its SHA-384.
     pub operator_token: Option<[u8; 32]>,
+    /// Where requests are counted, when metrics are served.
+    pub metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
 type Buckets = Arc<std::sync::Mutex<std::collections::HashMap<(Vec<u8>, Hash), (f64, u64)>>>;
@@ -77,7 +79,8 @@ pub fn router(relay: Relay, clock: Clock) -> Router {
 
 /// The v0 API with `options`.
 pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
-    Router::new()
+    let metrics = options.metrics.clone();
+    let router = Router::new()
         .route("/v0/session/challenge", post(challenge))
         .route("/v0/session", post(session))
         .route("/v0/routes/{route}/records/{record}", put(put_record))
@@ -92,13 +95,36 @@ pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
         )
         .route("/v0/routes/{route}/hints", axum::routing::get(hints))
         .route("/v0/routes/{route}/export", axum::routing::get(export))
+        .route("/healthz", axum::routing::get(healthz))
+        .route("/readyz", axum::routing::get(readyz))
         .fallback(unknown)
         .with_state(Api {
             relay,
             clock,
             options,
             buckets: Arc::default(),
-        })
+        });
+    match metrics {
+        Some(metrics) => router.layer(axum::middleware::from_fn_with_state(
+            metrics,
+            crate::metrics::track,
+        )),
+        None => router,
+    }
+}
+
+/// `GET /healthz`: the process is up and answering.
+async fn healthz() -> &'static str {
+    "ok"
+}
+
+/// `GET /readyz`: the relay can serve, its database answering.
+async fn readyz(State(api): State<Api>) -> (StatusCode, &'static str) {
+    if api.relay.ready().await {
+        (StatusCode::OK, "ready")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "database unavailable")
+    }
 }
 
 /// An error response in the contract's shape.

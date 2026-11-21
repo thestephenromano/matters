@@ -26,6 +26,7 @@ mod cbor;
 mod export;
 mod fault;
 pub mod hints;
+pub mod metrics;
 mod sessions;
 mod store;
 

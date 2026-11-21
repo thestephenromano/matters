@@ -14,6 +14,12 @@
 //!   It speaks HTTP/1.1 and cleartext HTTP/2; TLS terminates at a proxy.
 //! - `MATTERS_RELAY_RATE`: `<per-second>/<burst>` per route and device.
 //! - `MATTERS_RELAY_OPERATOR_TOKEN`: 64 hex digits, the export credential.
+//! - `MATTERS_RELAY_METRICS_LISTEN`: where to serve `GET /metrics`
+//!   (OpenMetrics text), on its own listener; off when unset. Keep it on a
+//!   private interface.
+//!
+//! `GET /healthz` answers while the process is up, and `GET /readyz` while
+//! its database answers too.
 //!
 //! A route is a 96-digit lowercase hex of application, tenant and
 //! collection. `new-generation --all` is the last step of restoring the
@@ -187,6 +193,20 @@ async fn serve(relay: Relay) -> ExitCode {
         Ok(addr) => eprintln!("matters-relay: listening on {addr}"),
         Err(_) => eprintln!("matters-relay: listening on {listen}"),
     }
+    let metrics = match std::env::var("MATTERS_RELAY_METRICS_LISTEN") {
+        Err(_) => None,
+        Ok(address) => {
+            let metrics = std::sync::Arc::new(matters_relay::metrics::Metrics::new());
+            let listener = match tokio::net::TcpListener::bind(&address).await {
+                Ok(listener) => listener,
+                Err(error) => return fail(format!("cannot listen on {address}: {error}")),
+            };
+            eprintln!("matters-relay: metrics on {address}");
+            let app = matters_relay::metrics::router(relay.clone(), metrics.clone());
+            tokio::spawn(async move { axum::serve(listener, app).await });
+            Some(metrics)
+        }
+    };
     let app = api::router_with(
         relay,
         api::system_clock(),
@@ -194,6 +214,7 @@ async fn serve(relay: Relay) -> ExitCode {
             hints: Some(hints),
             rate_limit,
             operator_token,
+            metrics,
         },
     );
     let shutdown = async {
