@@ -40,3 +40,7 @@ compile_commands.json
 
 # Editor tooling with machine-specific paths
 .qmlls.ini
+
+# Flatpak builds (ci/flatpak.sh): the generated crate sources and builder state
+/packaging/flatpak/cargo-sources.json
+.flatpak-builder/

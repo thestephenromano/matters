@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Matters
+GenericName=Task Manager
+Comment=Plan what matters, when it matters
+Icon=io.github.thestephenromano.Matters
+Exec=matters-ui
+Terminal=false
+Categories=Office;ProjectManagement;Qt;
+Keywords=tasks;todo;to-do;gtd;getting things done;projects;planner;
+StartupNotify=true

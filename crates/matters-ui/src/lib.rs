@@ -90,6 +90,50 @@ mod style_tests {
     }
 }
 
+/// Matters' application ID (#73): it names the desktop entry, the icon, the
+/// AppStream metainfo and the Flatpak (`packaging/`).
+pub const APP_ID: &str = "io.github.thestephenromano.Matters";
+
+/// Tell the desktop which entry the window belongs to ([`APP_ID`]), so it
+/// shows Matters' icon and name for it.
+pub fn set_desktop_identity() {
+    extern "C" {
+        // cpp/app_identity.cpp
+        fn matters_set_desktop_file_name(name: *const std::ffi::c_char);
+    }
+    let name = std::ffi::CString::new(APP_ID).expect("application ID without NUL");
+    // SAFETY: `name` is a valid NUL-terminated string for the call; Qt
+    // copies it.
+    unsafe { matters_set_desktop_file_name(name.as_ptr()) }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::APP_ID;
+
+    fn packaging(path: &str) -> String {
+        let path = format!("{}/../../packaging/{path}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{path}: {err}"))
+    }
+
+    #[test]
+    fn the_packaging_names_the_app_by_its_id() {
+        let desktop = packaging(&format!("linux/{APP_ID}.desktop"));
+        assert!(desktop.lines().any(|l| l == format!("Icon={APP_ID}")));
+        let metainfo = packaging(&format!("linux/{APP_ID}.metainfo.xml"));
+        assert!(metainfo.contains(&format!("<id>{APP_ID}</id>")));
+        assert!(metainfo.contains(&format!(
+            "<launchable type=\"desktop-id\">{APP_ID}.desktop</launchable>"
+        )));
+        let manifest = packaging(&format!("flatpak/{APP_ID}.yml"));
+        assert!(manifest.lines().any(|l| l == format!("app-id: {APP_ID}")));
+        packaging(&format!("linux/icons/hicolor/scalable/apps/{APP_ID}.svg"));
+        packaging(&format!(
+            "linux/icons/hicolor/symbolic/apps/{APP_ID}-symbolic.svg"
+        ));
+    }
+}
+
 /// Register cxx-qt and the `matters` QML module. Call once, before creating
 /// any QML engine.
 pub fn init_qml() {

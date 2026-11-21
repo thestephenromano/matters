@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.thestephenromano.Matters</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+
+  <name>Matters</name>
+  <summary>Plan what matters, when it matters</summary>
+  <developer id="io.github.thestephenromano">
+    <name>Matters Contributors</name>
+  </developer>
+
+  <description>
+    <p>
+      Matters is a keyboard-driven personal task manager built around Getting Things Done.
+      It keeps a clear hierarchy of areas, projects, headings, tasks and checklists, and
+      separates when a task starts asking for attention from its hard deadline.
+    </p>
+    <ul>
+      <li>Inbox, Today, This Evening, Upcoming, Anytime, Someday and the Logbook</li>
+      <li>Notes, tags and checklists that open in place</li>
+      <li>Reminders as desktop notifications, and tasks that repeat on a schedule or after completion</li>
+      <li>Every operation reachable from the keyboard</li>
+      <li>Your tasks stay on your computer, in a local database</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.thestephenromano.Matters.desktop</launchable>
+  <provides>
+    <binary>matters-ui</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/thestephenromano/matters</url>
+  <url type="bugtracker">https://github.com/thestephenromano/matters/issues</url>
+  <url type="vcs-browser">https://github.com/thestephenromano/matters</url>
+
+  <categories>
+    <category>Office</category>
+    <category>ProjectManagement</category>
+  </categories>
+  <keywords>
+    <keyword>tasks</keyword>
+    <keyword>to-do</keyword>
+    <keyword>GTD</keyword>
+    <keyword>projects</keyword>
+  </keywords>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#a5d8ff</color>
+    <color type="primary" scheme_preference="dark">#1864ab</color>
+  </branding>
+
+  <content_rating type="oars-1.1"/>
+</component>

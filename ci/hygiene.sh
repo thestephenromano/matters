@@ -25,6 +25,17 @@ group "pinned versions"
 channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
 [ -n "$channel" ] || cannot_run "no channel in rust-toolchain.toml"
 echo "toolchain $channel"
+# The Flatpak is built with the same compiler: its rustc, cargo and rust-std
+# archives carry the toolchain's version.
+manifest=packaging/flatpak/io.github.thestephenromano.Matters.yml
+archives="$(grep -c 'url: https://static.rust-lang.org/dist/' "$manifest")" \
+    || cannot_run "no Rust archives in $manifest"
+matching="$(grep -c "url: https://static.rust-lang.org/dist/[a-z-]*-$channel-x86_64-unknown-linux-gnu.tar.xz$" "$manifest")" \
+    || refuse "$manifest builds with another Rust than $channel (rust-toolchain.toml)"
+if [ "$archives" -ne 3 ] || [ "$matching" -ne 3 ]; then
+    refuse "$manifest builds with another Rust than $channel (rust-toolchain.toml)"
+fi
+echo "Flatpak toolchain $channel"
 for tool in cargo-deny cargo-mutants cargo-llvm-cov; do
     echo "$tool $(pinned_version "$tool")"
 done
