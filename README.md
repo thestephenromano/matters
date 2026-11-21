@@ -47,7 +47,7 @@ ci/check.sh                 # every gate CI runs
 
 Each gate is a script in `ci/` that runs the same locally and in CI. A gate that ran and refused the change exits 1. One that could not run (a missing tool, no test output) exits 2, so the two can't be confused.
 
-- `ci/hygiene.sh`: no tracked files that `.gitignore` excludes, and shellcheck on `ci/*.sh`.
+- `ci/hygiene.sh`: no tracked files that `.gitignore` excludes, shellcheck on `ci/*.sh`, and the Flatpak's Rust archives match `rust-toolchain.toml`.
 - `ci/lint.sh`: rustfmt, clippy with warnings denied, and rustdoc with warnings denied.
 - `ci/deny.sh`: cargo-deny against `deny.toml` (advisories, licenses, banned crates, sources). Every advisory exception names its reason and the issue that retires it.
 - `ci/workspace-tests.sh`: the core tests, a `qmllint` check of the QML against the generated bridge types, and GTK widget tests on a headless Broadway display.
@@ -55,6 +55,7 @@ Each gate is a script in `ci/` that runs the same locally and in CI. A gate that
 - `ci/style-check.sh`: Matters' control style holds under the desktop's Qt platform theme, COSMIC's included.
 - `ci/coverage.sh`: matters-core's line coverage, held to a floor set just under the measured figure. It writes an lcov report.
 - `ci/mutants.sh`: mutation testing of the matters-core code a branch changes, relative to `origin/main`. Every mutant must be caught; one that cannot change behaviour is excluded in `.cargo/mutants.toml`, with the reason. `ci/mutants.sh --all` mutates the whole crate.
+- `ci/flatpak.sh`: validates the desktop entry and AppStream metainfo, builds the Flatpak (`packaging/flatpak`) offline, installs it, and checks that Matters starts in the sandbox, keeps its database at the sandbox's XDG data path, and keeps that data across a `flatpak update`.
 
 Matters skips its animations when the desktop asks for reduced motion (KDE's instant animation speed, or GNOME's animations turned off). `MATTERS_REDUCE_MOTION=1` or `=0` overrides that.
 
