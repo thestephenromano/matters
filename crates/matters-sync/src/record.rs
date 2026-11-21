@@ -197,4 +197,3 @@ pub fn derived_key_for_vectors(header: Header<'_>, cek: &ContentKey) -> Result<V
 pub fn record_hash(bytes: &[u8]) -> [u8; 48] {
     libcrux_sha2::sha384(bytes)
 }
-
