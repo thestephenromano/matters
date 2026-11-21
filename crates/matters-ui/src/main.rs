@@ -36,6 +36,9 @@ fn main() {
     matters_ui::install_calendar_source(calendars, true);
     // Reminders (#60) as desktop notifications.
     matters_ui::install_notifier(Box::new(matters_ui::notify::DesktopNotifier));
+    // The desktop's accent colour and contrast preference (#76), followed
+    // from the XDG desktop portal on a worker thread.
+    matters_ui::appearance::start_portal();
     matters_ui::init_qml();
 
     // The desktop entry the window belongs to (#73).

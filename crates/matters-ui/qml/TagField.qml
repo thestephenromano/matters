@@ -116,6 +116,7 @@ ColumnLayout {
         TextField {
             id: input
             objectName: "tagInput"
+            Accessible.name: "Tags"
             width: 160
             height: 24
             placeholderText: field.tags.length === 0 ? "Add tags" : "Add a tag"
