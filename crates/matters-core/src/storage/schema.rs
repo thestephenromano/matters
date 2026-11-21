@@ -248,3 +248,25 @@ CREATE TABLE IF NOT EXISTS sync_envelopes (
     bytes BLOB NOT NULL
 );
 "#;
+
+/// v14: joining a collection and publishing what an admin signs (#37). A
+/// joining device keeps its request until the admin's transition arrives;
+/// an admin keeps every control and envelope it signed for others, to
+/// resend byte for byte until acknowledged (signing again would fork).
+pub const MIGRATION_V14: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_enrolling (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    application BLOB NOT NULL CHECK (length(application) = 16),
+    tenant BLOB NOT NULL CHECK (length(tenant) = 16),
+    collection BLOB NOT NULL CHECK (length(collection) = 16),
+    root BLOB NOT NULL CHECK (length(root) = 48),
+    device BLOB NOT NULL CHECK (length(device) = 48),
+    key_name TEXT NOT NULL,
+    request BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_publish (
+    seq INTEGER PRIMARY KEY,
+    bytes BLOB NOT NULL UNIQUE,
+    acked INTEGER NOT NULL DEFAULT 0 CHECK (acked IN (0, 1))
+);
+"#;
