@@ -14,3 +14,4 @@ ci/ui-lane.sh animations
 ci/style-check.sh
 ci/coverage.sh
 ci/mutants.sh
+ci/flatpak.sh

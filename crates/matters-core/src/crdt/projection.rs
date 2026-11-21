@@ -75,6 +75,90 @@ pub(super) fn identity_owners<'a>(
     owners
 }
 
+/// Concurrent creations of one generated occurrence (#61: two devices
+/// derive the same occurrence ID) that match in everything a user can see
+/// merge into the node the smallest tree ID keeps. The other nodes, with
+/// their checklists, are hidden rather than shown as conflict copies.
+/// Nodes that differ in anything visible stay conflict copies, so no edit is
+/// lost. The repeat rule and timestamps are not compared: a device hands
+/// the rule on, and stamps, as it generates the next occurrence. Returns the
+/// hidden nodes, with every node under them, and each merged ID.
+pub(super) fn merged_occurrences(doc: &LoroDoc) -> Result<(BTreeSet<TreeID>, BTreeSet<String>)> {
+    let tree = doc.get_tree(HOME);
+    let mut by_id: BTreeMap<String, Vec<TreeID>> = BTreeMap::new();
+    for node in tree.nodes() {
+        let meta = tree.get_meta(node).map_err(engine)?;
+        if let Some(id) = super::scalar_string(&meta, "id") {
+            by_id.entry(id).or_default().push(node);
+        }
+    }
+    let mut hidden = BTreeSet::new();
+    let mut merged = BTreeSet::new();
+    for (id, nodes) in by_id.into_iter().filter(|(_, n)| n.len() > 1) {
+        let keeper = *nodes.iter().min().expect("at least two nodes");
+        let Some(seen) = visible_occurrence(&tree, keeper)? else {
+            continue;
+        };
+        let mut same = true;
+        for node in &nodes {
+            same &= visible_occurrence(&tree, *node)?.as_ref() == Some(&seen);
+        }
+        if !same {
+            continue;
+        }
+        merged.insert(id);
+        let mut stack: Vec<TreeID> = nodes.into_iter().filter(|n| *n != keeper).collect();
+        while let Some(node) = stack.pop() {
+            hidden.insert(node);
+            stack.extend(tree.children(node).unwrap_or_default());
+        }
+    }
+    Ok((hidden, merged))
+}
+
+/// What a user sees of a generated occurrence: its fields and its
+/// checklist's titles and ticks, in order. `None` for any other node.
+fn visible_occurrence(tree: &LoroTree, node: TreeID) -> Result<Option<Value>> {
+    let value = tree
+        .get_meta(node)
+        .map_err(engine)?
+        .get_deep_value()
+        .to_json_value();
+    if json::<Kind>(&value, "kind")? != Kind::Task || value.get("occurrence").is_none() {
+        return Ok(None);
+    }
+    let fields: Vec<Value> = [
+        "title",
+        "notes",
+        "schedule",
+        "deadline",
+        "status",
+        "trashed_at",
+        "reminder",
+        "occurrence",
+    ]
+    .iter()
+    .map(|key| value.get(*key).cloned().unwrap_or(Value::Null))
+    .collect();
+    let mut checklist = Vec::new();
+    for child in tree.children(node).unwrap_or_default() {
+        let item = tree
+            .get_meta(child)
+            .map_err(engine)?
+            .get_deep_value()
+            .to_json_value();
+        checklist.push(Value::Array(vec![
+            item["title"].clone(),
+            item["done"].clone(),
+            item["removed"].clone(),
+        ]));
+    }
+    Ok(Some(Value::Array(vec![
+        Value::Array(fields),
+        Value::Array(checklist),
+    ])))
+}
+
 /// The derived identity of a conflict copy: a UUIDv8 carrying the node's
 /// tree ID (64-bit peer, 32-bit counter) in bytes the version and variant
 /// bits leave alone. Unique per node, equal on every replica, and never a
@@ -159,9 +243,13 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
         raw.push((node, id, kind, value));
     }
     let owners = identity_owners(raw.iter().map(|(n, id, ..)| (*n, id.as_str())));
+    let (hidden, merged) = merged_occurrences(doc)?;
+    for id in &merged {
+        out.repairs.insert(format!("occurrence-merge:{id}"));
+    }
     let mut nodes: BTreeMap<TreeID, Node> = BTreeMap::new();
     for (node, id, kind, value) in &raw {
-        let id = if owners[id.as_str()] == *node {
+        let id = if owners[id.as_str()] == *node || hidden.contains(node) {
             id.clone()
         } else {
             let copy = conflict_copy_id(*node);
@@ -193,7 +281,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
     let mut rank_of: BTreeMap<TreeID, f64> = BTreeMap::new();
     for node in ordered(&tree) {
         let n = &nodes[&node];
-        if tombstones.contains(&n.id) {
+        if tombstones.contains(&n.id) || hidden.contains(&node) {
             continue;
         }
         let mut ancestor = match tree.parent(node) {

@@ -219,7 +219,7 @@ fn put<T: Serialize>(map: &LoroMap, key: &str, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn scalar_string(map: &LoroMap, key: &str) -> Option<String> {
+pub(super) fn scalar_string(map: &LoroMap, key: &str) -> Option<String> {
     match map.get(key) {
         Some(ValueOrContainer::Value(loro::LoroValue::String(s))) => Some(s.to_string()),
         _ => None,
@@ -292,7 +292,12 @@ impl Document {
                 .into_iter()
                 .map(|(id, node)| (id.to_owned(), node))
                 .collect();
+        // Merged duplicates of a generated occurrence are not addressable.
+        let (hidden, _) = projection::merged_occurrences(&self.doc)?;
         for (node, id, kind) in raw {
+            if hidden.contains(&node) {
+                continue;
+            }
             let key = if owners[&id] == node {
                 id
             } else {

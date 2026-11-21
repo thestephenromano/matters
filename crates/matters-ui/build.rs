@@ -22,10 +22,12 @@ fn main() {
     .qt_module("QuickControls2");
 
     println!("cargo:rerun-if-changed=cpp/app_style.cpp");
-    // SAFETY: only adds a source file; no compiler flags are changed.
+    println!("cargo:rerun-if-changed=cpp/app_identity.cpp");
+    // SAFETY: only adds source files; no compiler flags are changed.
     builder = unsafe {
         builder.cc_builder(|cc| {
             cc.file("cpp/app_style.cpp");
+            cc.file("cpp/app_identity.cpp");
         })
     };
 

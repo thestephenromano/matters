@@ -16,6 +16,16 @@ hpke-rs-libcrux = { version = "=0.8.0", default-features = false, features = ["s
 libcrux-ml-dsa = { version = "=0.0.11", default-features = false, features = ["std", "mldsa65"] }
 # SHA-384 record and chain hashes, from the same provider family.
 libcrux-sha2 = "=0.0.9"
+# Invitation keys and bindings (#37): HKDF-SHA384 and HMAC-SHA384 from the
+# same provider family, already compiled in through hpke-rs-libcrux.
+libcrux-hkdf = "=0.0.9"
+libcrux-hmac = "=0.0.9"
+# Constant-time tag comparison; already compiled in through hpke-rs.
+subtle = "=2.6.1"
+# Recovery words (#37, decided 2026-11-21): BIP39 entropy to English words
+# and back, checksum included, without BIP39's PBKDF2 seed. CC0-1.0. Its
+# zeroize feature wipes parsed mnemonics; zeroize is already compiled in.
+bip39 = { version = "=3.0.0", default-features = false, features = ["zeroize"] }
 thiserror = "2.0"
 
 [dev-dependencies]

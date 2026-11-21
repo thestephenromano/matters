@@ -163,6 +163,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "bip39"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4559bb9225f8401dcea601cf8dc9ed81ea0dadd9cf7755fdefdd93ef7961e19e"
+dependencies = [
+ "bitcoin_hashes",
+ "zeroize",
+]
+
+[[package]]
+name = "bitcoin_hashes"
+version = "0.14.101"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bca4c7abb40c8817d77403c880988cfd484f23ab2365726afb2f798363e2c4a2"
+dependencies = [
+ "hex-conservative",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1517,6 +1536,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hex-conservative"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db3fef046dca3ca91ee1408a8c1b80ab777e80a4d308d1bf4e7adb3fcb047e08"
+dependencies = [
+ "arrayvec",
+]
+
+[[package]]
 name = "hkdf"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2377,6 +2405,7 @@ dependencies = [
  "jiff",
  "loro",
  "matters-core",
+ "matters-sync",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2400,13 +2429,17 @@ dependencies = [
 name = "matters-sync"
 version = "0.1.0"
 dependencies = [
+ "bip39",
  "hpke-rs",
  "hpke-rs-crypto",
  "hpke-rs-libcrux",
+ "libcrux-hkdf",
+ "libcrux-hmac",
  "libcrux-ml-dsa",
  "libcrux-sha2",
  "minicbor",
  "serde_json",
+ "subtle",
  "thiserror 2.0.21",
 ]
 

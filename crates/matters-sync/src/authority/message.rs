@@ -104,6 +104,18 @@ pub struct WriterHandoff {
     pub closing: Option<Hash>,
 }
 
+/// A new device's request to join, signed with its own signing key (proof
+/// of possession) and bound to a one-time invitation by `binding`, an
+/// HMAC-SHA384 under the invitation secret (docs/SYNC_KEY_DISTRIBUTION.md
+/// "Enrollment"). The message signer is the device ID of the two keys.
+#[derive(Clone, Debug)]
+pub struct EnrollmentRequest {
+    pub manifest: Hash,
+    pub signing_key: VerificationKey,
+    pub kem_key: KemPublicKey,
+    pub binding: Hash,
+}
+
 /// An admin-signed HPKE envelope of the epoch content key for one member.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyEnvelope {
@@ -120,9 +132,14 @@ pub struct KeyEnvelope {
 pub enum Body {
     Genesis(Box<Genesis>),
     Membership(Membership),
+    /// Signed by the root after every device is lost: starts the next
+    /// membership generation with one admin (docs/SYNC_KEY_DISTRIBUTION.md
+    /// "Recovery"). Same body as a membership transition.
+    RootRecovery(Membership),
     WriterStart(WriterStart),
     WriterHandoff(WriterHandoff),
     KeyEnvelope(KeyEnvelope),
+    EnrollmentRequest(Box<EnrollmentRequest>),
 }
 
 impl Body {
@@ -131,9 +148,11 @@ impl Body {
         match self {
             Self::Genesis(_) => "genesis",
             Self::Membership(_) => "membership",
+            Self::RootRecovery(_) => "root_recovery",
             Self::WriterStart(_) => "writer_start",
             Self::WriterHandoff(_) => "writer_handoff",
             Self::KeyEnvelope(_) => "key_envelope",
+            Self::EnrollmentRequest(_) => "enrollment_request",
         }
     }
 
@@ -245,7 +264,7 @@ pub fn signing_bytes(message: &Message) -> Result<Vec<u8>> {
             write_optional(&mut e, &g.checkpoint)?;
             e.bytes(&g.key_commitment)?;
         }
-        Body::Membership(m) => {
+        Body::Membership(m) | Body::RootRecovery(m) => {
             e.array(9)?
                 .u64(m.generation)?
                 .u64(m.sequence)?
@@ -286,6 +305,13 @@ pub fn signing_bytes(message: &Message) -> Result<Vec<u8>> {
                 .bytes(&k.encapsulation)?
                 .bytes(&k.ciphertext)?
                 .bytes(&k.authority)?;
+        }
+        Body::EnrollmentRequest(r) => {
+            e.array(4)?
+                .bytes(&r.manifest)?
+                .bytes(r.signing_key.as_bytes())?
+                .bytes(r.kem_key.as_bytes())?
+                .bytes(&r.binding)?;
         }
     }
     Ok(e.into_writer())
@@ -494,6 +520,18 @@ impl<'a> Reader<'a> {
     }
 }
 
+impl Reader<'_> {
+    fn enrollment_request(&mut self) -> Result<EnrollmentRequest> {
+        self.array(4)?;
+        Ok(EnrollmentRequest {
+            manifest: self.fixed()?,
+            signing_key: self.signing_key()?,
+            kem_key: self.kem_key()?,
+            binding: self.fixed()?,
+        })
+    }
+}
+
 /// Parse one control record: structure, sizes and canonical bytes only.
 pub fn parse(bytes: &[u8]) -> Result<ParsedControl<'_>> {
     if bytes.len() > MAX_CONTROL_BYTES {
@@ -516,9 +554,11 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedControl<'_>> {
     let body = match kind {
         "genesis" => Body::Genesis(Box::new(r.genesis()?)),
         "membership" => Body::Membership(r.membership()?),
+        "root_recovery" => Body::RootRecovery(r.membership()?),
         "writer_start" => Body::WriterStart(r.writer_start()?),
         "writer_handoff" => Body::WriterHandoff(r.writer_handoff()?),
         "key_envelope" => Body::KeyEnvelope(r.key_envelope()?),
+        "enrollment_request" => Body::EnrollmentRequest(Box::new(r.enrollment_request()?)),
         _ => return Err(Error::Unsupported),
     };
     let end = r.0.position();
