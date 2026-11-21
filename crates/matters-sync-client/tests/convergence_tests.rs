@@ -1,9 +1,9 @@
 //! Convergence under recorded schedules (#39): three Matters devices edit
 //! offline and sync through the real relay in fixed, seeded interleavings.
 //! The schedules include concurrent edits of one task, lost
-//! acknowledgements, process restarts and a relay restore. After a final round of syncing,
+//! acknowledgements, process restarts, checkpoints and a relay restore. After a final round of syncing,
 //! every device must hold the same tasks, field for field, and nothing
-//! may be left pending.
+//! may be left pending or have refused an honest checkpoint.
 //!
 //! Each seed is a recorded schedule: a failure names its seed and step, and
 //! rerunning that seed replays it exactly. See client_tests.rs for the
@@ -58,6 +58,14 @@ struct World {
     keys: Vec<MemoryKeyStore>,
     devices: Vec<Arc<Database>>,
     clients: Vec<Client<Database>>,
+}
+
+/// A client that makes a checkpoint every few updates, so the schedules
+/// mix checkpoints into everything else.
+fn client(endpoint: &str, db: Arc<Database>) -> Client<Database> {
+    Client::new(endpoint, db)
+        .unwrap()
+        .with_checkpoint_interval(3)
 }
 
 async fn world() -> Option<World> {
@@ -126,7 +134,7 @@ async fn world() -> Option<World> {
         .unwrap();
     let clients = devices
         .iter()
-        .map(|d| Client::new(&endpoint, d.clone()).unwrap())
+        .map(|d| client(&endpoint, d.clone()))
         .collect();
     Some(World {
         _dir: dir,
@@ -151,8 +159,7 @@ impl World {
         db.resume_sync(&self.keys[d]).unwrap();
         let db = Arc::new(db);
         self.devices.insert(d, db.clone());
-        self.clients
-            .insert(d, Client::new(&self.endpoint, db).unwrap());
+        self.clients.insert(d, client(&self.endpoint, db));
     }
 
     async fn finish(self) {
@@ -275,7 +282,24 @@ async fn run_schedule(seed: u64, steps: usize) {
             db.pending_records().unwrap().is_empty(),
             "seed {seed}: device {d} has pending records"
         );
+        // Honest checkpoints, in any interleaving, are never refused.
+        let refused: Vec<_> = db
+            .checkpoints()
+            .unwrap()
+            .into_iter()
+            .filter(|(_, state, _)| state == "refused")
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "seed {seed}: device {d} refused {refused:?}"
+        );
     }
+    let made: usize = w
+        .devices
+        .iter()
+        .map(|db| db.checkpoints().unwrap().len())
+        .sum();
+    assert!(made > 0, "seed {seed}: the schedule made checkpoints");
     w.finish().await;
 }
 

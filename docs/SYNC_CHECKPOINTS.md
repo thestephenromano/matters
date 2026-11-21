@@ -14,7 +14,7 @@ A device with history never imports a checkpoint. Only a device that holds nothi
 | The snapshot | Loro's full-history snapshot (`ExportMode::Snapshot`), the engine already adopted (ADR 0001) | It holds the whole operation log as well as the state, so later updates from any writer still merge. [Loro export modes](https://loro.dev/docs/tutorial/encoding) |
 | Carrier, sealing, signatures | The record contract's `snapshot` kind, sealed under the current epoch with the author's writer key | Already specified with its own signature context. No second cipher or framing. |
 | Encoding | Deterministic CBOR through minicbor, as for every other sync object | One canonical encoding, checked by re-encoding. |
-| Relay storage | The existing record log, plus one index of snapshot records (step 3) | The relay can already read a record's kind. It never sees inside. |
+| Relay storage | The existing record log, plus one index of snapshot records (`GET …/snapshots`, SYNC_SERVICE_CONTRACT.md) | The relay can already read a record's kind. It never sees inside. |
 
 Shallow snapshots (`ExportMode::ShallowSnapshot`) are not used. They drop history that an old device's edits may still depend on (SYNC_DESIGN.md, "Checkpoints and retention").
 
@@ -72,7 +72,7 @@ A device that already holds everything a checkpoint covers records it as its lat
 
 ## Bootstrapping a fresh device
 
-A device that has just joined asks the relay for the newest snapshot records (step 3). It assembles the newest complete checkpoint that passes the checks it can make, then commits in one transaction:
+A device that has just joined asks the relay for the newest snapshot records (`GET …/snapshots`). It assembles the newest complete checkpoint that passes the checks it can make, then commits in one transaction:
 - the imported snapshot and its projection;
 - each listed writer's head and record count, as its receive head;
 - the carried pending records, as pending input;

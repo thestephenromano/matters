@@ -1,6 +1,7 @@
 //! Matters' database as a sync client's local store (#39).
 
 use matters_sync::authority::{self, Hash, Route};
+use matters_sync::checkpoint::Cursor;
 use matters_sync::store::{
     ControlOutcome, JoiningStore, LocalStore, Log, RecoveringStore, StoreResult,
 };
@@ -161,6 +162,18 @@ impl LocalStore for Database {
 
     fn generation_changed(&self) -> StoreResult<()> {
         Ok(self.sync_generation_changed()?)
+    }
+
+    fn wants_checkpoint(&self) -> StoreResult<bool> {
+        Ok(self.holds_nothing_synced()?)
+    }
+
+    fn start_from_checkpoint(&self, parts: &[Vec<u8>], generation: [u8; 16]) -> StoreResult<bool> {
+        Ok(Database::start_from_checkpoint(self, parts, generation)?)
+    }
+
+    fn make_checkpoint(&self, at: Cursor, every: u64) -> StoreResult<bool> {
+        Ok(self.checkpoint_due(every)? && self.create_checkpoint(Some(at))?.is_some())
     }
 }
 

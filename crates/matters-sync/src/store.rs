@@ -8,6 +8,7 @@
 //! network tasks, and never holds a store call across network waits.
 
 use crate::authority::{Hash, Route};
+use crate::checkpoint::Cursor;
 use crate::wire::SIGNATURE_BYTES;
 
 /// A store failure, reported to the client's status as it is.
@@ -64,6 +65,31 @@ pub trait LocalStore: Send + Sync {
     /// The relay's storage generation changed (a restore): forget both
     /// cursors and queue every record and control again for upload.
     fn generation_changed(&self) -> StoreResult<()>;
+
+    /// Whether this device holds nothing yet, so it may start from a
+    /// checkpoint instead of reading the whole record log (#40).
+    fn wants_checkpoint(&self) -> StoreResult<bool> {
+        Ok(false)
+    }
+
+    /// Start from a checkpoint: `parts` are its snapshot records as the
+    /// relay returned them, in its current `generation`. True if it
+    /// started, and its records cursor is then saved.
+    fn start_from_checkpoint(
+        &self,
+        _parts: &[Vec<u8>],
+        _generation: [u8; 16],
+    ) -> StoreResult<bool> {
+        Ok(false)
+    }
+
+    /// Called after a complete pull that ended at `at`. Make a checkpoint
+    /// if one is due, spaced `every` engine updates apart, and the device
+    /// is fully synced. True if it made one, whose parts are then
+    /// outgoing records.
+    fn make_checkpoint(&self, _at: Cursor, _every: u64) -> StoreResult<bool> {
+        Ok(false)
+    }
 }
 
 /// What a sync client needs from a device that is joining a collection

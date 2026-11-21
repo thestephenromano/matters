@@ -32,10 +32,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use futures_util::StreamExt;
 use matters_sync::authority::{self, Body, Hash, Route};
+use matters_sync::checkpoint::Cursor;
 use matters_sync::record::record_hash;
 pub use matters_sync::store::{
     ControlOutcome, JoiningStore, LocalStore, Log, RecoveringStore, StoreError,
 };
+use matters_sync::wire;
 use matters_sync::wire::SIGNATURE_BYTES;
 use minicbor::Decoder;
 use tokio::sync::{watch, Mutex, Notify};
@@ -110,6 +112,10 @@ pub struct Report {
     /// Controls the authority refused (forged, malformed or made stale by
     /// a later transition).
     pub refused_controls: usize,
+    /// This round started the device from the relay's newest checkpoint.
+    pub started_from_checkpoint: bool,
+    /// This round made a checkpoint and pushed its parts.
+    pub made_checkpoint: bool,
 }
 
 /// A relay error body: `{"code", "retry", ? "retry-after-ms", ...}`.
@@ -209,6 +215,8 @@ fn field_bytes(body: &[u8], name: &str) -> Option<Vec<u8>> {
 
 /// A fetched page: its entries and its cursor.
 struct Page {
+    generation: [u8; 16],
+    high_water: u64,
     entries: Vec<Vec<u8>>,
     next: Vec<u8>,
     complete: bool,
@@ -218,8 +226,11 @@ fn parse_page(body: &[u8]) -> Option<Page> {
     let mut d = Decoder::new(body);
     let n = d.map().ok()??;
     let (mut entries, mut next, mut complete) = (None, None, None);
+    let (mut generation, mut high_water) = (None, None);
     for _ in 0..n {
         match d.str().ok()? {
+            "generation" => generation = d.bytes().ok()?.try_into().ok(),
+            "high-water" => high_water = Some(d.u64().ok()?),
             "records" => {
                 let count = d.array().ok()??;
                 let mut list = Vec::new();
@@ -236,15 +247,45 @@ fn parse_page(body: &[u8]) -> Option<Page> {
         }
     }
     Some(Page {
+        generation: generation?,
+        high_water: high_water?,
         entries: entries?,
         next: next?,
         complete: complete?,
     })
 }
 
+/// The relay's newest snapshot records, newest first, and its generation.
+fn parse_snapshots(body: &[u8]) -> Option<([u8; 16], Vec<Vec<u8>>)> {
+    let mut d = Decoder::new(body);
+    let n = d.map().ok()??;
+    let (mut generation, mut entries) = (None, None);
+    for _ in 0..n {
+        match d.str().ok()? {
+            "generation" => generation = d.bytes().ok()?.try_into().ok(),
+            "records" => {
+                let count = d.array().ok()??;
+                let mut list = Vec::new();
+                for _ in 0..count {
+                    d.array().ok()?;
+                    d.u64().ok()?;
+                    list.push(d.bytes().ok()?.to_vec());
+                }
+                entries = Some(list);
+            }
+            _ => d.skip().ok()?,
+        }
+    }
+    Some((generation?, entries?))
+}
+
+/// Engine updates between the checkpoints a device makes, by default.
+pub const CHECKPOINT_EVERY: u64 = 1000;
+
 /// The sync client for one device's store and one relay.
 pub struct Client<S: LocalStore + 'static> {
     base: String,
+    checkpoint_every: u64,
     http: reqwest::Client,
     store: Arc<S>,
     token: Mutex<Option<[u8; 32]>>,
@@ -271,12 +312,20 @@ impl<S: LocalStore + 'static> Client<S> {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             base: endpoint.trim_end_matches('/').to_owned(),
+            checkpoint_every: CHECKPOINT_EVERY,
             http,
             store,
             token: Mutex::new(None),
             status: watch::channel(Status::Idle).0,
             wake: Arc::new(Notify::new()),
         })
+    }
+
+    /// Make a checkpoint every `every` engine updates (#40) instead of
+    /// every [`CHECKPOINT_EVERY`].
+    pub fn with_checkpoint_interval(mut self, every: u64) -> Self {
+        self.checkpoint_every = every.max(1);
+        self
     }
 
     pub fn status(&self) -> watch::Receiver<Status> {
@@ -418,24 +467,7 @@ impl<S: LocalStore + 'static> Client<S> {
                 _ => return Err(refusal(status, &body).into_error()),
             }
         }
-        for (id, bytes) in self.on_store(|s| s.outgoing_records()).await? {
-            let path = format!("/v0/routes/{r}/records/{}", hex(&id));
-            let (status, body) = self
-                .call(
-                    reqwest::Method::PUT,
-                    &path,
-                    Some(bytes),
-                    "application/vnd.matters.sync-record",
-                )
-                .await?;
-            match status {
-                200 | 201 => {
-                    self.on_store(move |s| s.acknowledge_record(&id)).await?;
-                    report.pushed_records += 1;
-                }
-                _ => return Err(refusal(status, &body).into_error()),
-            }
-        }
+        self.push_records(&r, &mut report).await?;
         // Pull the authority log whole first, so a transition finds this
         // device's envelope even on a later page.
         let device = self.on_store(|s| s.device()).await?;
@@ -476,8 +508,17 @@ impl<S: LocalStore + 'static> Client<S> {
             self.on_store(move |s| s.save_cursor(Log::Authority, &next))
                 .await?;
         }
-        // Pull records, saving each page's cursor once it is received.
+        // A device that holds nothing yet starts from the newest
+        // checkpoint, when the relay has one it accepts.
         let mut cursor = self.on_store(|s| s.cursor(Log::Records)).await?;
+        if cursor.is_none()
+            && self.on_store(|s| s.wants_checkpoint()).await?
+            && self.start_from_newest(&r).await?
+        {
+            report.started_from_checkpoint = true;
+            cursor = self.on_store(|s| s.cursor(Log::Records)).await?;
+        }
+        // Pull records, saving each page's cursor once it is received.
         loop {
             let page = self.fetch(&r, "records", cursor.as_deref()).await?;
             for record in page.entries {
@@ -492,10 +533,80 @@ impl<S: LocalStore + 'static> Client<S> {
                 .await?;
             cursor = Some(page.next);
             if page.complete {
+                // Up to date with the relay: a checkpoint may be due.
+                let at = Cursor {
+                    generation: page.generation,
+                    sequence: page.high_water,
+                };
+                let every = self.checkpoint_every;
+                if self.on_store(move |s| s.make_checkpoint(at, every)).await? {
+                    report.made_checkpoint = true;
+                    self.push_records(&r, &mut report).await?;
+                }
                 break;
             }
         }
         Ok(report)
+    }
+
+    /// Push every outgoing record, acknowledging each on the relay's
+    /// durable receipt.
+    async fn push_records(&self, r: &str, report: &mut Report) -> Result<()> {
+        for (id, bytes) in self.on_store(|s| s.outgoing_records()).await? {
+            let path = format!("/v0/routes/{r}/records/{}", hex(&id));
+            let (status, body) = self
+                .call(
+                    reqwest::Method::PUT,
+                    &path,
+                    Some(bytes),
+                    "application/vnd.matters.sync-record",
+                )
+                .await?;
+            match status {
+                200 | 201 => {
+                    self.on_store(move |s| s.acknowledge_record(&id)).await?;
+                    report.pushed_records += 1;
+                }
+                _ => return Err(refusal(status, &body).into_error()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Fetch the relay's newest snapshot records and hand the newest
+    /// checkpoint's parts (one logical batch) to the store. A checkpoint
+    /// the store cannot use leaves the device to read the whole log.
+    async fn start_from_newest(&self, r: &str) -> Result<bool> {
+        let path = format!("/v0/routes/{r}/snapshots?limit={PAGE}");
+        let (status, body) = self
+            .call(reqwest::Method::GET, &path, None, "application/cbor")
+            .await?;
+        if status != 200 {
+            return Err(refusal(status, &body).into_error());
+        }
+        let (generation, records) =
+            parse_snapshots(&body).ok_or_else(|| retry("malformed snapshots"))?;
+        let route = self.on_store(|s| s.route()).await?;
+        let batch_of = |bytes: &[u8]| {
+            wire::parse_for_route(bytes, &route.application, &route.tenant, &route.collection)
+                .ok()
+                .map(|p| *p.header.logical_batch)
+        };
+        let Some(newest) = records.first().and_then(|b| batch_of(b)) else {
+            return Ok(false);
+        };
+        let parts: Vec<Vec<u8>> = records
+            .into_iter()
+            .filter(|b| batch_of(b) == Some(newest))
+            .collect();
+        match self
+            .on_store(move |s| s.start_from_checkpoint(&parts, generation))
+            .await
+        {
+            Ok(started) => Ok(started),
+            Err(SyncError::Store(_)) => Ok(false),
+            Err(other) => Err(other),
+        }
     }
 
     async fn fetch(&self, route: &str, log: &str, after: Option<&[u8]>) -> Result<Page> {
