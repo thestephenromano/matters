@@ -1,14 +1,14 @@
 //! Bringing an existing Matters database into sync (#41): one CRDT lineage
 //! from the rows already there.
 //!
-//! [`import_rows`] turns every row into the engine commands its creation
+//! `import_rows` turns every row into the engine commands its creation
 //! would have recorded:
 //! - parents first, each list in its own order;
 //! - Today's order in a second pass, once every task exists;
 //! - each entity's commands applied at that entity's own `updated_at`.
 //!
 //! The updates go into the journal and are sealed in batches under the
-//! record cap, all in the caller's transaction. [`verify`] then rebuilds the
+//! record cap, all in the caller's transaction. `verify` then rebuilds the
 //! rows from the engine in that same transaction and requires them to
 //! match the originals: every column, with list order compared as order.
 //! Any difference aborts the migration, and the transaction never commits,
