@@ -317,7 +317,8 @@ fn record(
     reason: Option<&str>,
 ) -> Result<()> {
     tx.execute(
-        "INSERT INTO sync_checkpoints (id, coverage, state, reason) VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO sync_checkpoints (id, coverage, state, reason, journal)
+         VALUES (?1, ?2, ?3, ?4, (SELECT COUNT(*) FROM sync_journal))
          ON CONFLICT (id) DO NOTHING",
         params![id.as_slice(), coverage, state, reason],
     )?;
@@ -621,6 +622,22 @@ impl Database {
             crash_point("checkpoint-before-commit");
             tx.commit()?;
             Ok(Some(id))
+        })
+    }
+
+    /// Whether this device should make a checkpoint: it has none yet and
+    /// holds at least `every` engine updates, or it has journalled `every`
+    /// more since the latest it accepted.
+    pub fn checkpoint_due(&self, every: u64) -> Result<bool> {
+        self.with_conn(|conn| {
+            let (journal, at): (i64, Option<i64>) = conn.query_row(
+                "SELECT (SELECT COUNT(*) FROM sync_journal),
+                        (SELECT journal FROM sync_checkpoints WHERE state = 'accepted'
+                         ORDER BY seq DESC LIMIT 1)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            Ok((journal - at.unwrap_or(0)) as u64 >= every.max(1))
         })
     }
 

@@ -175,6 +175,8 @@ fn outcome(received: Received) -> Checkpointed {
 #[test]
 fn a_checkpoint_waits_for_the_devices_own_records_to_be_acknowledged() {
     let p = pair();
+    assert!(p.a.checkpoint_due(2).unwrap(), "two updates, no checkpoint");
+    assert!(!p.a.checkpoint_due(3).unwrap());
     assert_eq!(p.a.create_checkpoint(cursor(2)).unwrap(), None);
     assert!(parts(&p.a).is_empty());
     acknowledge_all(&p.a);
@@ -191,6 +193,12 @@ fn a_checkpoint_waits_for_the_devices_own_records_to_be_acknowledged() {
     );
     assert_eq!(coverage.writers.len(), 1, "A's chain, and nothing of B yet");
     assert_eq!(coverage.writers[0].records, 2);
+    // Spaced from the latest: due again only after more updates.
+    assert!(!p.a.checkpoint_due(1).unwrap());
+    p.a.add_task(&mut Task::new(id(6), "one more", 5.0))
+        .unwrap();
+    assert!(p.a.checkpoint_due(1).unwrap());
+    assert!(!p.a.checkpoint_due(2).unwrap());
 }
 
 #[test]

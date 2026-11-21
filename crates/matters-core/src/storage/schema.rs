@@ -342,7 +342,10 @@ CREATE TABLE IF NOT EXISTS sync_checkpoints (
     id BLOB NOT NULL UNIQUE CHECK (length(id) = 48),
     coverage BLOB NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('accepted', 'superseded', 'refused')),
-    reason TEXT
+    reason TEXT,
+    -- How many engine updates this device had journalled when it accepted
+    -- the checkpoint, to space its own checkpoints.
+    journal INTEGER NOT NULL DEFAULT 0
 );
 ALTER TABLE sync_receive_heads ADD COLUMN base INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sync_receive_heads ADD COLUMN base_head BLOB;
