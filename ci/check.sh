@@ -15,4 +15,5 @@ ci/style-check.sh
 ci/coverage.sh
 ci/mutants.sh
 ci/fuzz.sh
+ci/relay-tests.sh
 ci/flatpak.sh

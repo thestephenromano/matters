@@ -1,0 +1,17 @@
+# PostgreSQL for relay development and tests (#38, ADR 0003: 18.x).
+#   docker compose -f crates/matters-relay/compose.yaml up -d
+#   export MATTERS_RELAY_TEST_DATABASE_URL=postgres://postgres:relay@localhost:55432/postgres
+# Each test creates and drops its own database there.
+services:
+  postgres:
+    image: docker.io/library/postgres:18.7
+    environment:
+      POSTGRES_PASSWORD: relay
+    ports:
+      - "127.0.0.1:55432:5432"
+    command: ["postgres", "-c", "synchronous_commit=on", "-c", "fsync=on"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

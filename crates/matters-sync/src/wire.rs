@@ -221,6 +221,31 @@ impl<'a> Reader<'a> {
 }
 
 pub fn parse<'a>(bytes: &'a [u8], expected: Context<'_>) -> Result<ParsedRecord<'a>> {
+    let parsed = parse_structure(bytes)?;
+    if parsed.header.context != expected {
+        return Err(Error::ContextMismatch);
+    }
+    Ok(parsed)
+}
+
+/// Parse for a relay: the structural checks of [`parse`], and the route
+/// (application, tenant, collection), but not the document, which a relay
+/// neither checks nor indexes (docs/SYNC_SERVICE_CONTRACT.md).
+pub fn parse_for_route<'a>(
+    bytes: &'a [u8],
+    application: &[u8; 16],
+    tenant: &[u8; 16],
+    collection: &[u8; 16],
+) -> Result<ParsedRecord<'a>> {
+    let parsed = parse_structure(bytes)?;
+    let c = parsed.header.context;
+    if c.application != application || c.tenant != tenant || c.collection != collection {
+        return Err(Error::ContextMismatch);
+    }
+    Ok(parsed)
+}
+
+fn parse_structure(bytes: &[u8]) -> Result<ParsedRecord<'_>> {
     if bytes.len() > MAX_WIRE_BYTES {
         return Err(Error::TooLarge);
     }
@@ -254,9 +279,6 @@ pub fn parse<'a>(bytes: &'a [u8], expected: Context<'_>) -> Result<ParsedRecord<
         || author != header.author
     {
         return Err(Error::Inconsistent);
-    }
-    if header.context != expected {
-        return Err(Error::ContextMismatch);
     }
     Ok(ParsedRecord {
         header,
