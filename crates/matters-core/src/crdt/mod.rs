@@ -268,12 +268,12 @@ pub fn encode_version(vv: &VersionVector) -> Vec<u8> {
 /// Decode [`encode_version`]'s form: whole pairs, actors strictly
 /// ascending.
 pub fn decode_version(bytes: &[u8]) -> Result<BTreeMap<u64, i32>> {
-    if bytes.len() % 12 != 0 {
+    if !bytes.len().is_multiple_of(12) {
         return Err(invalid("a version vector of partial entries"));
     }
     let mut out = BTreeMap::new();
     let mut last = None;
-    for entry in bytes.chunks_exact(12) {
+    for entry in bytes.as_chunks::<12>().0 {
         let peer = u64::from_be_bytes(entry[..8].try_into().expect("8 bytes"));
         let counter = i32::from_be_bytes(entry[8..].try_into().expect("4 bytes"));
         if last.is_some_and(|l| l >= peer) {

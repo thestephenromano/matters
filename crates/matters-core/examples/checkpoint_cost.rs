@@ -6,8 +6,10 @@
 //! - how long a new device takes to start from it, against receiving every
 //!   record from the first.
 //!
-//!     cargo run --release -p matters-core --features test-support \
-//!         --example checkpoint_cost -- <directory on the disk to measure> [tasks...]
+//! ```text
+//! cargo run --release -p matters-core --features test-support \
+//!     --example checkpoint_cost -- <directory on the disk to measure> [tasks...]
+//! ```
 //!
 //! Prints one JSON object per workload. A workload of `tasks` tasks has:
 //! - 1 KiB notes;
