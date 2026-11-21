@@ -318,9 +318,10 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
 /// is complete. `sync_checkpoints` keeps every complete checkpoint's
 /// coverage with what became of it, refused ones as evidence. A device
 /// that started from a checkpoint knows each covered chain only by its
-/// length and head (`base`, `base_head`); `reach` is the earliest covered
-/// record met again since, walking back from the head by hash, and such a
-/// record is kept in `sync_received` as `covered`.
+/// length and head (`sync_receive_base`). `reach` is the earliest covered
+/// record met again since, walking back from the head by hash, and each one
+/// met again is kept in `sync_covered`. New tables only, so the migration
+/// can run again over a database that already has them.
 pub const MIGRATION_V18: &str = r#"
 CREATE TABLE IF NOT EXISTS sync_checkpoint_out (
     record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
@@ -347,8 +348,15 @@ CREATE TABLE IF NOT EXISTS sync_checkpoints (
     -- the checkpoint, to space its own checkpoints.
     journal INTEGER NOT NULL DEFAULT 0
 );
-ALTER TABLE sync_receive_heads ADD COLUMN base INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE sync_receive_heads ADD COLUMN base_head BLOB;
-ALTER TABLE sync_receive_heads ADD COLUMN reach BLOB;
-ALTER TABLE sync_received ADD COLUMN covered INTEGER NOT NULL DEFAULT 0 CHECK (covered IN (0, 1));
+CREATE TABLE IF NOT EXISTS sync_receive_base (
+    incarnation BLOB PRIMARY KEY CHECK (length(incarnation) = 32),
+    base INTEGER NOT NULL CHECK (base > 0),
+    base_head BLOB NOT NULL CHECK (length(base_head) = 48),
+    reach BLOB CHECK (reach IS NULL OR length(reach) = 48)
+);
+CREATE TABLE IF NOT EXISTS sync_covered (
+    record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
+    incarnation BLOB NOT NULL CHECK (length(incarnation) = 32),
+    digest BLOB NOT NULL CHECK (length(digest) = 48)
+);
 "#;

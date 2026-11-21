@@ -32,7 +32,7 @@
 //! - the relay cursor.
 //!
 //! Later records from the relay are its tail. If it reads covered records
-//! again after a relay restore, [`walk_covered`] recognises them by walking
+//! again after a relay restore, `walk_covered` recognises them by walking
 //! each chain back from its covered head.
 
 use std::collections::BTreeMap;
@@ -112,14 +112,22 @@ fn chain(conn: &Connection, incarnation: &Id) -> Result<Chain> {
             own: true,
         });
     }
-    let received: Option<(Vec<u8>, i64, Option<Vec<u8>>)> = conn
+    let received: Option<Vec<u8>> = conn
         .query_row(
-            "SELECT head, base, base_head FROM sync_receive_heads WHERE incarnation = ?1",
+            "SELECT head FROM sync_receive_heads WHERE incarnation = ?1",
             params![inc],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| r.get(0),
         )
         .optional()?;
-    let Some((head, base, base_head)) = received else {
+    let (base, base_head): (i64, Option<Vec<u8>>) = conn
+        .query_row(
+            "SELECT base, base_head FROM sync_receive_base WHERE incarnation = ?1",
+            params![inc],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .unwrap_or((0, None));
+    let Some(head) = received else {
         return Ok(Chain {
             records: 0,
             head: None,
@@ -129,7 +137,7 @@ fn chain(conn: &Connection, incarnation: &Id) -> Result<Chain> {
         });
     };
     let applied: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sync_received WHERE incarnation = ?1 AND covered = 0",
+        "SELECT COUNT(*) FROM sync_received WHERE incarnation = ?1",
         params![inc],
         |r| r.get(0),
     )?;
@@ -156,7 +164,8 @@ fn holds(conn: &Connection, incarnation: &Id, digest: &Hash, own: bool) -> Resul
     }
     Ok(conn
         .query_row(
-            "SELECT 1 FROM sync_received WHERE incarnation = ?1 AND digest = ?2",
+            "SELECT 1 FROM sync_received WHERE incarnation = ?1 AND digest = ?2
+             UNION ALL SELECT 1 FROM sync_covered WHERE incarnation = ?1 AND digest = ?2",
             params![incarnation.as_slice(), digest.as_slice()],
             |r| r.get::<_, i64>(0),
         )
@@ -490,10 +499,8 @@ struct Link {
 /// and no longer pending.
 pub(super) fn walk_covered(conn: &mut Connection, joined: &Joined) -> Result<()> {
     let chains: Vec<(Vec<u8>, Vec<u8>)> = {
-        let mut stmt = conn.prepare(
-            "SELECT incarnation, COALESCE(reach, base_head) FROM sync_receive_heads
-             WHERE base > 0 AND base_head IS NOT NULL",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT incarnation, COALESCE(reach, base_head) FROM sync_receive_base")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
@@ -535,11 +542,11 @@ pub(super) fn walk_covered(conn: &mut Connection, joined: &Joined) -> Result<()>
             if inc.as_slice() != incarnation.as_slice() {
                 break;
             }
-            // Counted in the base already: kept as covered, so it is known
-            // by its ID and hash without counting twice.
+            // Counted in the base already: kept apart as covered, so it is
+            // known by its ID and hash without counting twice.
             tx.execute(
-                "INSERT INTO sync_received (record_id, incarnation, digest, covered)
-                 VALUES (?1, ?2, ?3, 1) ON CONFLICT (record_id) DO NOTHING",
+                "INSERT INTO sync_covered (record_id, incarnation, digest)
+                 VALUES (?1, ?2, ?3) ON CONFLICT (record_id) DO NOTHING",
                 params![record_id.as_slice(), inc.as_slice(), at.as_slice()],
             )?;
             tx.execute(
@@ -554,7 +561,7 @@ pub(super) fn walk_covered(conn: &mut Connection, joined: &Joined) -> Result<()>
         }
         if moved {
             tx.execute(
-                "UPDATE sync_receive_heads SET reach = ?1 WHERE incarnation = ?2",
+                "UPDATE sync_receive_base SET reach = ?1 WHERE incarnation = ?2",
                 params![at.as_slice(), incarnation],
             )?;
         }
@@ -775,12 +782,16 @@ impl Database {
                 rebuild_rows(&tx, &doc.project()?)?;
                 for w in &checkpoint.coverage.writers {
                     tx.execute(
-                        "INSERT INTO sync_receive_heads (incarnation, head, base, base_head)
-                         VALUES (?1, ?2, ?3, ?2)",
+                        "INSERT INTO sync_receive_heads (incarnation, head) VALUES (?1, ?2)",
+                        params![w.incarnation.as_slice(), w.head.as_slice()],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO sync_receive_base (incarnation, base, base_head)
+                         VALUES (?1, ?2, ?3)",
                         params![
                             w.incarnation.as_slice(),
-                            w.head.as_slice(),
-                            w.records as i64
+                            w.records as i64,
+                            w.head.as_slice()
                         ],
                     )?;
                 }

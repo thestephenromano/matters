@@ -114,6 +114,7 @@ fn known(conn: &Connection, record_id: &[u8; 32]) -> Result<bool> {
     let received: Option<i64> = conn
         .query_row(
             "SELECT 1 FROM sync_received WHERE record_id = ?1
+             UNION ALL SELECT 1 FROM sync_covered WHERE record_id = ?1
              UNION ALL SELECT 1 FROM sync_checkpoint_out WHERE record_id = ?1
              UNION ALL SELECT 1 FROM sync_checkpoint_parts WHERE record_id = ?1",
             params![record_id.as_slice()],
