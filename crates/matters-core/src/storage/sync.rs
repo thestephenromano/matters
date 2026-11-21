@@ -59,7 +59,7 @@ impl Database {
             if engine.is_some() {
                 return Err(MattersError::Validation("sync is already on".into()));
             }
-            *engine = Some(turn_on(conn)?);
+            *engine = Some(turn_on_empty(conn)?);
             Ok(())
         })
     }
@@ -138,8 +138,7 @@ impl Database {
 /// Turn sync on in `conn` (a transaction, when the caller has more to
 /// commit with it) and return the new engine document. The database must
 /// hold no rows yet: existing data waits for the migration of #41.
-#[cfg(feature = "test-support")]
-pub(crate) fn turn_on(conn: &rusqlite::Connection) -> Result<Document> {
+pub(crate) fn turn_on_empty(conn: &rusqlite::Connection) -> Result<Document> {
     let rows: i64 = conn.query_row(
         "SELECT (SELECT COUNT(*) FROM areas) + (SELECT COUNT(*) FROM projects)
               + (SELECT COUNT(*) FROM tasks) + (SELECT COUNT(*) FROM tags)",
@@ -148,9 +147,17 @@ pub(crate) fn turn_on(conn: &rusqlite::Connection) -> Result<Document> {
     )?;
     if rows > 0 {
         return Err(MattersError::Validation(
-            "existing data must be migrated before sync (#41)".into(),
+            "this device already holds its own data: create a collection from it, \
+             or move it aside and import it after joining (#41)"
+                .into(),
         ));
     }
+    turn_on(conn)
+}
+
+/// Turn sync on in `conn` whatever rows it holds; the caller imports them
+/// (`super::import`) in the same transaction.
+pub(crate) fn turn_on(conn: &rusqlite::Connection) -> Result<Document> {
     conn.execute(
         "INSERT INTO sync_state (singleton, enabled_at) VALUES (1, ?1)",
         params![crate::clock::now_millis()],

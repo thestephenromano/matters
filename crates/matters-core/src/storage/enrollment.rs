@@ -243,10 +243,8 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-#[cfg(feature = "test-support")]
 pub use joining::Recovered;
 
-#[cfg(feature = "test-support")]
 mod joining {
     use super::*;
     use crate::storage::membership::{DeviceSeeds, KeyStore, HOME_DOCUMENT};
@@ -270,7 +268,9 @@ mod joining {
         /// A new device's first step: generate its keys and sign a request
         /// to join under `invitation`, for the admin. Kept until the
         /// admin's transition arrives; asking again returns the same bytes.
-        /// The database must not sync yet and hold no rows (#41).
+        /// The database must not sync yet and hold no rows: a device with
+        /// its own data sets it aside first (`set_aside_local_data`) and
+        /// imports it once joined (`import_missing_from`, #41).
         pub fn start_enrollment(
             &self,
             store: &dyn KeyStore,
@@ -332,7 +332,7 @@ mod joining {
         /// its own envelopes of the new and the recovered keys, and queues
         /// the recovery and its recovery envelope for publishing. Wrong
         /// words fail before anything is stored. The database must not
-        /// sync yet and hold no rows (#41).
+        /// sync yet and hold no rows, as for joining (#41).
         pub fn recover_collection(
             &self,
             store: &dyn KeyStore,
@@ -390,7 +390,7 @@ mod joining {
                 let key_name = format!("matters-sync/device/{}", uuid::Uuid::new_v4());
                 store.store(&key_name, &seeds)?;
                 let tx = conn.transaction()?;
-                let doc = super::super::sync::turn_on(&tx)?;
+                let doc = super::super::sync::turn_on_empty(&tx)?;
                 tx.execute(
                     "INSERT INTO sync_device (singleton, application, tenant, collection,
                          document, root, device, key_name)
@@ -519,7 +519,7 @@ mod joining {
                     ));
                 }
                 let tx = conn.transaction()?;
-                let doc = super::super::sync::turn_on(&tx)?;
+                let doc = super::super::sync::turn_on_empty(&tx)?;
                 tx.execute(
                     "INSERT INTO sync_device (singleton, application, tenant, collection,
                          document, root, device, key_name)
