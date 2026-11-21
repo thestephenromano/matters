@@ -36,6 +36,17 @@ rustup toolchain install "$toolchain" --profile minimal \
     || cannot_run "could not install $toolchain"
 endgroup
 
+# cargo-fuzz defaults to the triple it was itself built for, and the
+# prebuilt release is a musl build, which has no sanitizer runtime: build
+# for the toolchain's own host instead.
+host="$(rustc +"$toolchain" -vV | sed -n 's/^host: //p')"
+[ -n "$host" ] || cannot_run "could not read $toolchain's host triple"
+
+group "build the fuzz targets for $host"
+cargo +"$toolchain" fuzz build --fuzz-dir fuzz --target "$host" \
+    || cannot_run "the fuzz targets did not build"
+endgroup
+
 # A scratch copy of the corpus: the fuzzer adds to it, the commit does not.
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -46,7 +57,7 @@ for target in $(cargo +"$toolchain" fuzz list --fuzz-dir fuzz); do
     if [ -d "fuzz/regressions/$target" ]; then
         cp -r "fuzz/regressions/$target/." "$work/$target/"
     fi
-    cargo +"$toolchain" fuzz run --fuzz-dir fuzz "$target" "$work/$target" -- \
+    cargo +"$toolchain" fuzz run --fuzz-dir fuzz --target "$host" "$target" "$work/$target" -- \
         -max_total_time="$seconds" -rss_limit_mb=2048 -max_len=131072 \
         || refuse "fuzz target $target found a failing input; see fuzz/artifacts/$target/"
     endgroup
