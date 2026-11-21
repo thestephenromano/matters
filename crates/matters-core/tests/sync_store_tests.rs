@@ -280,8 +280,10 @@ fn a_joining_device_signs_in_with_its_keys_and_finishes_once_admitted() {
         &signature,
     )
     .unwrap();
-    // Before the admission: not yet. After it: joined.
+    // Before the admission: not yet. After it: joined. Anything else wrong
+    // is an error, not a wait.
     assert!(!joining.finish(&a.sync_controls().unwrap(), &[]).unwrap());
+    assert!(joining.finish(&[], &[]).is_err(), "no genesis");
     a.admit(&request, &invitation).unwrap();
     let envelopes: Vec<Vec<u8>> = a
         .outgoing_controls()
@@ -382,4 +384,17 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
     }
     .root()
     .is_err());
+}
+
+#[test]
+fn a_shared_key_store_is_the_store_it_shares() {
+    use matters_core::storage::membership::DeviceSeeds;
+    let inner = std::sync::Arc::new(MemoryKeyStore::default());
+    let shared: std::sync::Arc<MemoryKeyStore> = inner.clone();
+    let seeds = DeviceSeeds::from_bytes(&[7; DeviceSeeds::BYTES]).unwrap();
+    KeyStore::store(&shared, "device", &seeds).unwrap();
+    assert_eq!(inner.names(), ["device"], "stored in the one store");
+    let loaded = KeyStore::load(&shared, "device").unwrap().unwrap();
+    assert_eq!(loaded.to_bytes(), seeds.to_bytes());
+    assert!(KeyStore::load(&shared, "other").unwrap().is_none());
 }

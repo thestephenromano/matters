@@ -596,6 +596,10 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>https://relay.example.org</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Start syncing from this device</source>
         <translation type="unfinished"></translation>
     </message>

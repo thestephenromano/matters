@@ -4452,7 +4452,7 @@ Item {
                     id: syncEndpointField
                     objectName: "syncEndpoint"
                     Layout.fillWidth: true
-                    placeholderText: "https://relay.example.org"
+                    placeholderText: qsTr("https://relay.example.org")
                     text: controller.syncEndpoint
                     Accessible.name: qsTr("Relay address")
                     inputMethodHints: Qt.ImhUrlCharactersOnly

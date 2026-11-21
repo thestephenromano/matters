@@ -150,6 +150,12 @@ fn gtk_ui_end_to_end() {
     sync_from_the_ways_in_to_stopping(&synced);
 }
 
+/// Whether `window`'s focus is in `widget`: an entry hands its focus to
+/// its own text child.
+fn focused_in(window: &impl IsA<gtk4::Window>, widget: &gtk4::Widget) -> bool {
+    GtkWindowExt::focus(window).is_some_and(|f| &f == widget || f.is_ancestor(widget))
+}
+
 /// Pump the main loop until `done`, for at most ten seconds.
 fn wait_until(what: &str, done: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -171,7 +177,10 @@ fn sync_from_the_ways_in_to_stopping(ui: &Rc<Ui>) {
     p.button.emit_clicked();
     settle();
     assert!(p.off_box.is_visible(), "the ways in");
-    assert!(p.endpoint.is_focus(), "the keyboard starts in the address");
+    assert!(
+        focused_in(&p.window, p.endpoint.upcast_ref()),
+        "the keyboard starts in the address"
+    );
 
     // A damaged invitation is refused, in plain words, and nothing changes.
     p.endpoint.set_text("http://127.0.0.1:9");
@@ -203,7 +212,10 @@ fn sync_from_the_ways_in_to_stopping(ui: &Rc<Ui>) {
     settle();
     assert!(p.leave_box.is_visible());
     assert!(p.leave_text.label().contains("never get them"));
-    assert!(p.leave_keep.is_focus());
+    assert!(
+        focused_in(&p.window, p.leave_keep.upcast_ref()),
+        "the safe choice has the keyboard"
+    );
     p.leave_keep.emit_clicked();
     settle();
     assert!(!p.leave_box.is_visible());

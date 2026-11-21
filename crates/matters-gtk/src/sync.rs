@@ -333,10 +333,12 @@ impl SyncPanel {
         let p = Rc::downgrade(self);
         self.button.connect_clicked(move |_| {
             if let Some(p) = p.upgrade() {
-                p.window.present();
+                // The focus is set on the window, which keeps it until it
+                // is shown: a grab before the window is mapped is lost.
                 if p.shown.borrow().phase == Phase::Off {
-                    p.endpoint.grab_focus();
+                    GtkWindowExt::set_focus(&p.window, Some(&p.endpoint));
                 }
+                p.window.present();
             }
         });
         let on = |button: &Button, f: fn(&SyncPanel, &SyncApp)| {
@@ -388,7 +390,7 @@ impl SyncPanel {
                     "Stop syncing"
                 });
                 p.leave_box.set_visible(true);
-                p.leave_keep.grab_focus();
+                GtkWindowExt::set_focus(&p.window, Some(&p.leave_keep));
             }
         });
         let p = Rc::downgrade(self);
@@ -517,8 +519,8 @@ impl SyncPanel {
                     kit.endpoint, kit.collection, kit.words
                 ));
                 if !self.kit_window.is_visible() {
+                    GtkWindowExt::set_focus(&self.kit_window, Some(&self.kit_kept));
                     self.kit_window.present();
-                    self.kit_kept.grab_focus();
                 }
             }
             None => self.kit_window.set_visible(false),
