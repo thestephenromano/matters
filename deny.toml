@@ -45,6 +45,10 @@ confidence-threshold = 0.9
 exceptions = [
     { crate = "bindgen", allow = ["BSD-3-Clause"] },
     { crate = "libloading", allow = ["ISC"] },
+    # subtle: constant-time comparisons in hpke-rs, the approved record
+    # stack (#37). Ships in the binary; its notice goes with distributions
+    # (#44 collects third-party notices). Approved 2026-11-21.
+    { crate = "subtle", allow = ["BSD-3-Clause"] },
 ]
 
 [bans]
