@@ -240,9 +240,9 @@ Item {
 
     // Theme color palette (respects light/dark system settings)
     // "system" follows the desktop's light or dark scheme; "light" and "dark"
-    // choose one (for a future Appearance preference, #72, and for tests: a
-    // desktop without a theme ignores an app's request to switch scheme).
-    property string appearance: "system"
+    // choose one (Preferences, #72). A desktop without a theme ignores an
+    // app's request to switch scheme, so the choice is applied here.
+    readonly property string appearance: controller.colorScheme
 
     // The sidebar can be hidden (F9 or the header's toggle) to give the list
     // the whole window.
@@ -4143,6 +4143,31 @@ Item {
                 ButtonGroup.group: logPolicyGroup
                 checked: controller.logPolicy === "manually"
                 onClicked: controller.chooseLogPolicy("manually")
+            }
+
+            // Light or dark (#72).
+            Label {
+                Layout.topMargin: 12
+                text: "Appearance"
+                font.bold: true
+            }
+            ButtonGroup {
+                id: colorSchemeGroup
+            }
+            Repeater {
+                model: [
+                    { key: "system", text: "Follow the system" },
+                    { key: "light", text: "Light" },
+                    { key: "dark", text: "Dark" }
+                ]
+                delegate: RadioButton {
+                    required property var modelData
+                    objectName: "colorScheme-" + modelData.key
+                    text: modelData.text
+                    ButtonGroup.group: colorSchemeGroup
+                    checked: controller.colorScheme === modelData.key
+                    onClicked: controller.chooseColorScheme(modelData.key)
+                }
             }
 
             // Calendar events in Today and Upcoming (#62).

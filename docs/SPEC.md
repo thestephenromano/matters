@@ -163,7 +163,7 @@ That is the default. **Preferences** (`Ctrl + ,`) chooses when completed tasks m
 
 Until then the Logbook doesn't list them, and the badges count open tasks only. Choosing a policy logs what is finished so far, so nothing comes back into its list. A project's own list and an area's always show their finished tasks. The rule is `matters_core::Settings::logged_until`, applied by `QueryEngine::logged_until`.
 
-Preferences also choose which calendar events Today and Upcoming show (see *Calendar events*). They are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
+Preferences also choose which calendar events Today and Upcoming show (see *Calendar events*), and whether Matters follows the desktop's light or dark scheme (the default) or is always light or always dark. They are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
 
 ### Reminders
 A task can remind at a time of day on its start date (#60). The When popover's reminder field takes a typed time (`9`, `9:30`, `21:30`, `9am`, `2:30 pm`, `noon`, `midnight`); anything else is refused, never guessed. **Clear** removes the reminder. The open task's When pill says the time ("Today, 9:30 PM"), and closed rows show a bell and the time. A task with no date, or deferred to Someday, is scheduled for Today when given a reminder.
@@ -384,7 +384,7 @@ Status of the Qt app. **Done** items are built; **Partly** items say what is mis
 - [x] **Done:** keyboard control. Selection with `Up`/`Down`, `Space`, `Delete`/`Backspace`, `Escape`, `Ctrl+Z`, `Enter`, `Ctrl+N`, `Ctrl+Shift+N`, `F2`, `Ctrl+Up`/`Ctrl+Down`, Quick Find, `Ctrl+S` (When popover), `Ctrl+D` (Deadline popover) and `Ctrl+Shift+M` (Move popover) work on one selected task or several: `Shift`/`Ctrl` select several, and every command applies to all of them, with one Undo.
 - [x] **Done:** project progress, as a pie beside the project's title that fills as its tasks are done.
 - [x] **Done:** Quick Find popover. Finds lists, areas, projects, tags and tasks, and opens the one chosen; typing on the task list opens it with what was typed.
-- [x] **Done:** automatic dark/light theme tracking, following the system color scheme. The app uses its own palette rather than Breeze.
+- [x] **Done:** automatic dark/light theme tracking, following the system color scheme, or a light or dark scheme chosen in Preferences. The app uses its own palette rather than Breeze.
 
 ### Post-MVP (v0.2+)
 - [ ] System-wide floating Quick Capture daemon via Wayland Layer Shell / KGlobalAccel.
