@@ -850,3 +850,40 @@ fn frontiers_encode_in_one_canonical_order() {
     }
     assert_eq!(bytes, expected);
 }
+
+#[test]
+fn a_checkpoint_naming_another_head_of_a_devices_own_chain_is_a_fork() {
+    let p = pair();
+    for n in 20..23 {
+        p.b.add_task(&mut Task::new(id(n), "B's", n as f64))
+            .unwrap();
+    }
+    deliver_controls(&p.b, &p.a);
+    for r in records(&p.b) {
+        p.a.receive_record(&r).unwrap();
+    }
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(5)).unwrap().unwrap();
+    let a_dev = keys(&p.a_keys);
+    let honest = opened(&p.a, &a_dev);
+    let b_inc = p.b.writer_incarnation().unwrap();
+    // B's own chain, claimed shorter, with a head B never wrote.
+    let forged = reworked(&p.a, &a_dev, &honest, |s| {
+        let w = s
+            .writers
+            .iter_mut()
+            .find(|w| w.incarnation == b_inc)
+            .unwrap();
+        w.records = 2;
+        w.head = [9; 48];
+    });
+    assert!(matches!(
+        outcome(p.b.receive_record(&forged[0]).unwrap()),
+        Checkpointed::Refused(r) if r.contains("another head")
+    ));
+    // The honest one names B's chain as B holds it.
+    assert_eq!(
+        outcome(p.b.receive_record(&parts(&p.a)[0]).unwrap()),
+        Checkpointed::Accepted
+    );
+}
