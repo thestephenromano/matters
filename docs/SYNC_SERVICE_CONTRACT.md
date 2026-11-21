@@ -146,7 +146,7 @@ A malicious or careless operator can hide a reset by keeping the generation; cli
 
 ## Conformance
 
-[The fixture scenarios](protocol/sync-relay-v0-conformance.json) are transport-level scripts with expected statuses and receipts. #38's relay and any other implementation must pass them against a real PostgreSQL instance, including crashes before and after commit; #39's client must handle each documented response. They cover duplicate uploads, same-ID conflicts, context mismatch, reconnect and cursor resume, pagination with concurrent appends, generation change after a restore, session expiry, revoked devices and quota errors.
+[The fixture scenarios](protocol/sync-relay-v0-conformance.json) are transport-level scripts with expected statuses and receipts. #38's relay and any other implementation must pass them against a real PostgreSQL instance, including crashes before and after commit; #39's client must handle each documented response. They cover duplicate uploads, same-ID conflicts, context mismatch, reconnect and cursor resume, pagination with concurrent appends, generation change after a restore, session expiry, revoked devices and quota errors. The relay's runner is [`crates/matters-relay/tests/conformance.rs`](../crates/matters-relay/tests/conformance.rs). It reads this file, drives the real binary, and runs in CI's "relay against PostgreSQL" job.
 
 Resource limits (body sizes above, page limit 256, challenge and token lifetimes) are chosen v0 values, measured under #43's workloads before a pilot. Rate limits and quotas are operator configuration, reported through `429` and `507`.
 

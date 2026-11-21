@@ -201,8 +201,11 @@ pub(crate) fn sequence(value: i64) -> u64 {
 impl Relay {
     /// Connect to `url` and bring the schema up to date.
     pub async fn connect(url: &str) -> Result<Self> {
+        // A request waits at most 5 s for a connection, then answers
+        // `unavailable`, which clients retry with backoff.
         let pool = PgPoolOptions::new()
             .max_connections(16)
+            .acquire_timeout(std::time::Duration::from_secs(5))
             .connect(url)
             .await?;
         MIGRATOR

@@ -12,8 +12,8 @@ use matters_sync::{seal, wire, ContentKey};
 use sqlx::postgres::PgPool;
 
 pub struct TestDb {
-    admin: PgPool,
-    name: String,
+    pub admin: PgPool,
+    pub name: String,
     pub relay: Relay,
 }
 
@@ -36,6 +36,21 @@ impl TestDb {
         let base = url.rsplit_once('/').map_or(url.as_str(), |(b, _)| b);
         let relay = Relay::connect(&format!("{base}/{name}")).await.unwrap();
         Some(Self { admin, name, relay })
+    }
+
+    /// The connection URL of this test's database.
+    pub fn url(&self) -> String {
+        Self::url_of(&self.name)
+    }
+
+    /// The connection URL of database `name` on the test server.
+    pub fn url_of(name: &str) -> String {
+        let url = std::env::var("MATTERS_RELAY_TEST_DATABASE_URL").unwrap();
+        let base = url
+            .rsplit_once('/')
+            .map_or(url.as_str(), |(b, _)| b)
+            .to_owned();
+        format!("{base}/{name}")
     }
 
     /// Another connection to the same database, as after a restart.
