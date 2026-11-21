@@ -23,17 +23,8 @@ fn main() {
     // and the app says so once it is up.
     match SettingsFile::in_config_dir() {
         Ok(file) => matters_ui::install_settings(Some(file), None),
-        Err(err) => {
-            matters_ui::install_settings(None, Some(format!("Your settings can't be kept: {err}")))
-        }
+        Err(err) => matters_ui::install_settings(None, Some(err.to_string())),
     }
-    // Calendar events (#62), read on a worker thread. Without Evolution
-    // Data Server there are none, and Preferences says why.
-    let calendars: Box<dyn CalendarSource> = match matters_ui::eds::EdsSource::load() {
-        Ok(source) => Box::new(source),
-        Err(reason) => Box::new(FakeCalendarSource::unavailable(reason.0)),
-    };
-    matters_ui::install_calendar_source(calendars, true);
     // Reminders (#60) as desktop notifications.
     matters_ui::install_notifier(Box::new(matters_ui::notify::DesktopNotifier));
     // The desktop's accent colour and contrast preference (#76), followed
@@ -47,6 +38,17 @@ fn main() {
     // After the application (and the desktop's platform theme) has started,
     // before any QML loads.
     matters_ui::apply_app_style(explicit_style.as_deref());
+    // The interface in the user's language, when Matters has it (#75).
+    matters_ui::i18n::register_catalogs();
+    matters_ui::i18n::install_system_translation();
+    // Calendar events (#62), read on a worker thread. Without Evolution
+    // Data Server there are none, and Preferences says why (in the user's
+    // language, so once the translation is in).
+    let calendars: Box<dyn CalendarSource> = match matters_ui::eds::EdsSource::load() {
+        Ok(source) => Box::new(source),
+        Err(reason) => Box::new(FakeCalendarSource::unavailable(reason.0)),
+    };
+    matters_ui::install_calendar_source(calendars, true);
     let mut engine = QQmlApplicationEngine::new();
 
     if let Some(engine) = engine.as_mut() {

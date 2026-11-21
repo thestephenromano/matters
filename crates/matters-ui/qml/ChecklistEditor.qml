@@ -210,7 +210,7 @@ Item {
             Text {
                 anchors.fill: parent
                 verticalAlignment: Text.AlignVCenter
-                text: "New checklist item"
+                text: qsTr("New checklist item")
                 color: newField.placeholderColor
                 font.pixelSize: 13
                 visible: !newInput.text
@@ -371,7 +371,7 @@ Item {
                     TextInput {
                         id: titleInput
                         objectName: "checklistTitle"
-                        Accessible.name: "Checklist item"
+                        Accessible.name: qsTr("Checklist item")
                         anchors.left: box.right
                         anchors.leftMargin: 8
                         anchors.right: deleteButton.left
@@ -447,14 +447,14 @@ Item {
                         focusPolicy: Qt.NoFocus
                         visible: itemHover.hovered
                         width: visible ? implicitWidth : 0
-                        Accessible.name: "Delete checklist item"
+                        Accessible.name: qsTr("Delete checklist item")
                         contentItem: Icon {
                             name: "close"
                             size: 12
                             color: editor.textSecondary
                         }
                         ToolTip.visible: hovered
-                        ToolTip.text: "Delete"
+                        ToolTip.text: qsTr("Delete")
                         onClicked: itemRow.remove()
                     }
                 }

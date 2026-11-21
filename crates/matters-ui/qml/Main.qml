@@ -8,7 +8,7 @@ ApplicationWindow {
     minimumWidth: 720
     minimumHeight: 500
     visible: true
-    title: mainView.title + " — Matters"
+    title: qsTr("%1 — Matters", "the window's title: the open list, then the app").arg(mainView.title)
 
     MainView {
         id: mainView

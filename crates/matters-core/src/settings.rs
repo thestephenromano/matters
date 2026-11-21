@@ -200,6 +200,26 @@ impl Settings {
     }
 }
 
+/// Why a settings file gave the defaults: where it is and what was wrong
+/// with it. A frontend says so in the user's language (#75); `Display`
+/// says it in English.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsProblem {
+    pub path: PathBuf,
+    pub cause: String,
+}
+
+impl std::fmt::Display for SettingsProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Your settings in {} couldn't be read ({}), so the defaults are used.",
+            self.path.display(),
+            self.cause
+        )
+    }
+}
+
 /// Where the settings are kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsFile {
@@ -222,11 +242,11 @@ impl SettingsFile {
         &self.path
     }
 
-    /// The settings, and a message for the user if the file exists but
-    /// can't be read or understood, in which case the settings are the
-    /// defaults (and saving replaces the file). No file means the defaults
-    /// and no message.
-    pub fn load(&self) -> (Settings, Option<String>) {
+    /// The settings, and what was wrong if the file exists but can't be
+    /// read or understood, in which case the settings are the defaults (and
+    /// saving replaces the file). No file means the defaults and no
+    /// problem.
+    pub fn load(&self) -> (Settings, Option<SettingsProblem>) {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -240,11 +260,11 @@ impl SettingsFile {
         }
     }
 
-    fn problem(&self, cause: &str) -> String {
-        format!(
-            "Your settings in {} couldn't be read ({cause}), so the defaults are used.",
-            self.path.display()
-        )
+    fn problem(&self, cause: &str) -> SettingsProblem {
+        SettingsProblem {
+            path: self.path.clone(),
+            cause: cause.to_string(),
+        }
     }
 
     /// Write `settings`, replacing the file in one step so a crash never

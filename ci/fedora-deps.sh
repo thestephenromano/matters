@@ -10,6 +10,8 @@ set -euo pipefail
 packages=(
     gcc gcc-c++ git pkgconf-pkg-config
     qt6-qtbase-devel qt6-qtdeclarative-devel
+    # lrelease builds the translation catalogs in; lupdate checks them (#75).
+    qt6-linguist
     gtk4-devel libadwaita-devel
     mesa-dri-drivers dejavu-sans-fonts
     ShellCheck tar gzip

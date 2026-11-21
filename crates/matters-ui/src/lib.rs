@@ -11,11 +11,20 @@ pub mod calendar;
 pub mod eds;
 #[cfg(feature = "ui-tests")]
 pub mod fake_desktop;
+pub mod i18n;
+pub mod locale_format;
 mod motion;
 pub mod notify;
 #[cfg(test)]
 mod qml_lint;
 pub mod reminders;
+pub mod repeat_words;
+// One declaration a line, as lupdate reads them (it trips on rustfmt's
+// trailing commas).
+#[rustfmt::skip]
+pub mod strings;
+#[cfg(feature = "ui-tests")]
+pub mod test_translations;
 
 pub use bridge::{install_database, install_settings};
 pub use calendar::install_calendar_source;

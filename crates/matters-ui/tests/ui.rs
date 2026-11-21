@@ -81,6 +81,8 @@ fn main() {
     matters_ui::install_calendar_source(Box::new(fake_calendar()), false);
     // Reminders are kept, never shown on the desktop (#60).
     matters_ui::install_notifier(Box::new(matters_ui::notify::RecordingNotifier::default()));
+    // The pseudo-translations the translation tests switch to (#75).
+    matters_ui::i18n::register_catalogs();
     matters_ui::init_qml();
 
     let source_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/qml");

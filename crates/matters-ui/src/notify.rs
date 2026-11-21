@@ -55,12 +55,12 @@ impl Notifier for DesktopNotifier {
             .body(&notice.body)
             .icon("appointment-soon")
             // Clicking the notification opens the task, as Open does.
-            .action("default", "Open")
-            .action("open", "Open")
+            .action("default", &crate::strings::REMINDER_OPEN.text())
+            .action("open", &crate::strings::REMINDER_OPEN.text())
             // A reminder stays until it is dealt with.
             .timeout(notify_rust::Timeout::Never);
         if !notice.task_id.is_empty() {
-            notification.action("complete", "Complete");
+            notification.action("complete", &crate::strings::REMINDER_COMPLETE.text());
         }
         let handle = notification.show().map_err(|err| err.to_string())?;
         let task_id = notice.task_id.clone();

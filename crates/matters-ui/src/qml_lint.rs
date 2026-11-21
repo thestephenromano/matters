@@ -225,3 +225,99 @@ fn qml_colours_come_from_the_palette() {
         found.join("\n")
     );
 }
+
+/// Every `qsTr` takes a string literal (#75): `lupdate` can only put a
+/// literal in the catalog, so `qsTr(text)` would never be translated.
+#[test]
+fn qml_translates_literals_only() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("qml");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "qml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            for (at, _) in line.match_indices("qsTr(") {
+                if !line[at + 5..].trim_start().starts_with('"') {
+                    found.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "qsTr without a string literal (lupdate can't see it):\n{}",
+        found.join("\n")
+    );
+}
+
+/// Every string with a count has its English forms (#75): without them
+/// English would say "1 open tasks". `translations/update.sh` adds new
+/// strings to matters_en.ts unfinished; this says which to fill in.
+#[test]
+fn english_has_every_plural_form() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("translations/matters_en.ts");
+    let catalog = std::fs::read_to_string(&path).unwrap();
+    let mut missing = Vec::new();
+    let mut plurals = 0;
+    for message in catalog.split("<message").skip(1) {
+        if !message.starts_with(" numerus=\"yes\"") {
+            continue;
+        }
+        plurals += 1;
+        let source = message
+            .split("<source>")
+            .nth(1)
+            .and_then(|s| s.split("</source>").next())
+            .unwrap_or("?");
+        let forms: Vec<&str> = message
+            .split("<numerusform>")
+            .skip(1)
+            .filter_map(|s| s.split("</numerusform>").next())
+            .collect();
+        if message.contains("type=\"unfinished\"")
+            || forms.len() != 2
+            || forms.iter().any(|f| f.is_empty())
+        {
+            missing.push(source.to_string());
+        }
+    }
+    assert!(plurals > 0, "the catalog has its plural strings");
+    assert!(
+        missing.is_empty(),
+        "English forms (one, other) missing in translations/matters_en.ts for:\n{}",
+        missing.join("\n")
+    );
+}
+
+/// The Rust strings are declared one a line (#75), each a whole
+/// `QT_TRANSLATE_NOOP("Matters", "…")` call: lupdate reads src/strings.rs
+/// as C++ and misses a call split over lines with a trailing comma.
+#[test]
+fn rust_strings_are_declared_as_lupdate_reads_them() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/strings.rs");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut found = Vec::new();
+    let mut declared = 0;
+    for (n, line) in text.lines().enumerate() {
+        if !line.starts_with("pub const") {
+            continue;
+        }
+        declared += 1;
+        let whole = (line.contains("QT_TRANSLATE_NOOP(\"Matters\", \"")
+            || line.contains("QT_TRANSLATE_NOOP3(\"Matters\", \"")
+            || line.contains("QT_TRANSLATE_N_NOOP(\"Matters\", \""))
+            && line.ends_with("\");");
+        if !whole {
+            found.push(format!("{}:{}: {}", path.display(), n + 1, line));
+        }
+    }
+    assert!(declared > 0, "src/strings.rs declares its strings");
+    assert!(
+        found.is_empty(),
+        "declarations lupdate can't read (one whole call a line):\n{}",
+        found.join("\n")
+    );
+}

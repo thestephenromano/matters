@@ -1,0 +1,1142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE TS>
+<TS version="2.1">
+<context>
+    <name>ChecklistEditor</name>
+    <message>
+        <source>New checklist item</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Checklist item</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete checklist item</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>Main</name>
+    <message>
+        <source>%1 — Matters</source>
+        <comment>the window&apos;s title: the open list, then the app</comment>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>MainView</name>
+    <message numerus="yes">
+        <source>%n tasks canceled</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks reopened</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Cancel %n Tasks</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Reopen %n Tasks</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Cancel Task</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reopen Task</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Duplicate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Convert to Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move to Trash</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Inbox</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Today</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Upcoming</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Anytime</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Someday</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Logbook</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Trash</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks moved</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks scheduled</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks moved to Trash</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks completed</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>All day</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Until %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 – %2</source>
+        <comment>a time range</comment>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This Evening</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Earlier</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Tomorrow</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Yesterday</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>When</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Due today</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Overdue: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Quick Find</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ctrl+K</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Quick Find (Ctrl+K)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n open</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>PROJECTS</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Tags</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Preferences</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Preferences (Ctrl+,)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New Project or Area</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New Area</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Hide the sidebar</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show the sidebar</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Hide the sidebar (F9)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show the sidebar (F9)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1% done</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Completed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Canceled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Complete Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Log Completed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Empty Trash</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Area actions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project actions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Area</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No Area</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rename…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Add Heading…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reopen Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancel Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Dismiss</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>When the project starts</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Deadline</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The project&apos;s deadline</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project notes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Notes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New task</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Add a task</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Put Back</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>All</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show all tasks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show only %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Heading actions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move Up</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move Down</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move to Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete Heading</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No tasks here. Enjoy your peace of mind.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Will repeat: %1, %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Event: %1, %2, %3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Event: %1, %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Completed project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Canceled project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Repeats %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reminder at %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>, </source>
+        <comment>between parts of a list</comment>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reopen %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Complete %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ctrl+.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Title</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Evening</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Repeats: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Has notes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Checklist: %1 of %2 done</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New to-do</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Notes: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Add a checklist item</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Change when (Ctrl+S)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Change the deadline (Ctrl+D)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Heading “%1” deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Checklist item “%1” deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project “%1” moved to Trash</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Area “%1” moved to Trash</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Task “%1” moved to Trash</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Undo</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Find lists, areas, projects, tags and tasks...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>List</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Tag</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1: %2</source>
+        <comment>the kind of a result, then its name</comment>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Open this link?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Open</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks tagged %1</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Tag %n tasks</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Move completed tasks to the Logbook</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>When I leave the list</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Immediately</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>At the end of the day</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>When I choose Log Completed (Ctrl+Shift+L)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Appearance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Follow the system</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Light</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Dark</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Use the desktop&apos;s accent colour</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Your desktop doesn&apos;t offer an accent colour.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Calendar events</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show events in Today and Upcoming</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No calendars were found.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Empty Trash?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Everything in the Trash will be permanently deleted, including the tasks in trashed projects. This can&apos;t be undone.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete Permanently</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Complete “%1”?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancel “%1”?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>It has %n open tasks. Complete or cancel them with the project?</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Complete Tasks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancel Tasks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Keep Open</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No tags yet.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Nest</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Put this tag under another, or at the top</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Top Level</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete the tag %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete the tag; what it was on is kept</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New tag</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create New Area</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Area name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Area name, e.g. Home or Work</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rename Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rename Heading</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New Heading</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rename Area</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Heading</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create New Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project Title...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Filter areas, projects and headings</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Area: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Heading: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Repeat</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks no longer repeat</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n tasks repeat</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Repeats</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Never</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Daily</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Weekly</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Monthly</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Yearly</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>every</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Every</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>days</source>
+        <comment>after a count</comment>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>weeks</source>
+        <comment>after a count</comment>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>months</source>
+        <comment>after a count</comment>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>years</source>
+        <comment>after a count</comment>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>On</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On day %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the first %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the second %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the third %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the fourth %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the fifth %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the last %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the last day</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Counted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On a schedule</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>After each is completed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ends</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Never ends</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ends on a day</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ends after</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>dec 24, in 3 months</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ends on</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Times</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>times</source>
+        <comment>after a count</comment>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Doesn&apos;t repeat</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Choose at least one day, and an end after the start</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>Reminder set for %n tasks</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Reminder cleared for %n tasks</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Deadline set for %n tasks</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Due: tomorrow, fri, dec 24</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Type a date: tomorrow, fri, dec 24</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not a date</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Previous month</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Next month</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Remind me at: 9:00, 2:30pm</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reminder time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Repeat…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not a time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Remind at %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>Matters</name>
+    <message>
+        <source>Your settings couldn&apos;t be saved: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Your settings in %1 couldn&apos;t be read (%2), so the defaults are used.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Your settings can&apos;t be kept: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The change couldn&apos;t be saved: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>That task no longer exists.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reminders can&apos;t be shown: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reminder for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Missed reminder, for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 at %2</source>
+        <comment>a day, then a time</comment>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n reminders</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%1 and %n more</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Open</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Complete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Calendar events come from Evolution Data Server, which isn&apos;t installed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This version of Evolution Data Server can&apos;t be used (%1).</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Evolution Data Server couldn&apos;t be reached: %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The calendar&apos;s days can&apos;t be read: %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Every day</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>Every %n days</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Every week</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>Every %n weeks</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Every month</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>Every %n months</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Every year</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>Every %n years</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>%1 after completion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on %2</source>
+        <comment>how often, then the weekdays</comment>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on %2</source>
+        <comment>every year, then a day and month</comment>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on day %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on the last day</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on the first %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on the second %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on the third %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on the fourth %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on the fifth %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 on the last %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1, until %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1, ending with this one</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1, once more</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%1, %n more times</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>%1 (paused)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>, </source>
+        <comment>between the items of a list</comment>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>TagField</name>
+    <message>
+        <source>Tags</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Add tags</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Add a tag</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+</TS>
