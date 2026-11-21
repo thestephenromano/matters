@@ -2404,10 +2404,13 @@ dependencies = [
  "hpke-rs",
  "hpke-rs-crypto",
  "hpke-rs-libcrux",
+ "libcrux-hkdf",
+ "libcrux-hmac",
  "libcrux-ml-dsa",
  "libcrux-sha2",
  "minicbor",
  "serde_json",
+ "subtle",
  "thiserror 2.0.21",
 ]
 

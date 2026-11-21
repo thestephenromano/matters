@@ -5,10 +5,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use matters_sync::authority::{
-    device_id, encode, envelope_aad, envelope_info, key_commitment, parse, root_id, sign,
-    signing_bytes, Authority, Body, Boundary, DeviceKeys, EpochKey, Error, Genesis, Hash, Id,
-    KemPublicKey, Member, Membership, Message, Result, Route, WriterHandoff, WriterStart,
-    KEM_PUBLIC_KEY_BYTES, MAX_CONTROL_BYTES, POLICY,
+    device_id, encode, envelope_aad, envelope_info, key_commitment, parse, request_enrollment,
+    root_id, sign, signing_bytes, Authority, Body, Boundary, DeviceKeys, EpochKey, Error, Genesis,
+    Hash, Id, Invitation, InvitationSecret, KemPublicKey, Member, Membership, Message, Result,
+    Route, WriterHandoff, WriterStart, CODE_LENGTH, KEM_PUBLIC_KEY_BYTES, MAX_CONTROL_BYTES,
+    POLICY,
 };
 use matters_sync::generate_signing_key;
 use matters_sync::record::{seal, ContentKey, SigningKey, VerificationKey, VERIFICATION_KEY_BYTES};
@@ -391,18 +392,14 @@ fn two_valid_membership_successors_freeze_key_and_record_admission() {
 }
 
 #[test]
-fn unsupported_enrollment_transfer_and_recovery_are_not_implicitly_authorized() {
+fn unsupported_admin_transfer_and_recovery_are_not_implicitly_authorized() {
     let mut s = setup();
     let candidate = device();
-    for change in 0..3 {
+    for change in 0..2 {
         let mut m = transition(&s);
         let body = membership(&mut m);
         match change {
             0 => {
-                body.roster.push(candidate.member(false));
-                body.roster.sort_by_key(|m| m.id);
-            }
-            1 => {
                 body.admin = s.b.id();
                 for member in &mut body.roster {
                     member.admin = member.id == body.admin;
@@ -705,6 +702,7 @@ fn independent_control_bytes_fingerprints_and_hpke_contexts_match() {
             Body::WriterStart(_) | Body::WriterHandoff(_) => {
                 assert!(p.message.body.writer_claim().is_some())
             }
+            Body::EnrollmentRequest(_) => unreachable!("no golden enrollment vector"),
         }
     }
 }
@@ -1168,4 +1166,468 @@ fn secret_bearing_values_never_print_their_bytes() {
     assert_eq!(format!("{:?}", s.a), "DeviceKeys(redacted)");
     assert_eq!(format!("{key:?}"), "EpochKey { epoch: 0, .. }");
     assert_eq!(format!("{:?}", key.content_key()), "ContentKey(redacted)");
+    let invitation = s
+        .authority
+        .invite(InvitationSecret::new([0xab; 16]))
+        .unwrap();
+    let printed = format!("{invitation:?}");
+    assert!(
+        printed.contains("secret: InvitationSecret(redacted)"),
+        "{printed}"
+    );
+    assert!(!printed.contains("171, 171"), "no secret bytes: {printed}");
+}
+
+// Enrollment through a one-time invitation (#37).
+
+fn secret() -> InvitationSecret {
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&fresh()[..16]);
+    InvitationSecret::new(bytes)
+}
+
+/// The admin's transition adding `member`, as the next epoch.
+fn adding(s: &Setup, member: Member) -> Vec<u8> {
+    let mut m = transition(s);
+    let roster = &mut membership(&mut m).roster;
+    roster.push(member);
+    roster.sort_by_key(|m| m.id);
+    signed(&m, s.a.signing_key())
+}
+
+#[test]
+fn a_device_enrolls_through_an_invitation_and_receives_current_and_retained_keys() {
+    let mut s = setup();
+    let genesis = s.authority.manifest();
+    let rotation = signed(&transition(&s), s.a.signing_key());
+    s.authority.apply_membership(&rotation).unwrap();
+    let epoch_one = s.authority.manifest();
+    // The admin shows a QR code; the new device scans it.
+    let shown = s.authority.invite(secret()).unwrap();
+    let scanned = Invitation::parse(&shown.encode().unwrap()).unwrap();
+    let c = device();
+    let request = request_enrollment(&scanned, &c, fresh()).unwrap();
+    let member = s.authority.accept_enrollment(&request, &shown).unwrap();
+    assert_eq!(member, c.member(false));
+    let add = adding(&s, member);
+    assert!(s.authority.apply_membership(&add).unwrap());
+    assert!(s.authority.members().unwrap().contains(&c.member(false)));
+    // The new device pins the root from the invitation and replays history.
+    let mut joined = Authority::bootstrap_from_invitation(&s.genesis, &scanned).unwrap();
+    joined.apply_membership(&rotation).unwrap();
+    joined.apply_membership(&add).unwrap();
+    assert_eq!(joined.manifest(), s.authority.manifest());
+    let current = wrap(&s.authority, &s.a, c.id(), &epoch_key(2)).unwrap();
+    let key = joined.unwrap_key(&current, &c).unwrap();
+    assert!(is_epoch_key(key.content_key(), 2));
+    joined.check_epoch_key(&key).unwrap();
+    // Retained history: each earlier epoch's key, by its manifest.
+    for (manifest, epoch) in [(genesis, 0), (epoch_one, 1)] {
+        let envelope = s
+            .authority
+            .wrap_history_key(&s.a, c.id(), manifest, &epoch_key(epoch), fresh())
+            .unwrap();
+        assert_eq!(
+            joined.unwrap_key(&envelope, &c).map(|_| ()),
+            Err(Error::Stale),
+            "the current-epoch unwrap refuses history"
+        );
+        let old = joined.unwrap_history_key(&envelope, &c).unwrap();
+        assert_eq!((old.manifest(), old.epoch()), (manifest, epoch));
+        assert!(is_epoch_key(old.content_key(), epoch));
+        // A history key opens that epoch's records and seals none.
+        assert_eq!(joined.check_epoch_key(&old), Err(Error::Stale));
+    }
+}
+
+/// Whether `key` is the fixture content key of `epoch`.
+fn is_epoch_key(key: &ContentKey, epoch: u64) -> bool {
+    key_commitment(&route(), 0, epoch, key).unwrap() == commitment(epoch)
+}
+
+#[test]
+fn a_typed_code_and_its_offer_rebuild_the_invitation() {
+    let s = setup();
+    let shown = s.authority.invite(secret()).unwrap();
+    let code = shown.secret.code();
+    assert_eq!(code.len(), CODE_LENGTH);
+    let lookup = shown.secret.lookup(&route()).unwrap();
+    let offer = shown.offer().unwrap();
+    // Typed loosely: lower case, grouped, O for 0 and L for 1.
+    let typed: String = code
+        .to_lowercase()
+        .chars()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            let c = match c {
+                '0' => 'o',
+                '1' => 'l',
+                c => c,
+            };
+            (i % 4 == 0 && i > 0).then_some('-').into_iter().chain([c])
+        })
+        .collect();
+    let typed = InvitationSecret::from_code(&typed).unwrap();
+    assert_eq!(typed.lookup(&route()).unwrap(), lookup);
+    let rebuilt = Invitation::from_offer(typed, &route(), &offer).unwrap();
+    assert_eq!(
+        (rebuilt.route.clone(), rebuilt.root, rebuilt.manifest),
+        (route(), s.authority.root(), s.authority.manifest())
+    );
+    // The rebuilt invitation enrolls exactly like a scanned one.
+    let c = device();
+    let request = request_enrollment(&rebuilt, &c, fresh()).unwrap();
+    s.authority.accept_enrollment(&request, &shown).unwrap();
+    // A forged or misrouted offer, or the wrong code, is refused.
+    let code_of = |text: &str| InvitationSecret::from_code(text).unwrap();
+    let mut forged = offer.clone();
+    let at = forged.len() - 60; // inside the manifest
+    forged[at] ^= 1;
+    assert_eq!(
+        Invitation::from_offer(code_of(&code), &route(), &forged).map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    let mut elsewhere = route();
+    elsewhere.collection = [9; 16];
+    assert_eq!(
+        Invitation::from_offer(code_of(&code), &elsewhere, &offer).map(|_| ()),
+        Err(Error::Context)
+    );
+    assert_ne!(code_of(&code).lookup(&elsewhere).unwrap(), lookup);
+    assert_eq!(
+        Invitation::from_offer(secret(), &route(), &offer).map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    // Malformed codes: length, alphabet, and more than 128 bits.
+    for bad in [
+        &code[1..],
+        &format!("{code}0"),
+        &format!("U{}", &code[1..]),
+        &format!("8{}", &code[1..]),
+        "",
+    ] {
+        assert_eq!(
+            InvitationSecret::from_code(bad).map(|_| ()),
+            Err(Error::Format),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn invitation_formats_match_independent_known_answers() {
+    // tests/vectors/invitation_kat.py: Python standard-library HKDF, HMAC,
+    // CBOR and base32, independent of this crate.
+    let invitation = Invitation {
+        route: route(),
+        root: [0x11; 48],
+        manifest: [0x22; 48],
+        secret: InvitationSecret::new(std::array::from_fn(|i| i as u8)),
+    };
+    assert_eq!(invitation.secret.code(), "00041061050R3GG28A1C60T3GF");
+    assert_eq!(
+        hex(&invitation.secret.lookup(&route()).unwrap()),
+        "f9a70d84bbbe4c079fb398fa2006ef28"
+    );
+    let encoded = invitation.encode().unwrap();
+    assert_eq!(
+        hex(&encoded),
+        concat!(
+            "8900726d6174746572732d73796e632d70712d76306a696e7669746174696f6e",
+            "50010101010101010101010101010101015002020202020202020202020202020202",
+            "5003030303030303030303030303030303",
+            "5830111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+            "5830222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+            "50000102030405060708090a0b0c0d0e0f"
+        )
+    );
+    assert_eq!(
+        hex(&invitation.offer().unwrap()[encoded.len() - 17 + 6..]),
+        concat!(
+            "5830e64b19ef3139a7f3d9f530a1b869e9161c79d6e18eb91e06fea2aa4b0235",
+            "7d8942e3b5b2dfbad48a81db4d6d2d7a2e42"
+        ),
+        "the offer's tag"
+    );
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn invitations_reject_noncanonical_and_oversized_payloads() {
+    let s = setup();
+    let shown = s.authority.invite(secret()).unwrap();
+    let encoded = shown.encode().unwrap();
+    for (name, bytes, error) in [
+        (
+            "truncated",
+            encoded[..encoded.len() - 1].to_vec(),
+            Error::Format,
+        ),
+        (
+            "trailing",
+            [encoded.clone(), vec![0]].concat(),
+            Error::Format,
+        ),
+        ("oversized", vec![0; 257], Error::Limit),
+        ("an offer", shown.offer().unwrap(), Error::Unsupported),
+    ] {
+        assert_eq!(Invitation::parse(&bytes).map(|_| ()), Err(error), "{name}");
+    }
+    // A non-minimal length for the secret (0x58 0x10 instead of 0x50).
+    let mut long = encoded[..encoded.len() - 17].to_vec();
+    long.extend([0x58, 0x10]);
+    long.extend(&encoded[encoded.len() - 16..]);
+    assert_eq!(
+        Invitation::parse(&long).map(|_| ()),
+        Err(Error::NonCanonical)
+    );
+}
+
+#[test]
+fn enrollment_refuses_server_substituted_keys_and_requests_without_the_secret() {
+    let mut s = setup();
+    let shown = s.authority.invite(secret()).unwrap();
+    let c = device();
+    let honest = request_enrollment(&shown, &c, fresh()).unwrap();
+    let request = |bytes: &[u8]| match parse(bytes).unwrap().message.body {
+        Body::EnrollmentRequest(r) => *r,
+        _ => unreachable!(),
+    };
+    let resign = |r: &matters_sync::authority::EnrollmentRequest, as_: &DeviceKeys| {
+        signed(
+            &Message {
+                route: route(),
+                signer: device_id(&r.signing_key, &r.kem_key).unwrap(),
+                body: Body::EnrollmentRequest(Box::new(r.clone())),
+            },
+            as_.signing_key(),
+        )
+    };
+    // A server swaps in its own keys and signs for them: no secret, so the
+    // binding fails.
+    let server = device();
+    let mut swapped = request(&honest);
+    swapped.signing_key = server.verification_key().clone();
+    swapped.kem_key = server.kem_public_key().clone();
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&resign(&swapped, &server), &shown)
+            .map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    // Swapping only the KEM key breaks the device ID the signature names.
+    let mut kem_only = request(&honest);
+    kem_only.kem_key = server.kem_public_key().clone();
+    let mut message = parse(&honest).unwrap().message;
+    message.body = Body::EnrollmentRequest(Box::new(kem_only));
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&signed(&message, c.signing_key()), &shown)
+            .map(|_| ()),
+        Err(Error::Identity)
+    );
+    // Signed by a key other than the one it names: no proof of possession.
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&resign(&request(&honest), &server), &shown)
+            .map(|_| ()),
+        Err(Error::Signature)
+    );
+    // A request made for another invitation, or for none (login only).
+    let other = s.authority.invite(secret()).unwrap();
+    assert_eq!(
+        s.authority.accept_enrollment(&honest, &other).map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    let mut unbound = request(&honest);
+    unbound.binding = [0; 48];
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&resign(&unbound, &c), &shown)
+            .map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    // An existing member, another collection, another kind of message.
+    let b_request = request_enrollment(&shown, &s.b, fresh()).unwrap();
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&b_request, &shown)
+            .map(|_| ()),
+        Err(Error::Identity)
+    );
+    let mut misrouted = Invitation::parse(&shown.encode().unwrap()).unwrap();
+    misrouted.route.tenant = [9; 16];
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&honest, &misrouted)
+            .map(|_| ()),
+        Err(Error::Context)
+    );
+    let elsewhere = request_enrollment(&misrouted, &c, fresh()).unwrap();
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&elsewhere, &shown)
+            .map(|_| ()),
+        Err(Error::Context)
+    );
+    let mut other_root = Invitation::parse(&shown.encode().unwrap()).unwrap();
+    other_root.root = [9; 48];
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&honest, &other_root)
+            .map(|_| ()),
+        Err(Error::Context)
+    );
+    assert_eq!(
+        Authority::bootstrap_from_invitation(&s.genesis, &other_root).map(|_| ()),
+        Err(Error::Identity)
+    );
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&s.genesis, &shown)
+            .map(|_| ()),
+        Err(Error::Unsupported)
+    );
+    // After the manifest moves on, the invitation and its request are stale.
+    let rotation = signed(&transition(&s), s.a.signing_key());
+    s.authority.apply_membership(&rotation).unwrap();
+    assert_eq!(
+        s.authority.accept_enrollment(&honest, &shown).map(|_| ()),
+        Err(Error::Stale)
+    );
+    let fresh_invite = s.authority.invite(secret()).unwrap();
+    assert_eq!(
+        s.authority
+            .accept_enrollment(&honest, &fresh_invite)
+            .map(|_| ()),
+        Err(Error::Stale),
+        "a request names the manifest it was made under"
+    );
+}
+
+#[test]
+fn history_envelopes_reach_current_members_only_under_each_epochs_commitment() {
+    let mut s = setup();
+    let genesis = s.authority.manifest();
+    let rotation = signed(&transition(&s), s.a.signing_key());
+    s.authority.apply_membership(&rotation).unwrap();
+    // Wrapping: the admin only, a known manifest, its epoch's key.
+    assert_eq!(
+        s.authority
+            .wrap_history_key(&s.b, s.b.id(), genesis, &epoch_key(0), fresh())
+            .map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(
+        s.authority
+            .wrap_history_key(&s.a, s.b.id(), [7; 48], &epoch_key(0), fresh())
+            .map(|_| ()),
+        Err(Error::MissingPrevious)
+    );
+    assert_eq!(
+        s.authority
+            .wrap_history_key(&s.a, s.b.id(), genesis, &epoch_key(1), fresh())
+            .map(|_| ()),
+        Err(Error::KeyCommitment)
+    );
+    let to_b = s
+        .authority
+        .wrap_history_key(&s.a, s.b.id(), genesis, &epoch_key(0), fresh())
+        .unwrap();
+    assert_eq!(
+        s.authority.unwrap_history_key(&to_b, &s.a).map(|_| ()),
+        Err(Error::Identity),
+        "another member cannot open it"
+    );
+    // Once b is removed it is no recipient, and its envelopes stop opening.
+    let mut revoke = transition(&s);
+    let a = s.a.id();
+    membership(&mut revoke).roster.retain(|m| m.id == a);
+    s.authority
+        .apply_membership(&signed(&revoke, s.a.signing_key()))
+        .unwrap();
+    assert_eq!(
+        s.authority
+            .wrap_history_key(&s.a, s.b.id(), genesis, &epoch_key(0), fresh())
+            .map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(
+        s.authority.unwrap_history_key(&to_b, &s.b).map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    // An envelope whose epoch disagrees with its manifest's is stale.
+    let to_a = s
+        .authority
+        .wrap_history_key(&s.a, s.a.id(), genesis, &epoch_key(0), fresh())
+        .unwrap();
+    s.authority.unwrap_history_key(&to_a, &s.a).unwrap();
+    let mut message = parse(&to_a).unwrap().message;
+    if let Body::KeyEnvelope(k) = &mut message.body {
+        k.epoch = 1;
+    }
+    assert_eq!(
+        s.authority
+            .unwrap_history_key(&signed(&message, s.a.signing_key()), &s.a)
+            .map(|_| ()),
+        Err(Error::Stale)
+    );
+}
+
+#[test]
+fn a_full_roster_refuses_enrollment_before_the_admin_signs_anything() {
+    let mut s = setup();
+    let mut m = transition(&s);
+    let roster = &mut membership(&mut m).roster;
+    for i in 0..14u8 {
+        // Fixture keys: the roster binds bytes, not key validity.
+        let signing_key = VerificationKey::from_bytes([30 + i; VERIFICATION_KEY_BYTES]);
+        let kem_key = KemPublicKey::from_bytes([60 + i; KEM_PUBLIC_KEY_BYTES]);
+        roster.push(Member {
+            id: device_id(&signing_key, &kem_key).unwrap(),
+            signing_key,
+            kem_key,
+            admin: false,
+        });
+    }
+    roster.sort_by_key(|m| m.id);
+    s.authority
+        .apply_membership(&signed(&m, s.a.signing_key()))
+        .unwrap();
+    let shown = s.authority.invite(secret()).unwrap();
+    let request = request_enrollment(&shown, &device(), fresh()).unwrap();
+    assert_eq!(
+        s.authority.accept_enrollment(&request, &shown).map(|_| ()),
+        Err(Error::Limit)
+    );
+}
+
+#[test]
+fn offers_refuse_other_versions_and_noncanonical_encodings() {
+    let s = setup();
+    let shown = s.authority.invite(secret()).unwrap();
+    let offer = shown.offer().unwrap();
+    let code = shown.secret.code();
+    let from = |bytes: &[u8]| {
+        Invitation::from_offer(InvitationSecret::from_code(&code).unwrap(), &route(), bytes)
+            .map(|_| ())
+    };
+    let mut version = offer.clone();
+    version[1] = 1;
+    assert_eq!(from(&version), Err(Error::Unsupported));
+    // The tag's length as two bytes (0x59 0x0030): the tag still verifies,
+    // but the bytes are not the canonical encoding.
+    let at = offer.len() - 50;
+    assert_eq!(&offer[at..at + 2], &[0x58, 0x30]);
+    let long = [&offer[..at], &[0x59, 0x00, 0x30], &offer[at + 2..]].concat();
+    assert_eq!(from(&long), Err(Error::NonCanonical));
+    let mut invitation = shown.encode().unwrap();
+    invitation[1] = 1;
+    assert_eq!(
+        Invitation::parse(&invitation).map(|_| ()),
+        Err(Error::Unsupported)
+    );
 }
