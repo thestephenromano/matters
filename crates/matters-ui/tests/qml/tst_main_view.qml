@@ -1064,7 +1064,7 @@ Item {
         // Controls follow Matters' scheme, not the desktop's palette: in
         // dark mode a popover's buttons and field are dark too.
         function test_controls_take_matters_colours_in_dark_mode() {
-            view.appearance = "dark";
+            controller.chooseColorScheme("dark");
             const row = addToToday("palette-task");
             expandRow(row);
             mouseClick(findChild(row, "schedule-date"));
@@ -1077,7 +1077,36 @@ Item {
             compare(String(field.palette.base), "#25262b");
             keyClick(Qt.Key_Escape);
             tryVerify(() => !popup.visible, 2000);
-            view.appearance = "system";
+            controller.chooseColorScheme("system");
+        }
+
+        // Preferences choose light or dark (#72), and the window follows at
+        // once.
+        function test_preferences_choose_light_or_dark() {
+            const dialog = findChild(view, "preferencesDialog");
+            focusList();
+            keySequence("Ctrl+,");
+            tryVerify(() => dialog.opened, 1000, "Ctrl+, opens Preferences");
+            try {
+                const system = findChild(dialog.contentItem, "colorScheme-system");
+                verify(system.checked, "the desktop's scheme by default");
+                const dark = findChild(dialog.contentItem, "colorScheme-dark");
+                waitForRendering(dialog.contentItem);
+                mouseClick(dark);
+                tryCompare(controller, "colorScheme", "dark");
+                verify(view.isDark, "the window turns dark");
+                compare(String(view.colBg), "#1a1b1e");
+                verify(!system.checked);
+
+                mouseClick(findChild(dialog.contentItem, "colorScheme-light"));
+                tryCompare(controller, "colorScheme", "light");
+                verify(!view.isDark);
+                compare(String(view.colBg), "#ffffff");
+            } finally {
+                controller.chooseColorScheme("system");
+                keyClick(Qt.Key_Escape);
+                tryVerify(() => !dialog.visible, 2000);
+            }
         }
 
         function test_picking_a_day_next_month_from_the_date_button() {

@@ -5,8 +5,8 @@
 
 use jiff::civil::Date;
 use matters_core::{
-    Area, Database, Home, LogPolicy, QueryEngine, Schedule, Settings, SettingsFile, Status, Task,
-    View, Visit,
+    Area, ColorScheme, Database, Home, LogPolicy, QueryEngine, Schedule, Settings, SettingsFile,
+    Status, Task, View, Visit,
 };
 
 fn today() -> Date {
@@ -302,6 +302,24 @@ fn settings_survive_a_save_and_a_missing_file_is_the_defaults() {
         !file.path().with_extension("toml.partial").exists(),
         "no partial file is left"
     );
+}
+
+#[test]
+fn the_colour_scheme_is_kept_and_follows_the_desktop_by_default() {
+    assert_eq!(Settings::default().appearance.scheme, ColorScheme::System);
+    for scheme in ColorScheme::ALL {
+        assert_eq!(ColorScheme::from_key(scheme.key()), Some(scheme));
+    }
+    assert_eq!(ColorScheme::from_key("sepia"), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = SettingsFile::new(dir.path().join("settings.toml"));
+    let mut settings = Settings::default();
+    settings.appearance.scheme = ColorScheme::Dark;
+    file.save(&settings).unwrap();
+    let text = std::fs::read_to_string(file.path()).unwrap();
+    assert!(text.contains("[appearance]\nscheme = \"dark\""), "{text}");
+    assert_eq!(file.load(), (settings, None));
 }
 
 #[test]

@@ -23,7 +23,10 @@ pub use query::{
     heading_section_key, logbook_section_key, project_section_key, ListRow, ProjectView,
     QueryEngine, QuickFindResult, TodayView, UpcomingGroup, ViewCounts,
 };
-pub use settings::{CalendarSettings, LogPolicy, LogbookSettings, Settings, SettingsFile};
+pub use settings::{
+    AppearanceSettings, CalendarSettings, ColorScheme, LogPolicy, LogbookSettings, Settings,
+    SettingsFile,
+};
 pub use storage::Database;
 pub use undo::TaskSnapshot;
 pub use visit::Visit;
