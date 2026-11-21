@@ -255,7 +255,7 @@ fn judge(conn: &Connection, joined: &Joined, doc: &Document, c: &Checkpoint) -> 
     let coverage = &c.coverage;
     let histories = joined.authority.writer_histories(HOME_DOCUMENT);
     let theirs = crdt::decode_version(&coverage.version)?;
-    let mine = crdt::decode_version(&doc.version().encode())?;
+    let mine = crdt::decode_version(&crdt::encode_version(&doc.version()))?;
     for w in &coverage.writers {
         let actor = histories[&w.incarnation].actor;
         let (t, m) = (
@@ -563,7 +563,26 @@ pub(super) fn walk_covered(conn: &mut Connection, joined: &Joined) -> Result<()>
     Ok(())
 }
 
+/// Whether this device has received, written and read nothing of the
+/// collection yet.
+fn nothing_synced(conn: &Connection) -> Result<bool> {
+    let held: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM sync_received) + (SELECT COUNT(*) FROM sync_records)
+              + (SELECT COUNT(*) FROM sync_checkpoints)
+              + (SELECT COUNT(*) FROM sync_cursors WHERE log = 'records')",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(held == 0)
+}
+
 impl Database {
+    /// Whether this device has received, written and read nothing of the
+    /// collection yet, so it may start from a checkpoint.
+    pub fn holds_nothing_synced(&self) -> Result<bool> {
+        self.with_conn(nothing_synced)
+    }
+
     /// Make a checkpoint of everything this device holds, if it is fully
     /// synced: every record it wrote acknowledged by the relay, and its
     /// last pull, which ended at `cursor`, complete. The caller passes the
@@ -599,7 +618,7 @@ impl Database {
                 schema: DOCUMENT_SCHEMA,
                 epoch: sealing.epoch(),
                 writers: writers(&tx, joined)?,
-                version: doc.version().encode(),
+                version: crdt::encode_version(&doc.version()),
                 frontiers: doc.frontiers(),
                 cursor,
             };
@@ -707,13 +726,7 @@ impl Database {
                 .membership
                 .as_ref()
                 .ok_or_else(|| invalid("sync is not resumed"))?;
-            let fresh: i64 = conn.query_row(
-                "SELECT (SELECT COUNT(*) FROM sync_received) + (SELECT COUNT(*) FROM sync_records)
-                      + (SELECT COUNT(*) FROM sync_checkpoints)",
-                [],
-                |r| r.get(0),
-            )?;
-            if fresh > 0 {
+            if !nothing_synced(conn)? {
                 return Err(invalid(
                     "only a device that holds nothing yet starts from a checkpoint",
                 ));

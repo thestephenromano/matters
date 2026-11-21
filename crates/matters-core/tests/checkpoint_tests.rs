@@ -600,3 +600,28 @@ fn a_crash_while_creating_a_checkpoint_leaves_nothing_and_loses_nothing() {
     a.create_checkpoint(cursor(2)).unwrap().unwrap();
     assert_eq!(a.outgoing_checkpoint_parts().unwrap().len(), 1);
 }
+
+#[test]
+fn versions_encode_canonically_whatever_order_they_were_built_in() {
+    use matters_core::crdt::{decode_version, encode_version};
+    let mut forward = loro::VersionVector::new();
+    let mut backward = loro::VersionVector::new();
+    let peers = [(3u64, 7), (1, 2), (900, 1), (42, 10)];
+    for (peer, counter) in peers {
+        forward.insert(peer, counter);
+    }
+    for (peer, counter) in peers.iter().rev() {
+        backward.insert(*peer, *counter);
+    }
+    assert_eq!(encode_version(&forward), encode_version(&backward));
+    let decoded = decode_version(&encode_version(&forward)).unwrap();
+    assert_eq!(
+        decoded.into_iter().collect::<Vec<_>>(),
+        [(1, 2), (3, 7), (42, 10), (900, 1)]
+    );
+    // Only the canonical form decodes.
+    let mut swapped = encode_version(&forward);
+    swapped.rotate_left(12);
+    assert!(decode_version(&swapped).is_err(), "out of order");
+    assert!(decode_version(&[0; 13]).is_err(), "a partial entry");
+}
