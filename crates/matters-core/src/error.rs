@@ -24,6 +24,11 @@ pub enum MattersError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// A transition keeps this device a member, but its envelope of the
+    /// new epoch's key was not supplied: nothing changed (#39).
+    #[error("The new epoch's key envelope is missing")]
+    EnvelopeMissing,
+
     /// A sync control record, envelope or key was refused (#37). Carries
     /// no key material.
     #[error("Sync authority error: {0}")]

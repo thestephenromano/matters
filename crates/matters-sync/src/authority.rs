@@ -595,13 +595,27 @@ impl Authority {
         if document != expected_document {
             return Err(Error::Context);
         }
-        if claim.manifest != self.current {
+        // A claim signed under any known manifest of the current
+        // generation is admitted, if its device was a member there: replicas
+        // read the log in order, and a claim made just before a concurrent
+        // transition reaches every one of them after it. Admission grants no
+        // authorship by itself; each record is still checked against its own
+        // epoch's roster (`authenticate_at`). A recovery's new generation
+        // makes earlier claims stale.
+        let generation = self.active()?.generation;
+        let at = self.states.get(&claim.manifest).ok_or(Error::Stale)?;
+        if at.generation != generation {
             return Err(Error::Stale);
         }
         if claim.device != p.message.signer {
             return Err(Error::Identity);
         }
-        p.verify(&self.member(&claim.device)?.signing_key)?;
+        let signer = at
+            .roster
+            .iter()
+            .find(|m| m.id == claim.device)
+            .ok_or(Error::Unauthorized)?;
+        p.verify(&signer.signing_key)?;
         let lineage = (document, claim.device);
         if self
             .lineages

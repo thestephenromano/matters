@@ -569,11 +569,45 @@ fn writer_admission_binds_document_actor_and_incarnation() {
     s.authority
         .admit_writer(&signed(&restored, s.a.signing_key()), DOC)
         .unwrap();
+    let before = s.authority.manifest();
     let rotation = transition(&s);
     s.authority
         .apply_membership(&signed(&rotation, s.a.signing_key()))
         .unwrap();
-    assert_eq!(s.authority.admit_writer(&bytes, DOC), Err(Error::Stale));
+    // After a rotation, an admitted claim replays as the same step, and a
+    // claim signed under the earlier manifest by a member of it is
+    // admitted: replicas meet it after the rotation in the log.
+    assert_eq!(s.authority.admit_writer(&bytes, DOC), Ok(false));
+    let mut late = writer(&s.authority, &s.b, [3; 32], 73, None);
+    if let Body::WriterStart(w) = &mut late.body {
+        w.manifest = before;
+    }
+    assert_eq!(
+        s.authority
+            .admit_writer(&signed(&late, s.b.signing_key()), DOC),
+        Ok(true)
+    );
+    // An unknown manifest is stale; a device outside the claim's roster is
+    // refused.
+    let mut unknown = writer(&s.authority, &s.b, [4; 32], 74, None);
+    if let Body::WriterStart(w) = &mut unknown.body {
+        w.manifest = [9; 48];
+    }
+    assert_eq!(
+        s.authority
+            .admit_writer(&signed(&unknown, s.b.signing_key()), DOC),
+        Err(Error::Stale)
+    );
+    let outsider = device();
+    let mut theirs = writer(&s.authority, &outsider, [5; 32], 75, None);
+    if let Body::WriterStart(w) = &mut theirs.body {
+        w.manifest = before;
+    }
+    assert_eq!(
+        s.authority
+            .admit_writer(&signed(&theirs, outsider.signing_key()), DOC),
+        Err(Error::Unauthorized)
+    );
 }
 
 #[test]

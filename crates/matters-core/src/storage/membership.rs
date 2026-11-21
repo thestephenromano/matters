@@ -591,9 +591,7 @@ impl Database {
                 // Only a new epoch needs this device's envelope of its key;
                 // a writer claim changes no epoch.
                 if standing == SyncStanding::Active && before.manifest() != manifest {
-                    let envelope = envelope.ok_or_else(|| {
-                        MattersError::Validation("the new epoch's key envelope is missing".into())
-                    })?;
+                    let envelope = envelope.ok_or(MattersError::EnvelopeMissing)?;
                     joined.authority.unwrap_key(envelope, &joined.device)?;
                     tx.execute(
                         "INSERT OR REPLACE INTO sync_envelopes (manifest, bytes) VALUES (?1, ?2)",

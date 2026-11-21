@@ -301,3 +301,13 @@ CREATE TABLE IF NOT EXISTS sync_pending (
     seq INTEGER NOT NULL
 );
 "#;
+
+/// v17: where this device's sync client has read each relay log up to
+/// (#39). A cursor is saved only after its page is durably applied, and
+/// forgotten when the relay's storage generation changes.
+pub const MIGRATION_V17: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_cursors (
+    log TEXT PRIMARY KEY CHECK (log IN ('authority', 'records')),
+    cursor BLOB NOT NULL
+);
+"#;

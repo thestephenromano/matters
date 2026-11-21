@@ -1,0 +1,32 @@
+[package]
+name = "matters-sync-client"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+authors = ["Matters Contributors"]
+description = "The resumable encrypted sync client (#39): any application's local store, a relay"
+
+[dependencies]
+matters-sync = { path = "../matters-sync" }
+# Decided for #39 on 2026-11-21: reqwest on rustls over HTTP/2, the
+# operating system's trust store (rustls-platform-verifier, reqwest's own
+# rustls verifier), and ring as rustls' crypto provider.
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7"
+tokio = { version = "1.54", features = ["rt", "macros", "time", "sync"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots", "connect"] }
+futures-util = "0.3"
+minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
+base64 = "0.22"
+thiserror = "2.0"
+
+[dev-dependencies]
+matters-core = { path = "../matters-core", features = ["test-support"] }
+matters-relay = { path = "../matters-relay" }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
+sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio"] }
+tempfile = "3.13"
+uuid = { version = "1", features = ["v4"] }

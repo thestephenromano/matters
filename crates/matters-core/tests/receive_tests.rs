@@ -433,3 +433,59 @@ fn another_devices_envelope_is_accepted_and_stored_nowhere() {
     }
     assert_eq!(p.b.sync_envelopes().unwrap(), before);
 }
+
+#[test]
+fn rereading_ones_own_log_after_rotations_changes_nothing() {
+    let p = pair();
+    p.a.rotate_epoch().unwrap();
+    let before = p.a.sync_membership().unwrap();
+    let mut log = vec![p.a.sync_controls().unwrap().remove(0)];
+    log.extend(
+        p.a.outgoing_controls()
+            .unwrap()
+            .into_iter()
+            .map(|o| o.bytes),
+    );
+    for bytes in &log {
+        match p.a.apply_control(bytes, None) {
+            Ok(_) => {}
+            // The genesis is no control to apply again.
+            Err(MattersError::Authority(matters_sync::authority::Error::Unsupported)) => {}
+            Err(other) => panic!("{}: {other:?}", parse(bytes).unwrap().message.body.kind()),
+        }
+    }
+    assert_eq!(p.a.sync_membership().unwrap(), before);
+}
+
+#[test]
+fn a_second_definition_of_an_admitted_writer_freezes_its_lineage() {
+    let p = pair();
+    let a_keys = keys(&p.a_keys);
+    let m = p.a.sync_membership().unwrap();
+    let incarnation = p.a.writer_incarnation().unwrap();
+    // A's device signs its admitted incarnation again, with another
+    // predecessor: competing definitions, never a replay.
+    let conflicting = matters_sync::authority::sign(
+        &matters_sync::authority::Message {
+            route: route(),
+            signer: a_keys.id(),
+            body: Body::WriterStart(matters_sync::authority::WriterStart {
+                manifest: m.manifest,
+                document: m.document,
+                device: a_keys.id(),
+                incarnation,
+                actor: 7,
+                previous: Some(fresh()),
+            }),
+        },
+        a_keys.signing_key(),
+        fresh(),
+    )
+    .unwrap();
+    assert!(matches!(
+        p.b.apply_control(&conflicting, None),
+        Err(MattersError::Authority(
+            matters_sync::authority::Error::Fork
+        ))
+    ));
+}
