@@ -1,0 +1,37 @@
+; Checkpoints for sync v0 (docs/SYNC_CHECKPOINTS.md, #40).
+; RFC 8610 structural schema; RFC 8949 core deterministic encoding is also required.
+; Each part is the plaintext of one `snapshot` record (sync-record-v0.cddl),
+; sealed, signed and opened exactly as a `data` record is.
+
+part = [
+  "matters-checkpoint-part", 0,
+  checkpoint-id: hash48,          ; SHA-384 of coverage-bytes
+  index: uint,                    ; 0 .. parts - 1, below 512
+  chunk: bstr .size (1..524288),  ; exactly 524288 bytes except in the last part
+  coverage-bytes: bstr .cbor coverage / null   ; present in part 0 only
+]
+
+coverage = [
+  "matters-checkpoint", 0,
+  engine: tstr .size (1..32),     ; the snapshot's format, "loro-1"
+  schema: uint,                   ; the domain schema of the snapshot's document
+  epoch: uint .size 8,            ; equal to every carrying record's epoch
+  writers: [* writer],            ; strictly ascending by incarnation, at most 1024
+  version: bstr .size (0..65536), ; the engine's encoded version vector
+  frontiers: bstr .size (0..65536),
+  pending: [* hash48],            ; record hashes, strictly ascending, at most 1024
+  cursor: [generation: id16, sequence: uint .size 8] / null,
+  payload: hash48,                ; SHA-384 of payload
+  length: uint,                   ; bytes of payload, at least 1
+  parts: uint                     ; ceil(length / 524288), 1 .. 512
+]
+
+writer = [author: hash48, incarnation: id32, records: uint, head: hash48]  ; records >= 1
+
+; The chunks in index order, concatenated. Pending records are complete
+; signed record bytes, in the order of coverage.pending.
+payload = [snapshot: bstr .size (1..), pending: [* bstr]]
+
+id16 = bstr .size 16
+id32 = bstr .size 32
+hash48 = bstr .size 48

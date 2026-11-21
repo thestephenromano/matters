@@ -31,6 +31,7 @@ fn every_corpus_and_regression_input_passes_its_target() {
         ("control", fuzzing::control, 6),
         ("invitation", fuzzing::invitation, 2),
         ("typed", fuzzing::typed, 5),
+        ("checkpoint", fuzzing::checkpoint, 2),
     ] {
         assert!(
             replay(target, body) >= seeds,
@@ -47,6 +48,7 @@ fn the_targets_reject_garbage_and_truncations_without_panicking() {
         ("control", fuzzing::control),
         ("invitation", fuzzing::invitation),
         ("typed", fuzzing::typed),
+        ("checkpoint", fuzzing::checkpoint),
     ] {
         body(&[]);
         body(&[0xff; 64]);

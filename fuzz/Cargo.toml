@@ -43,3 +43,10 @@ path = "fuzz_targets/typed.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "checkpoint"
+path = "fuzz_targets/checkpoint.rs"
+test = false
+doc = false
+bench = false

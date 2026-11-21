@@ -8,6 +8,7 @@
 | `control` | a control record | an accepted control re-encodes exactly; no transition, recovery, writer claim, envelope or enrollment it carries is admitted by a fixture collection |
 | `invitation` | a scanned invitation or a published offer | an accepted one re-encodes exactly |
 | `typed` | typed recovery words or an invitation code | an accepted one round-trips through its own printed form |
+| `checkpoint` | a checkpoint part or coverage statement (#40) | accepted ones re-encode exactly; a checkpoint assembled from a lone part re-encodes to that part |
 
 The target bodies live in [`matters_sync::fuzzing`](../crates/matters-sync/src/fuzzing.rs), behind the `fuzzing` feature. That way the fuzzer and the stable replay test ([`tests/fuzz_replay.rs`](../crates/matters-sync/tests/fuzz_replay.rs)) run the same code.
 

@@ -98,7 +98,7 @@ Client admission proceeds in stages; no earlier stage implies a later one:
 4. Resolve the epoch key and open AEAD with original H; failure exposes no plaintext and changes no CRDT state. Missing authorized keys remain pending.
 5. Enforce engine/actor/domain bounds, retain original bytes and commit admission, projection and receive progress atomically. Invalid data is quarantined with a non-secret reason and never advances applied progress. Durable received progress and applied progress are distinct.
 
-`snapshot` has exact encoding/signature context, but **must not be imported as authoritative state** until #40's authenticated coverage and tail rules are implemented. A correctly signed snapshot is insufficient. No parser success can bypass this gate.
+`snapshot` has exact encoding/signature context, but **must not be imported as authoritative state** until #40's authenticated coverage and tail rules are implemented. A correctly signed snapshot is insufficient. No parser success can bypass this gate. Its plaintext is a checkpoint part, and a snapshot record stands outside its writer's data chain, with a null predecessor ([SYNC_CHECKPOINTS.md](SYNC_CHECKPOINTS.md), `sync-checkpoint-v0.cddl`).
 
 The transport-independent service contract for #34 requires the following observable behavior. No HTTP library, storage engine, broker, deployment or availability SLA is selected here; each needs its adoption decision before implementation.
 
