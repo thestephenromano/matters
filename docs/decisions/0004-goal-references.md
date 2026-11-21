@@ -1,6 +1,6 @@
 # ADR 0004: refer to goals in the Goals app from projects and repeating tasks
 
-Date: 2026-11-21. Status: **proposed**. It needs agreement from the sync work, from the Goals app (#223) and from the maintainer, recorded on [#211](https://github.com/thestephenromano/matters/issues/211). Parent epic: [#202](https://github.com/thestephenromano/matters/issues/202).
+Date: 2026-11-21. Status: **approved by the maintainer on 2026-11-21**, after the sync work reviewed the merge cases ([#232](https://github.com/thestephenromano/matters/pull/232)). The cross-app contract is a requirement on the Goals app's MVP (#223). Recorded on [#211](https://github.com/thestephenromano/matters/issues/211). Parent epic: [#202](https://github.com/thestephenromano/matters/issues/202).
 
 ## Context
 
