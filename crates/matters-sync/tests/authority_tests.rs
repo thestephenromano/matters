@@ -5,11 +5,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use matters_sync::authority::{
-    device_id, encode, envelope_aad, envelope_info, key_commitment, parse, request_enrollment,
-    root_id, sign, signing_bytes, Authority, Body, Boundary, DeviceKeys, EpochKey, Error, Genesis,
-    Hash, Id, Invitation, InvitationSecret, KemPublicKey, Member, Membership, Message, Result,
-    Route, WriterHandoff, WriterStart, CODE_LENGTH, KEM_PUBLIC_KEY_BYTES, MAX_CONTROL_BYTES,
-    POLICY,
+    device_id, encode, envelope_aad, envelope_info, genesis, key_commitment, parse, recovery_seeds,
+    request_enrollment, root_id, sign, signing_bytes, Authority, Body, Boundary, DeviceKeys,
+    EpochKey, Error, Genesis, Hash, Id, Invitation, InvitationSecret, KemPublicKey, Member,
+    Membership, Message, RecoveryKeys, RecoverySecret, Result, Route, WriterHandoff, WriterStart,
+    CODE_LENGTH, KEM_PUBLIC_KEY_BYTES, MAX_CONTROL_BYTES, POLICY,
 };
 use matters_sync::generate_signing_key;
 use matters_sync::record::{seal, ContentKey, SigningKey, VerificationKey, VERIFICATION_KEY_BYTES};
@@ -702,7 +702,9 @@ fn independent_control_bytes_fingerprints_and_hpke_contexts_match() {
             Body::WriterStart(_) | Body::WriterHandoff(_) => {
                 assert!(p.message.body.writer_claim().is_some())
             }
-            Body::EnrollmentRequest(_) => unreachable!("no golden enrollment vector"),
+            Body::EnrollmentRequest(_) | Body::RootRecovery(_) => {
+                unreachable!("no golden enrollment or recovery vector")
+            }
         }
     }
 }
@@ -1630,4 +1632,437 @@ fn offers_refuse_other_versions_and_noncanonical_encodings() {
         Invitation::parse(&invitation).map(|_| ()),
         Err(Error::Unsupported)
     );
+}
+
+// Recovery after every device is lost (#37).
+
+/// A collection whose root and recovery key come from recovery words, with
+/// `admin` as its first device.
+struct Recoverable {
+    words: String,
+    keys: RecoveryKeys,
+    admin: DeviceKeys,
+    genesis: Vec<u8>,
+    authority: Authority,
+}
+
+fn recoverable() -> Recoverable {
+    let secret = RecoverySecret::new(fresh());
+    let keys = secret.keys(&route()).unwrap();
+    let admin = device();
+    let genesis = genesis(&route(), &keys, &admin, &epoch_key(0), fresh()).unwrap();
+    let authority = Authority::bootstrap(&genesis, route(), keys.root_key()).unwrap();
+    Recoverable {
+        words: secret.words().unwrap(),
+        keys,
+        admin,
+        genesis,
+        authority,
+    }
+}
+
+/// The next membership transition of `authority` as `admin`, same roster.
+fn step(authority: &Authority, admin: &DeviceKeys) -> Message {
+    let epoch = authority.epoch().unwrap() + 1;
+    let generation = authority.generation().unwrap();
+    Message {
+        route: route(),
+        signer: admin.id(),
+        body: Body::Membership(Membership {
+            generation,
+            sequence: authority.sequence().unwrap() + 1,
+            previous: authority.manifest(),
+            roster: authority.members().unwrap(),
+            admin: admin.id(),
+            epoch,
+            recovery_key: authority.recovery().unwrap(),
+            key_commitment: key_commitment(&route(), generation, epoch, &epoch_key(epoch)).unwrap(),
+        }),
+    }
+}
+
+fn recovery_body(message: &mut Message) -> &mut Membership {
+    match &mut message.body {
+        Body::RootRecovery(m) => m,
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn recovery_words_match_the_published_bip39_vectors_and_refuse_bad_input() {
+    // BIP39's reference vectors (trezor/python-mnemonic vectors.json),
+    // English, 256-bit entropy.
+    for (entropy, words) in [
+        (
+            [0x00; 32],
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon art",
+        ),
+        (
+            [0x7f; 32],
+            "legal winner thank year wave sausage worth useful legal winner thank year \
+             wave sausage worth useful legal winner thank year wave sausage worth title",
+        ),
+        (
+            [0x80; 32],
+            "letter advice cage absurd amount doctor acoustic avoid letter advice cage \
+             absurd amount doctor acoustic avoid letter advice cage absurd amount doctor \
+             acoustic bless",
+        ),
+        (
+            [0xff; 32],
+            "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo \
+             zoo zoo zoo zoo vote",
+        ),
+    ] {
+        let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(RecoverySecret::new(entropy).words().unwrap(), words);
+        // Typed back loosely: any case, any whitespace.
+        let typed = format!("  {}\n", words.to_uppercase().replace(' ', " \t "));
+        let parsed = RecoverySecret::from_words(&typed).unwrap();
+        assert_eq!(
+            recovery_seeds(&parsed, &route()).unwrap(),
+            recovery_seeds(&RecoverySecret::new(entropy), &route()).unwrap()
+        );
+    }
+    let zeros = RecoverySecret::new([0; 32]).words().unwrap();
+    for (name, bad) in [
+        ("bad checksum", zeros.replace(" art", " abandon")),
+        ("23 words", zeros.replacen("abandon ", "", 1)),
+        (
+            "12 words",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon about"
+                .into(),
+        ),
+        ("unknown word", zeros.replacen("abandon", "abandonn", 1)),
+        ("empty", String::new()),
+    ] {
+        assert_eq!(
+            RecoverySecret::from_words(&bad).map(|_| ()),
+            Err(Error::Format),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn recovery_seeds_match_independent_known_answers_and_bind_the_route() {
+    // tests/vectors/invitation_kat.py, Python standard library.
+    let secret = RecoverySecret::new(std::array::from_fn(|i| i as u8));
+    let (root, kem) = recovery_seeds(&secret, &route()).unwrap();
+    assert_eq!(
+        hex(&root),
+        "78dd282134c40fa3b8ff0a8b0524b97c872f4722ec60a8f83e67ac44e4e2f162"
+    );
+    assert_eq!(
+        hex(&kem),
+        "62caaa193d194693ac6c853115cee129325ac232f83e9b9aedcab8a2e74aeae1"
+    );
+    let mut elsewhere = route();
+    elsewhere.collection = [9; 16];
+    let (other_root, other_kem) = recovery_seeds(&secret, &elsewhere).unwrap();
+    assert!(other_root != root && other_kem != kem);
+    // The words always define the same keys for a route.
+    let again = secret.keys(&route()).unwrap();
+    let keys = secret.keys(&route()).unwrap();
+    assert_eq!(again.root_id().unwrap(), keys.root_id().unwrap());
+    assert_eq!(again.kem_public_key(), keys.kem_public_key());
+    assert_ne!(
+        secret.keys(&elsewhere).unwrap().root_id().unwrap(),
+        keys.root_id().unwrap()
+    );
+}
+
+#[test]
+fn after_every_device_is_lost_the_words_recover_history_and_start_a_new_generation() {
+    let mut r = recoverable();
+    let b = device();
+    // The collection grows and rotates; the admin keeps a recovery
+    // envelope of every epoch.
+    let mut add = step(&r.authority, &r.admin);
+    let roster = &mut membership(&mut add).roster;
+    roster.push(b.member(false));
+    roster.sort_by_key(|m| m.id);
+    let mut transitions = vec![signed(&add, r.admin.signing_key())];
+    r.authority.apply_membership(&transitions[0]).unwrap();
+    transitions.push(signed(&step(&r.authority, &r.admin), r.admin.signing_key()));
+    r.authority.apply_membership(&transitions[1]).unwrap();
+    let mut bundle = Vec::new();
+    {
+        let mut replay = Authority::bootstrap(&r.genesis, route(), r.keys.root_key()).unwrap();
+        for epoch in 0..3 {
+            if epoch > 0 {
+                replay.apply_membership(&transitions[epoch - 1]).unwrap();
+            }
+            bundle.push(
+                r.authority
+                    .wrap_recovery_key(
+                        &r.admin,
+                        replay.manifest(),
+                        &epoch_key(epoch as u64),
+                        fresh(),
+                    )
+                    .unwrap(),
+            );
+        }
+    }
+    let mut on_b = r.authority.clone();
+    // Every device is lost. From the words, the relay's control records and
+    // the bundle, a new device recovers.
+    let keys = RecoverySecret::from_words(&r.words)
+        .unwrap()
+        .keys(&route())
+        .unwrap();
+    let mut lost = Authority::bootstrap(&r.genesis, route(), keys.root_key()).unwrap();
+    for t in &transitions {
+        lost.apply_membership(t).unwrap();
+    }
+    for (epoch, envelope) in bundle.iter().enumerate() {
+        let key = lost.unwrap_recovery_key(envelope, &keys).unwrap();
+        assert_eq!(key.epoch(), epoch as u64);
+        assert!(is_epoch_key(key.content_key(), epoch as u64));
+        assert_eq!(lost.check_epoch_key(&key).is_ok(), epoch == 2);
+    }
+    let d = device();
+    let first = ContentKey::new([0x3d; 32]);
+    let recovery = lost.recover(&keys, &d, &first, fresh()).unwrap();
+    assert!(lost.apply_recovery(&recovery).unwrap());
+    assert!(!lost.apply_recovery(&recovery).unwrap(), "an exact replay");
+    assert_eq!(lost.generation().unwrap(), 1);
+    assert_eq!(lost.epoch().unwrap(), 3);
+    assert_eq!(lost.members().unwrap(), vec![d.member(true)]);
+    // The new admin distributes the new generation's key as usual.
+    let envelope = lost.wrap_key(&d, d.id(), &first, fresh()).unwrap();
+    let key = lost.unwrap_key(&envelope, &d).unwrap();
+    lost.check_epoch_key(&key).unwrap();
+    // A retained device learns of the recovery and is no longer a member;
+    // the old admin can no longer change membership.
+    assert!(on_b.apply_recovery(&recovery).unwrap());
+    assert_eq!(on_b.manifest(), lost.manifest());
+    assert_eq!(
+        on_b.unwrap_key(&envelope, &b).map(|_| ()),
+        Err(Error::Identity)
+    );
+    let late = signed(&step(&r.authority, &r.admin), r.admin.signing_key());
+    assert_eq!(on_b.apply_membership(&late), Err(Error::Stale));
+    assert_eq!(
+        on_b.apply_membership(&transitions[1]),
+        Ok(false),
+        "an accepted transition replays"
+    );
+    // Its recovery envelopes still open there: recovery reads history.
+    on_b.unwrap_recovery_key(&bundle[0], &keys).unwrap();
+}
+
+#[test]
+fn wrong_words_and_missing_envelopes_fail_safely() {
+    let mut r = recoverable();
+    let first = r
+        .authority
+        .wrap_recovery_key(&r.admin, r.authority.manifest(), &epoch_key(0), fresh())
+        .unwrap();
+    let rotation = signed(&step(&r.authority, &r.admin), r.admin.signing_key());
+    r.authority.apply_membership(&rotation).unwrap();
+    // Another collection's words: another root, another recovery key.
+    let wrong = RecoverySecret::new(fresh()).keys(&route()).unwrap();
+    assert_eq!(
+        Authority::bootstrap(&r.genesis, route(), wrong.root_key()).map(|_| ()),
+        Err(Error::Identity)
+    );
+    assert_eq!(
+        r.authority
+            .recover(&wrong, &device(), &epoch_key(2), fresh())
+            .map(|_| ()),
+        Err(Error::Identity)
+    );
+    assert_eq!(
+        r.authority.unwrap_recovery_key(&first, &wrong).map(|_| ()),
+        Err(Error::Identity)
+    );
+    // The right words open exactly the epochs that have envelopes: a member
+    // envelope is not one, so epoch 1's key is explicitly unrecoverable
+    // until the admin adds its recovery envelope.
+    r.authority.unwrap_recovery_key(&first, &r.keys).unwrap();
+    let member = wrap(&r.authority, &r.admin, r.admin.id(), &epoch_key(1)).unwrap();
+    assert_eq!(
+        r.authority
+            .unwrap_recovery_key(&member, &r.keys)
+            .map(|_| ()),
+        Err(Error::Identity)
+    );
+    // Only the epoch's admin signs recovery envelopes, for a known manifest
+    // and with that epoch's key.
+    let other = device();
+    assert_eq!(
+        r.authority
+            .wrap_recovery_key(&other, r.authority.manifest(), &epoch_key(1), fresh())
+            .map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(
+        r.authority
+            .wrap_recovery_key(&r.admin, [7; 48], &epoch_key(1), fresh())
+            .map(|_| ()),
+        Err(Error::MissingPrevious)
+    );
+    assert_eq!(
+        r.authority
+            .wrap_recovery_key(&r.admin, r.authority.manifest(), &epoch_key(0), fresh())
+            .map(|_| ()),
+        Err(Error::KeyCommitment)
+    );
+    let mut forged = parse(&first).unwrap().message;
+    forged.signer = other.id();
+    if let Body::KeyEnvelope(k) = &mut forged.body {
+        k.authority = other.id();
+    }
+    assert_eq!(
+        r.authority
+            .unwrap_recovery_key(&signed(&forged, other.signing_key()), &r.keys)
+            .map(|_| ()),
+        Err(Error::Unauthorized)
+    );
+    let mut misdated = parse(&first).unwrap().message;
+    if let Body::KeyEnvelope(k) = &mut misdated.body {
+        k.epoch = 1;
+    }
+    assert_eq!(
+        r.authority
+            .unwrap_recovery_key(&signed(&misdated, r.admin.signing_key()), &r.keys)
+            .map(|_| ()),
+        Err(Error::Stale)
+    );
+}
+
+#[test]
+fn recoveries_are_root_signed_ordered_by_generation_and_frozen_when_they_compete() {
+    let mut r = recoverable();
+    let genesis_manifest = r.authority.manifest();
+    let stale_view = r.authority.clone();
+    let rotation = signed(&step(&r.authority, &r.admin), r.admin.signing_key());
+    r.authority.apply_membership(&rotation).unwrap();
+    let d = device();
+    let honest = r
+        .authority
+        .recover(&r.keys, &d, &ContentKey::new([1; 32]), fresh())
+        .unwrap();
+    let base = parse(&honest).unwrap().message;
+    let variant = |change: &dyn Fn(&mut Membership), signer: &SigningKey| {
+        let mut m = base.clone();
+        change(recovery_body(&mut m));
+        signed(&m, signer)
+    };
+    let root = r.keys.signing_key();
+    let other = device();
+    for (name, bytes, error) in [
+        (
+            "signed by the admin",
+            variant(&|_| (), r.admin.signing_key()),
+            Error::Signature,
+        ),
+        (
+            "two members",
+            variant(
+                &|m| {
+                    m.roster.push(other.member(false));
+                    m.roster.sort_by_key(|m| m.id);
+                },
+                root,
+            ),
+            Error::Unsupported,
+        ),
+        (
+            "another recovery key",
+            variant(&|m| m.recovery_key = other.kem_public_key().clone(), root),
+            Error::Unsupported,
+        ),
+        (
+            "a skipped generation",
+            variant(&|m| m.generation = 2, root),
+            Error::Stale,
+        ),
+        (
+            "a skipped epoch",
+            variant(&|m| m.epoch += 1, root),
+            Error::Stale,
+        ),
+        (
+            "a repeated sequence",
+            variant(&|m| m.sequence -= 1, root),
+            Error::Stale,
+        ),
+        (
+            "an unknown previous",
+            variant(&|m| m.previous = [7; 48], root),
+            Error::MissingPrevious,
+        ),
+    ] {
+        let mut a = r.authority.clone();
+        assert_eq!(a.apply_recovery(&bytes), Err(error), "{name}");
+        assert_eq!(a.manifest(), r.authority.manifest(), "{name}: unchanged");
+    }
+    let mut message = base.clone();
+    message.signer = r.admin.id();
+    assert_eq!(
+        r.authority
+            .clone()
+            .apply_recovery(&signed(&message, r.admin.signing_key())),
+        Err(Error::Unauthorized),
+        "only the root recovers"
+    );
+    assert_eq!(
+        r.authority.clone().apply_recovery(&rotation),
+        Err(Error::Unsupported)
+    );
+    // A recoverer whose view stopped at genesis still recovers; the
+    // generation it starts supersedes the later epoch it did not see.
+    let from_genesis = stale_view
+        .recover(&r.keys, &d, &ContentKey::new([2; 32]), fresh())
+        .unwrap();
+    assert_eq!(
+        recovery_body(&mut parse(&from_genesis).unwrap().message).previous,
+        genesis_manifest
+    );
+    let mut a = r.authority.clone();
+    assert!(a.apply_recovery(&from_genesis).unwrap());
+    assert_eq!(a.generation().unwrap(), 1);
+    // A second, different recovery to generation 1 freezes, keeping both;
+    // a recovery to generation 2 is the way out.
+    assert_eq!(a.apply_recovery(&honest), Err(Error::Fork));
+    assert!(a.is_forked());
+    assert_eq!(a.epoch(), Err(Error::Fork));
+    let mut frozen_view = r.authority.clone();
+    frozen_view.apply_recovery(&from_genesis).unwrap();
+    let next = frozen_view
+        .recover(&r.keys, &d, &ContentKey::new([3; 32]), fresh())
+        .unwrap();
+    assert!(a.apply_recovery(&next).unwrap());
+    assert!(!a.is_forked());
+    assert_eq!(a.generation().unwrap(), 2);
+}
+
+#[test]
+fn a_recovery_clears_a_membership_fork() {
+    let mut r = recoverable();
+    let one = signed(&step(&r.authority, &r.admin), r.admin.signing_key());
+    let two = signed(&step(&r.authority, &r.admin), r.admin.signing_key());
+    r.authority.apply_membership(&one).unwrap();
+    assert_eq!(r.authority.apply_membership(&two), Err(Error::Fork));
+    let recovery = r
+        .authority
+        .recover(&r.keys, &device(), &ContentKey::new([4; 32]), fresh())
+        .unwrap();
+    assert!(r.authority.apply_recovery(&recovery).unwrap());
+    assert!(!r.authority.is_forked());
+    assert_eq!(r.authority.generation().unwrap(), 1);
+}
+
+#[test]
+fn recovery_secrets_and_keys_never_print() {
+    let secret = RecoverySecret::new([0xab; 32]);
+    assert_eq!(format!("{secret:?}"), "RecoverySecret(redacted)");
+    let keys = secret.keys(&route()).unwrap();
+    assert_eq!(format!("{keys:?}"), "RecoveryKeys(redacted)");
 }

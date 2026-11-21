@@ -132,6 +132,10 @@ pub struct KeyEnvelope {
 pub enum Body {
     Genesis(Box<Genesis>),
     Membership(Membership),
+    /// Signed by the root after every device is lost: starts the next
+    /// membership generation with one admin (docs/SYNC_KEY_DISTRIBUTION.md
+    /// "Recovery"). Same body as a membership transition.
+    RootRecovery(Membership),
     WriterStart(WriterStart),
     WriterHandoff(WriterHandoff),
     KeyEnvelope(KeyEnvelope),
@@ -144,6 +148,7 @@ impl Body {
         match self {
             Self::Genesis(_) => "genesis",
             Self::Membership(_) => "membership",
+            Self::RootRecovery(_) => "root_recovery",
             Self::WriterStart(_) => "writer_start",
             Self::WriterHandoff(_) => "writer_handoff",
             Self::KeyEnvelope(_) => "key_envelope",
@@ -259,7 +264,7 @@ pub fn signing_bytes(message: &Message) -> Result<Vec<u8>> {
             write_optional(&mut e, &g.checkpoint)?;
             e.bytes(&g.key_commitment)?;
         }
-        Body::Membership(m) => {
+        Body::Membership(m) | Body::RootRecovery(m) => {
             e.array(9)?
                 .u64(m.generation)?
                 .u64(m.sequence)?
@@ -549,6 +554,7 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedControl<'_>> {
     let body = match kind {
         "genesis" => Body::Genesis(Box::new(r.genesis()?)),
         "membership" => Body::Membership(r.membership()?),
+        "root_recovery" => Body::RootRecovery(r.membership()?),
         "writer_start" => Body::WriterStart(r.writer_start()?),
         "writer_handoff" => Body::WriterHandoff(r.writer_handoff()?),
         "key_envelope" => Body::KeyEnvelope(r.key_envelope()?),

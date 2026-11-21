@@ -22,6 +22,10 @@ libcrux-hkdf = "=0.0.9"
 libcrux-hmac = "=0.0.9"
 # Constant-time tag comparison; already compiled in through hpke-rs.
 subtle = "=2.6.1"
+# Recovery words (#37, decided 2026-11-21): BIP39 entropy to English words
+# and back, checksum included, without BIP39's PBKDF2 seed. CC0-1.0. Its
+# zeroize feature wipes parsed mnemonics; zeroize is already compiled in.
+bip39 = { version = "=3.0.0", default-features = false, features = ["zeroize"] }
 thiserror = "2.0"
 
 [dev-dependencies]
