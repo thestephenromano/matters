@@ -10,9 +10,12 @@ description = "Post-quantum authenticated sync records for Matters (ADR 0002, #3
 [dependencies]
 # Exact pins approved for production on 2026-11-20 (ADR 0002, #36).
 minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
+hpke-rs = { version = "=0.8.0", default-features = false, features = ["std", "libcrux", "draft-ietf-hpke-pq"] }
 hpke-rs-crypto = "=0.8.0"
 hpke-rs-libcrux = { version = "=0.8.0", default-features = false, features = ["std", "sys-rng", "draft-ietf-hpke-pq"] }
 libcrux-ml-dsa = { version = "=0.0.11", default-features = false, features = ["std", "mldsa65"] }
+# SHA-384 record and chain hashes, from the same provider family.
+libcrux-sha2 = "=0.0.9"
 thiserror = "2.0"
 
 [dev-dependencies]
