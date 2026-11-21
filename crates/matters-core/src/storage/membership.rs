@@ -242,6 +242,20 @@ pub(super) fn apply(authority: &mut Authority, bytes: &[u8]) -> authority::Resul
         Body::Membership(_) => authority.apply_membership(bytes),
         Body::RootRecovery(_) => authority.apply_recovery(bytes),
         Body::WriterStart(_) | Body::WriterHandoff(_) => {
+            // A device rereading its log meets claims it admitted under
+            // earlier epochs: the same step again changes nothing. A
+            // different definition still goes to the authority, which
+            // freezes the lineage.
+            let claim = parsed.message.body.writer_claim();
+            let admitted = claim.and_then(|c| {
+                authority
+                    .writer_history(HOME_DOCUMENT, c.incarnation)
+                    .ok()
+                    .map(|h| h.device == c.device && h.predecessor == c.previous)
+            });
+            if admitted == Some(true) {
+                return Ok(false);
+            }
             authority.admit_writer(bytes, HOME_DOCUMENT)
         }
         _ => Err(authority::Error::Unsupported),
@@ -591,9 +605,7 @@ impl Database {
                 // Only a new epoch needs this device's envelope of its key;
                 // a writer claim changes no epoch.
                 if standing == SyncStanding::Active && before.manifest() != manifest {
-                    let envelope = envelope.ok_or_else(|| {
-                        MattersError::Validation("the new epoch's key envelope is missing".into())
-                    })?;
+                    let envelope = envelope.ok_or(MattersError::EnvelopeMissing)?;
                     joined.authority.unwrap_key(envelope, &joined.device)?;
                     tx.execute(
                         "INSERT OR REPLACE INTO sync_envelopes (manifest, bytes) VALUES (?1, ?2)",

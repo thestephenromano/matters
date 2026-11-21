@@ -203,7 +203,7 @@ fn transitions_commit_with_their_envelope_and_survive_restart() {
     let controls = db.sync_controls().unwrap().len();
     assert!(matches!(
         db.apply_control(&transition, None),
-        Err(MattersError::Validation(_))
+        Err(MattersError::EnvelopeMissing)
     ));
     assert_eq!(db.sync_controls().unwrap().len(), controls);
     assert_eq!(db.sync_membership().unwrap().epoch, Some(0));

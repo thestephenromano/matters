@@ -14,6 +14,7 @@ pub mod checkpoint;
 #[doc(hidden)]
 pub mod fuzzing;
 pub mod record;
+pub mod store;
 pub mod wire;
 
 pub use authority::{Authority, DeviceKeys, EpochKey, Route};
