@@ -217,12 +217,19 @@ Item {
         // Translations a third longer still fit: nothing in the sidebar or
         // the popovers and dialogs runs past their edges, left to right or
         // right to left.
-        function test_long_translations_fit_data() {
-            return [{ tag: "left to right", catalog: "pseudo" }, { tag: "right to left", catalog: "pseudo_rtl" }];
+        // Both directions in one test (ci/ui-lane.sh counts test functions,
+        // so no data rows).
+        function test_long_translations_fit() {
+            const found = [];
+            for (const [direction, catalog] of [["left to right", "pseudo"], ["right to left", "pseudo_rtl"]])
+                fitting(catalog, direction, found);
+            for (const line of found)
+                warn(line);
+            verify(found.length === 0, found.length + " overflow, listed above; the first: " + found[0]);
         }
 
-        function test_long_translations_fit(data) {
-            verify(translations.useCatalog(data.catalog));
+        function fitting(catalog, direction, found) {
+            verify(translations.useCatalog(catalog));
             try {
                 controller.selectView("inbox");
                 view.captureTask(name("fit"));
@@ -235,7 +242,8 @@ Item {
                 }
                 verify(id !== "", "the task is listed");
                 const sidebar = findChild(view, "sidebar");
-                const found = overflowing(sidebar, sidebar, []).map(s => "sidebar: " + s);
+                for (const s of overflowing(sidebar, sidebar, []))
+                    found.push(direction + ", sidebar: " + s);
                 const popups = [
                     ["whenPopup", () => view.openWhenFor(id), "When"],
                     ["whenPopup", () => view.openDeadlineFor(id), "Deadline"],
@@ -256,13 +264,10 @@ Item {
                     waitForRendering(popup.contentItem);
                     const box = popup.background || popup.contentItem;
                     for (const s of overflowing(popup.contentItem, box, []))
-                        found.push(what + ": " + s);
+                        found.push(direction + ", " + what + ": " + s);
                     popup.close();
                     tryVerify(() => !popup.visible, 2000);
                 }
-                for (const line of found)
-                    warn(line);
-                verify(found.length === 0, found.length + " overflow, listed above; the first: " + found[0]);
             } finally {
                 translations.useCatalog("pseudo");
             }
