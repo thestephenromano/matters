@@ -4,9 +4,12 @@
 //! verifies and opens them with the approved suite. [`authority`] admits the
 //! signed control messages that say who may write and which content key an
 //! epoch uses: genesis, membership, writer admission and key envelopes.
-//! Chains, durable receive and domain checks belong to the receiver.
+//! [`checkpoint`] encodes and assembles checkpoints: engine snapshots with a
+//! statement of what they cover (#40). Chains, durable receive and domain
+//! checks belong to the receiver.
 
 pub mod authority;
+pub mod checkpoint;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzzing;

@@ -44,4 +44,11 @@ for name, words in [
     ("zoo", "zoo " * 23 + "vote"),
 ]:
     write("typed", name, words.encode())
+kat = subprocess.run(
+    [sys.executable, "-I", str(ROOT / "crates/matters-sync/tests/vectors/checkpoint_kat.py")],
+    check=True, capture_output=True, text=True,
+).stdout
+answers = dict(line.split(None, 1) for line in kat.splitlines() if line.strip())
+write("checkpoint", "part0", bytes.fromhex(answers["small-part0"].strip()))
+write("checkpoint", "coverage", bytes.fromhex(answers["small-coverage"].strip()))
 print("seeded", sum(1 for _ in CORPUS.rglob("*") if _.is_file()), "inputs")

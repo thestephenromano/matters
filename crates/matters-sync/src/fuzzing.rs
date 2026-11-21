@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use crate::authority::{
     self, Authority, DeviceKeys, Invitation, InvitationSecret, RecoveryKeys, RecoverySecret, Route,
 };
-use crate::{record, wire, ContentKey, VerificationKey};
+use crate::{checkpoint, record, wire, ContentKey, VerificationKey};
 
 const DOCUMENT: [u8; 16] = [4; 16];
 
@@ -80,6 +80,38 @@ pub fn record(data: &[u8]) {
         record::verify(parsed, &fixture().author).is_err(),
         "no fuzzed record carries the fixture's signature"
     );
+}
+
+/// A checkpoint part, or a coverage statement on its own: whatever parses is
+/// canonical, and assembling a lone part never panics.
+pub fn checkpoint(data: &[u8]) {
+    if let Ok(coverage) = checkpoint::Coverage::parse(data) {
+        assert_eq!(
+            coverage.encode().expect("accepted coverage re-encodes"),
+            data,
+            "accepted coverage is canonical"
+        );
+    }
+    let Ok(part) = checkpoint::parse_part(data) else {
+        return;
+    };
+    if let Some(bytes) = part.coverage {
+        if let Ok(coverage) = checkpoint::Coverage::parse(bytes) {
+            let _ = coverage.follows(&coverage);
+        }
+    }
+    let sealed = checkpoint::Sealed {
+        author: [1; 48],
+        incarnation: [1; 32],
+        epoch: 0,
+    };
+    if let Ok(checkpoint::Assembled::Complete(c)) = checkpoint::assemble(&[(sealed, data)]) {
+        assert_eq!(
+            c.parts().expect("an assembled checkpoint re-encodes"),
+            [data],
+            "an assembled checkpoint is canonical"
+        );
+    }
 }
 
 /// A control record: structure and canonical bytes, then every authority
