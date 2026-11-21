@@ -7,7 +7,7 @@ use std::process::Command;
 
 use jiff::civil::date;
 use matters_core::repeat::{Frequency, RepeatRule};
-use matters_core::storage::membership::MemoryKeyStore;
+use matters_core::storage::membership::{DeviceSeeds, KeyStore, MemoryKeyStore, SyncStanding};
 use matters_core::{
     Area, ChecklistItem, Database, Heading, Home, Outcome, Project, Schedule, Tag, Tagged, Task,
 };
@@ -311,46 +311,97 @@ fn a_device_with_its_own_data_cannot_join_without_an_explicit_import() {
     assert!(!b.sync_enabled());
 }
 
-/// Child process for the crash test: migrate, crashing before the commit.
+/// A key store in a file, so keys stored before a crash survive it, as the
+/// platform keyring's do.
+struct FileKeyStore(std::path::PathBuf);
+
+impl KeyStore for FileKeyStore {
+    fn load(&self, name: &str) -> matters_core::Result<Option<DeviceSeeds>> {
+        match std::fs::read(self.0.join(name.replace('/', "_"))) {
+            Ok(bytes) => Ok(Some(DeviceSeeds::from_bytes(&bytes)?)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn store(&self, name: &str, seeds: &DeviceSeeds) -> matters_core::Result<()> {
+        std::fs::write(self.0.join(name.replace('/', "_")), seeds.to_bytes()).unwrap();
+        Ok(())
+    }
+}
+
+/// Child process for the crash test: migrate, crashing at
+/// `MATTERS_CRASH_AT`.
 #[test]
 #[ignore]
 fn migration_crash_worker() {
     let Ok(path) = std::env::var("MATTERS_CRASH_DB") else {
         return;
     };
+    let keys = FileKeyStore(std::env::var("MATTERS_CRASH_KEYS").unwrap().into());
     let db = Database::open(&path).unwrap();
-    db.create_collection(&MemoryKeyStore::default(), route())
-        .unwrap();
+    db.create_collection(&keys, route()).unwrap();
     unreachable!("the crash point exits the process");
 }
 
 #[test]
-fn a_crash_during_migration_leaves_the_original_and_can_be_redone() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("matters.db");
-    let before = {
+fn a_crash_at_each_migration_boundary_leaves_the_original_or_the_whole_migration() {
+    for point in [
+        "collection-after-backup",
+        "collection-before-commit",
+        "collection-after-commit",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("matters.db");
+        let keydir = dir.path().join("keys");
+        std::fs::create_dir(&keydir).unwrap();
+        let before = {
+            let db = Database::open(&path).unwrap();
+            representative(&db);
+            shown(&db)
+        };
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "migration_crash_worker",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("MATTERS_CRASH_DB", &path)
+            .env("MATTERS_CRASH_KEYS", &keydir)
+            .env("MATTERS_CRASH_AT", point)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(86), "{point}");
         let db = Database::open(&path).unwrap();
-        representative(&db);
-        shown(&db)
-    };
-    let status = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "migration_crash_worker",
-            "--exact",
-            "--ignored",
-            "--nocapture",
-        ])
-        .env("MATTERS_CRASH_DB", &path)
-        .env("MATTERS_CRASH_AT", "collection-before-commit")
-        .status()
-        .unwrap();
-    assert_eq!(status.code(), Some(86));
-    let db = Database::open(&path).unwrap();
-    assert!(!db.sync_enabled(), "nothing half-converted");
-    assert_eq!(shown(&db), before);
-    db.create_collection(&MemoryKeyStore::default(), route())
-        .unwrap();
-    assert_eq!(shown(&db), before);
+        assert_eq!(shown(&db), before, "{point}: the views are the original's");
+        // The backup was taken before anything changed, whichever point.
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".pre-sync-"))
+            .collect();
+        assert_eq!(backups.len(), 1, "{point}: one backup");
+        let backup = Database::open(backups[0].path()).unwrap();
+        assert!(!backup.sync_enabled());
+        assert_eq!(
+            shown(&backup),
+            before,
+            "{point}: the backup is the original"
+        );
+        let keys = FileKeyStore(keydir.clone());
+        if point == "collection-after-commit" {
+            // Committed whole: the device resumes as the collection's first
+            // member, with its keys, and its rows are its records.
+            assert!(db.sync_enabled(), "{point}");
+            assert_eq!(db.resume_sync(&keys).unwrap(), SyncStanding::Active);
+            assert!(!db.outgoing_records().unwrap().is_empty());
+        } else {
+            // Nothing half-converted; migrating again succeeds.
+            assert!(!db.sync_enabled(), "{point}: nothing half-converted");
+            db.create_collection(&keys, route()).unwrap();
+            assert_eq!(shown(&db), before, "{point}");
+        }
+    }
 }
 
 #[test]

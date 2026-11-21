@@ -416,6 +416,7 @@ impl Database {
                 let backup = format!("{path}.pre-sync-{}.db", crate::clock::now_millis());
                 conn.execute("VACUUM INTO ?1", params![backup])?;
             }
+            super::sync::crash_point("collection-after-backup");
             let tx = conn.transaction()?;
             let before = super::import::before(&tx)?;
             let mut doc = super::sync::turn_on(&tx)?;
@@ -460,6 +461,7 @@ impl Database {
             super::import::verify(&tx, &doc, &before)?;
             super::sync::crash_point("collection-before-commit");
             tx.commit()?;
+            super::sync::crash_point("collection-after-commit");
             *engine = Some(doc);
             sync.sealing = Some(sealing);
             sync.required = true;
