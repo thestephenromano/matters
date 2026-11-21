@@ -224,6 +224,22 @@ Matters is designed to be operated with minimal mouse reliance.
 | `Escape` | Task list, task editor | Closes the open task, then clears the selection; returns focus to the list |
 | `Ctrl + Z` | After moving to Trash, deleting a heading or checklist item, or acting on several tasks | Undoes, while the Undo notice shows. An action on several selected tasks (completing, canceling, trashing, scheduling, setting a deadline, moving, tagging or dragging them) is undone at once, each task put back exactly as it was (`matters_core::TaskSnapshot`) |
 | `Ctrl + Up` / `Ctrl + Down`| Selected task | Reorders task vertically within the list. In Today, moving past the This Evening heading moves the task into or out of This Evening; in a project, moving past a heading files the task under it, or above the headings (dragging does the same) |
+| `Tab` / `Shift + Tab` | Anywhere | Moves through the controls, the sidebar's entries included. `Space` or `Enter` opens the focused entry. Entries Matters draws itself show a ring in the accent colour while focused |
+
+### Accessibility
+
+Matters can be used with a screen reader and with the keyboard alone (#74):
+
+* **Names:** every control a screen reader can act on has an accessible name, role and state. That includes the sidebar's entries (list items, selected when open), task rows (list items with their state), their circles (check boxes named "Complete …"), icon buttons and text fields.
+* **The list cursor:** the task list keeps the keyboard focus and moves its own cursor with `Up` and `Down`. The row under the cursor tells the screen reader it is focused, so the reader follows it.
+* **Keyboard reach:** every control can be reached with the keyboard. List and menu items are reached through their list or menu, with the arrow keys.
+* **Contrast:** the palette is one set of tokens in `MainView.qml`. In light and in dark mode, every text colour meets WCAG 2.2 AA (4.5:1) on every surface it is drawn on, and the accent meets 3:1 against all of them as a focus ring, tick or selection mark.
+
+These are checked by tests:
+
+* `tst_accessibility.qml` walks Qt's accessibility tree, the one Orca reads over AT-SPI, in every view and with every dialog and popover open. It fails if a control has no name, if the keyboard can't reach one, or if something clickable is hidden from the screen reader. The tree is reported by the test-only `AccessibilityProbe`.
+* `tst_contrast.qml` computes the ratio of every pair in light and in dark.
+* `qml_lint` fails on a colour literal outside the palette.
 
 ---
 

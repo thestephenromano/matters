@@ -158,13 +158,13 @@ Item {
 
     // The fixed views, in sidebar order; Quick Find finds them by name too.
     readonly property var fixedViews: [
-        { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: "#339AF0" },
-        { id: "today", title: "Today", icon: "today", count: controller.todayCount, color: "#FCC419" },
-        { id: "upcoming", title: "Upcoming", icon: "upcoming", count: controller.upcomingCount, color: "#FF6B6B" },
-        { id: "anytime", title: "Anytime", icon: "anytime", count: controller.anytimeCount, color: "#20C997" },
-        { id: "someday", title: "Someday", icon: "someday", count: controller.somedayCount, color: "#FAB005" },
-        { id: "logbook", title: "Logbook", icon: "logbook", count: controller.logbookCount, color: "#51CF66" },
-        { id: "trash", title: "Trash", icon: "trash", count: 0, color: "#868E96" }
+        { id: "inbox", title: "Inbox", icon: "inbox", count: controller.inboxCount, color: root.viewColors.inbox },
+        { id: "today", title: "Today", icon: "today", count: controller.todayCount, color: root.viewColors.today },
+        { id: "upcoming", title: "Upcoming", icon: "upcoming", count: controller.upcomingCount, color: root.viewColors.upcoming },
+        { id: "anytime", title: "Anytime", icon: "anytime", count: controller.anytimeCount, color: root.viewColors.anytime },
+        { id: "someday", title: "Someday", icon: "someday", count: controller.somedayCount, color: root.viewColors.someday },
+        { id: "logbook", title: "Logbook", icon: "logbook", count: controller.logbookCount, color: root.viewColors.logbook },
+        { id: "trash", title: "Trash", icon: "trash", count: 0, color: root.viewColors.trash }
     ]
 
     // Every tag, parents before children, with its depth (#57).
@@ -249,16 +249,46 @@ Item {
     property bool sidebarShown: true
     readonly property bool isDark: appearance === "dark"
         || (appearance === "system" && Application.styleHints.colorScheme === Qt.ColorScheme.Dark)
+    // The palette (#74). Every colour Matters draws is one of these, in
+    // light and in dark. Text colours meet WCAG 2.2 AA (4.5:1) on every
+    // surface they are drawn on, and the accent, which also marks focus and
+    // ticked boxes, 3:1 on all of them; tst_contrast.qml checks each pair.
+    // A colour literal anywhere else in the QML fails qml_lint.
+    // Surfaces.
     readonly property color colBg: isDark ? "#1A1B1E" : "#FFFFFF"
     readonly property color colSidebarBg: isDark ? "#141517" : "#F7F8FA"
     readonly property color colSidebarHover: isDark ? "#25262B" : "#EBECEF"
     readonly property color colSidebarActive: isDark ? "#2C2E33" : "#E2E4E8"
-    readonly property color colTextPrimary: isDark ? "#F8F9FA" : "#1A1B1E"
-    readonly property color colTextSecondary: isDark ? "#909296" : "#868E96"
-    readonly property color colAccent: "#228BE6"
-    readonly property color colBorder: isDark ? "#2C2E33" : "#E9ECEF"
     readonly property color colCardBg: isDark ? "#202124" : "#FFFFFF"
-    readonly property color colEvening: "#FAB005" // Warm gold for evening
+    readonly property color colRowHover: isDark ? "#25262B" : "#F8F9FA"
+    readonly property color colRowSelected: isDark ? "#1C3B5A" : "#D0E4F7"
+    readonly property color colChip: isDark ? "#2C2E33" : "#E9ECEF"
+    readonly property color colBadge: isDark ? "#2C2E33" : "#DEE2E6"
+    readonly property color colField: isDark ? "#25262B" : "#FFFFFF"
+    readonly property color colControl: isDark ? "#2C2E33" : "#F1F3F5"
+    readonly property color colInputBar: isDark ? "#25262B" : "#F1F3F5"
+    readonly property color colDangerBg: isDark ? "#3B1F1F" : "#FFE3E3"
+    readonly property color colEveningBg: isDark ? "#382D16" : "#FFF3BF"
+    readonly property color colTooltipBg: isDark ? "#373A40" : "#25262B"
+    readonly property color colInverseBg: isDark ? "#E9ECEF" : "#212529"
+    // Text, and what is drawn like it.
+    readonly property color colTextPrimary: isDark ? "#F8F9FA" : "#1A1B1E"
+    readonly property color colTextSecondary: isDark ? "#A0A2A5" : "#5E656C"
+    readonly property color colAccent: isDark ? "#4DABF7" : "#1864AB"
+    // On a fill of the accent: a tick, a selected count.
+    readonly property color colOnAccent: isDark ? "#101113" : "#FFFFFF"
+    readonly property color colDanger: isDark ? "#FFA8A8" : "#C02828"
+    readonly property color colEvening: isDark ? "#FAB005" : "#845D03" // Warm gold for evening
+    readonly property color colTooltipText: "#F8F9FA"
+    readonly property color colInverseText: isDark ? "#212529" : "#F8F9FA"
+    // Lines that only separate or frame, which nothing needs to read.
+    readonly property color colBorder: isDark ? "#2C2E33" : "#E9ECEF"
+    readonly property color colRowSelectedBorder: isDark ? "#2F5F8F" : "#A5C8EC"
+    // Each list's own colour, for its icon beside its name.
+    readonly property var viewColors: ({
+        inbox: "#339AF0", today: "#FCC419", upcoming: "#FF6B6B", anytime: "#20C997",
+        someday: "#FAB005", logbook: "#51CF66", trash: "#868E96"
+    })
 
     // Controls (buttons, fields, menus, tooltips) take their colours from
     // this palette, built from the colours above, rather than from the
@@ -266,15 +296,15 @@ Item {
     palette {
         window: colCardBg
         windowText: colTextPrimary
-        base: isDark ? "#25262B" : "#FFFFFF"
+        base: colField
         alternateBase: colSidebarBg
         text: colTextPrimary
         placeholderText: colTextSecondary
-        button: isDark ? "#2C2E33" : "#F1F3F5"
+        button: colControl
         buttonText: colTextPrimary
-        brightText: "#FFFFFF"
+        brightText: colOnAccent
         highlight: colAccent
-        highlightedText: "#FFFFFF"
+        highlightedText: colOnAccent
         accent: colAccent
         link: colAccent
         light: isDark ? "#373A40" : "#FFFFFF"
@@ -282,9 +312,10 @@ Item {
         mid: isDark ? "#3A3C42" : "#CED4DA"
         dark: isDark ? "#101113" : "#ADB5BD"
         shadow: "#000000"
-        toolTipBase: isDark ? "#373A40" : "#25262B"
-        toolTipText: "#F8F9FA"
+        toolTipBase: colTooltipBg
+        toolTipText: colTooltipText
     }
+    // End of the palette.
     // Popups (menus, dialogs, popovers, tooltips) take their palette from
     // the window rather than from the item that declares them.
     Binding {
@@ -1291,6 +1322,15 @@ Item {
 
                 // Quick Find Trigger Button
                 Rectangle {
+                    objectName: "quickFindButton"
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Quick Find"
+                    Accessible.description: "Ctrl+K"
+                    Accessible.onPressAction: quickFindDialog.open()
+                    Keys.onSpacePressed: quickFindDialog.open()
+                    Keys.onReturnPressed: quickFindDialog.open()
+                    Keys.onEnterPressed: quickFindDialog.open()
                     Layout.fillWidth: true
                     Layout.preferredHeight: 34
                     radius: 6
@@ -1325,6 +1365,10 @@ Item {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: quickFindDialog.open()
                     }
+
+                    FocusRing {
+                        color: root.colAccent
+                    }
                 }
 
                 // Core GTD Navigation
@@ -1338,6 +1382,16 @@ Item {
                         delegate: Rectangle {
                             id: navItem
                             objectName: "nav-" + modelData.id
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.ListItem
+                            Accessible.name: navItem.modelData.title
+                            Accessible.selectable: true
+                            Accessible.selected: navItem.isSelected
+                            Accessible.onPressAction: controller.selectView(navItem.modelData.id)
+                            Keys.onSpacePressed: controller.selectView(navItem.modelData.id)
+                            Keys.onReturnPressed: controller.selectView(navItem.modelData.id)
+                            Keys.onEnterPressed: controller.selectView(navItem.modelData.id)
+                            Accessible.description: navItem.modelData.count > 0 ? navItem.modelData.count + " open" : ""
                             required property var modelData
                             Layout.fillWidth: true
                             height: 32
@@ -1376,7 +1430,7 @@ Item {
                                     Layout.preferredHeight: 18
                                     Layout.preferredWidth: Math.max(18, countText.contentWidth + 10)
                                     radius: 9
-                                    color: navItem.isSelected ? root.colAccent : (root.isDark ? "#2C2E33" : "#DEE2E6")
+                                    color: navItem.isSelected ? root.colAccent : root.colBadge
 
                                     Text {
                                         id: countText
@@ -1384,7 +1438,7 @@ Item {
                                         text: navItem.modelData.count.toString()
                                         font.pixelSize: 11
                                         font.weight: Font.DemiBold
-                                        color: navItem.isSelected ? "#FFFFFF" : root.colTextSecondary
+                                        color: navItem.isSelected ? root.colOnAccent : root.colTextSecondary
                                     }
                                 }
                             }
@@ -1395,6 +1449,10 @@ Item {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: controller.selectView(navItem.modelData.id)
+                            }
+
+                            FocusRing {
+                                color: root.colAccent
                             }
                         }
                     }
@@ -1423,6 +1481,7 @@ Item {
 
                     ToolButton {
                         objectName: "tagsButton"
+                        Accessible.name: "Tags"
                         icon.width: 16
                         contentItem: Icon {
                             name: "tag"
@@ -1450,6 +1509,7 @@ Item {
 
                     ToolButton {
                         objectName: "newContainerButton"
+                        Accessible.name: "New Project or Area"
                         icon.width: 16
                         contentItem: Icon {
                             name: "plus"
@@ -1507,6 +1567,15 @@ Item {
                                     Rectangle {
                                         id: areaRow
                                         objectName: "areaItem"
+                                        activeFocusOnTab: true
+                                        Accessible.role: Accessible.ListItem
+                                        Accessible.name: areaBlock.modelData.title
+                                        Accessible.selectable: true
+                                        Accessible.selected: areaRow.isSelected
+                                        Accessible.onPressAction: controller.selectArea(areaBlock.modelData.id)
+                                        Keys.onSpacePressed: controller.selectArea(areaBlock.modelData.id)
+                                        Keys.onReturnPressed: controller.selectArea(areaBlock.modelData.id)
+                                        Keys.onEnterPressed: controller.selectArea(areaBlock.modelData.id)
                                         readonly property string areaTitle: areaBlock.modelData.title
                                         readonly property bool isSelected: controller.currentView === "area"
                                             && controller.currentAreaId === areaBlock.modelData.id
@@ -1548,6 +1617,10 @@ Item {
                                             onClicked: controller.selectArea(areaBlock.modelData.id)
                                         }
 
+                                        FocusRing {
+                                            color: root.colAccent
+                                        }
+
                                         // Drag grip: reorders the areas (#164).
                                         Item {
                                             objectName: "areaGrip"
@@ -1586,6 +1659,15 @@ Item {
                                         delegate: Rectangle {
                                             id: areaProject
                                             objectName: "areaProjectItem"
+                                            activeFocusOnTab: true
+                                            Accessible.role: Accessible.ListItem
+                                            Accessible.name: areaProject.modelData.title
+                                            Accessible.selectable: true
+                                            Accessible.selected: areaProject.isSelected
+                                            Accessible.onPressAction: controller.selectProject(areaProject.modelData.id)
+                                            Keys.onSpacePressed: controller.selectProject(areaProject.modelData.id)
+                                            Keys.onReturnPressed: controller.selectProject(areaProject.modelData.id)
+                                            Keys.onEnterPressed: controller.selectProject(areaProject.modelData.id)
                                             required property var modelData
                                             readonly property string projectTitle: modelData.title
                                             readonly property bool isSelected: controller.currentView === "project"
@@ -1631,6 +1713,10 @@ Item {
                                                 hoverEnabled: true
                                                 cursorShape: Qt.PointingHandCursor
                                                 onClicked: controller.selectProject(areaProject.modelData.id)
+                                            }
+
+                                            FocusRing {
+                                                color: root.colAccent
                                             }
 
                                             // Drag grip, as for projects with no
@@ -1683,6 +1769,15 @@ Item {
                         delegate: Rectangle {
                             id: projItem
                             objectName: "projectItem"
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.ListItem
+                            Accessible.name: projItem.modelData.title
+                            Accessible.selectable: true
+                            Accessible.selected: projItem.isSelected
+                            Accessible.onPressAction: controller.selectProject(projItem.modelData.id)
+                            Keys.onSpacePressed: controller.selectProject(projItem.modelData.id)
+                            Keys.onReturnPressed: controller.selectProject(projItem.modelData.id)
+                            Keys.onEnterPressed: controller.selectProject(projItem.modelData.id)
                             required property var modelData
                             width: projectsList.width
                             height: 30
@@ -1726,6 +1821,10 @@ Item {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: controller.selectProject(projItem.modelData.id)
+                            }
+
+                            FocusRing {
+                                color: root.colAccent
                             }
 
                             // Drag grip, above the row's click area so it sees the
@@ -1779,6 +1878,7 @@ Item {
 
                     ToolButton {
                         objectName: "sidebarToggle"
+                        Accessible.name: (root.sidebarShown ? "Hide" : "Show") + " the sidebar"
                         focusPolicy: Qt.NoFocus
                         contentItem: Icon {
                             name: "sidebar"
@@ -1859,7 +1959,7 @@ Item {
                             bottomPadding: 3
                             background: Rectangle {
                                 radius: 9
-                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                color: root.colChip
                             }
                         }
                     }
@@ -1903,6 +2003,7 @@ Item {
                     ToolButton {
                         id: containerMenuButton
                         objectName: "containerMenuButton"
+                        Accessible.name: controller.currentView === "area" ? "Area actions" : "Project actions"
                         contentItem: Icon {
                             name: "more"
                             size: 20
@@ -2021,7 +2122,7 @@ Item {
                     Layout.fillWidth: true
                     implicitHeight: errorRow.implicitHeight + 16
                     radius: 8
-                    color: root.isDark ? "#3B1F1F" : "#FFE3E3"
+                    color: root.colDangerBg
 
                     RowLayout {
                         id: errorRow
@@ -2031,7 +2132,7 @@ Item {
 
                         Text {
                             text: errorBanner.message
-                            color: root.isDark ? "#FFA8A8" : "#C92A2A"
+                            color: root.colDanger
                             font.pixelSize: 13
                             wrapMode: Text.Wrap
                             Layout.fillWidth: true
@@ -2041,10 +2142,11 @@ Item {
                             contentItem: Icon {
                                 name: "close"
                                 size: 14
-                                color: root.isDark ? "#FFA8A8" : "#C92A2A"
+                                color: root.colDanger
                             }
                             ToolTip.visible: hovered
                             ToolTip.text: "Dismiss"
+                            Accessible.name: "Dismiss"
                             visible: controller.errorMessage !== ""
                             onClicked: controller.clearError()
                         }
@@ -2108,7 +2210,7 @@ Item {
                         controller: controller
                         textPrimary: root.colTextPrimary
                         textSecondary: root.colTextSecondary
-                        chipColor: root.isDark ? "#2C2E33" : "#E9ECEF"
+                        chipColor: root.colChip
                         highlightColor: root.colSidebarActive
                         onLeave: taskListView.forceActiveFocus()
                     }
@@ -2118,6 +2220,7 @@ Item {
                     TextArea {
                         id: projectNotes
                         objectName: "projectNotes"
+                        Accessible.name: "Project notes"
                         // The project whose notes are in the editor, and what
                         // was last loaded or saved for it.
                         property string projectId: ""
@@ -2191,7 +2294,7 @@ Item {
                     controller: controller
                     textPrimary: root.colTextPrimary
                     textSecondary: root.colTextSecondary
-                    chipColor: root.isDark ? "#2C2E33" : "#E9ECEF"
+                    chipColor: root.colChip
                     highlightColor: root.colSidebarActive
                     onLeave: taskListView.forceActiveFocus()
                 }
@@ -2203,7 +2306,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 42
                     radius: 8
-                    color: root.isDark ? "#25262B" : "#F1F3F5"
+                    color: root.colInputBar
                     border.color: newTaskInput.activeFocus ? root.colAccent : "transparent"
                     border.width: 1.5
 
@@ -2222,6 +2325,7 @@ Item {
                         TextInput {
                             id: newTaskInput
                             objectName: "newTaskInput"
+                            Accessible.name: "New task"
                             Layout.fillWidth: true
                             font.pixelSize: 14
                             color: root.colTextPrimary
@@ -2385,7 +2489,7 @@ Item {
                                 anchors.centerIn: parent
                                 text: filterChip.name
                                 font.pixelSize: 12
-                                color: filterChip.chosen ? "#FFFFFF" : root.colTextSecondary
+                                color: filterChip.chosen ? root.colOnAccent : root.colTextSecondary
                             }
                             MouseArea {
                                 id: filterMouse
@@ -2847,7 +2951,7 @@ Item {
                                     width: taskListView.width
                                     height: 48
                                     radius: 8
-                                    color: projectRowMouse.containsMouse ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                    color: projectRowMouse.containsMouse ? root.colRowHover : "transparent"
                                     Accessible.role: Accessible.ListItem
                                     Accessible.name: projectOutcome.text + ": " + title
 
@@ -2906,7 +3010,7 @@ Item {
                                                 : "Project"
                                             font.pixelSize: 12
                                             font.weight: urgent ? Font.DemiBold : Font.Normal
-                                            color: urgent ? (root.isDark ? "#FFA8A8" : "#C92A2A") : root.colTextSecondary
+                                            color: urgent ? root.colDanger : root.colTextSecondary
                                         }
                                     }
 
@@ -2925,6 +3029,20 @@ Item {
                                 delegate: FocusScope {
                                     id: taskRow
                                     objectName: "taskRow"
+                                    Accessible.role: Accessible.ListItem
+                                    Accessible.name: title
+                                    Accessible.description: [done ? "Completed" : canceled ? "Canceled" : "", repeat !== "" ? "Repeats " + repeat : "", reminder !== "" ? "Reminder at " + reminder : ""].filter(s => s !== "").join(", ")
+                                    Accessible.selectable: true
+                                    Accessible.selected: isSelected
+                                    // The list keeps the keyboard focus and moves its own
+                                    // cursor (Up, Down), so the row under the cursor tells a
+                                    // screen reader it is focused, and the reader follows.
+                                    Accessible.focused: taskListView.activeFocus && taskListView.selectedTaskId === taskId
+                                    Accessible.onPressAction: {
+                                        root.selectOnly(taskId);
+                                        taskListView.expandedTaskId = isExpanded ? "" : taskId;
+                                        taskListView.forceActiveFocus();
+                                    }
                                     required property string taskId
                                     required property string title
                                     required property string notes
@@ -3002,10 +3120,10 @@ Item {
                                         // tinted when selected or hovered.
                                         radius: taskRow.isExpanded ? 10 : 8
                                         color: taskRow.isExpanded ? root.colCardBg
-                                            : taskRow.isSelected ? (root.isDark ? "#1C3B5A" : "#D0E4F7")
-                                            : rowHover.hovered ? (root.isDark ? "#25262B" : "#F8F9FA") : "transparent"
+                                            : taskRow.isSelected ? root.colRowSelected
+                                            : rowHover.hovered ? root.colRowHover : "transparent"
                                         border.color: !taskRow.isExpanded ? "transparent"
-                                            : taskRow.isSelected ? (root.isDark ? "#2F5F8F" : "#A5C8EC") : root.colBorder
+                                            : taskRow.isSelected ? root.colRowSelectedBorder : root.colBorder
                                         border.width: 1
                                     }
 
@@ -3090,6 +3208,13 @@ Item {
                                             Rectangle {
                                                 id: checkCircle
                                                 objectName: "checkCircle"
+                                                Accessible.role: Accessible.CheckBox
+                                                Accessible.name: (taskRow.canceled ? "Reopen " : "Complete ") + taskRow.title
+                                                Accessible.description: "Ctrl+."
+                                                Accessible.checkable: true
+                                                Accessible.checked: taskRow.done
+                                                Accessible.onToggleAction: controller.toggleTask(taskRow.taskId)
+                                                Accessible.onPressAction: controller.toggleTask(taskRow.taskId)
                                                 Layout.preferredWidth: 20
                                                 Layout.preferredHeight: 20
                                                 radius: 10
@@ -3121,7 +3246,7 @@ Item {
                                                     name: "check"
                                                     size: 14
                                                     strokeWidth: 2.6
-                                                    color: "#FFFFFF"
+                                                    color: root.colOnAccent
                                                     visible: taskRow.done
                                                 }
                                                 // Canceled (#65): a cross, not a tick.
@@ -3159,6 +3284,7 @@ Item {
                                             TextInput {
                                                 id: titleInput
                                                 objectName: "titleInput"
+                                                Accessible.name: "Title"
                                                 visible: taskRow.isExpanded
                                                 text: taskRow.title
                                                 font.pixelSize: 14
@@ -3216,7 +3342,7 @@ Item {
                                                 Layout.preferredHeight: 20
                                                 Layout.preferredWidth: eveningLabel.contentWidth + 28
                                                 radius: 4
-                                                color: root.isDark ? "#382D16" : "#FFF3BF"
+                                                color: root.colEveningBg
 
                                                 Icon {
                                                     id: eveningIcon
@@ -3248,7 +3374,7 @@ Item {
                                                 Layout.preferredHeight: 20
                                                 Layout.preferredWidth: dateLabel.contentWidth + 12
                                                 radius: 4
-                                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                color: root.colChip
 
                                                 Text {
                                                     id: dateLabel
@@ -3269,7 +3395,7 @@ Item {
                                                 Layout.preferredHeight: 20
                                                 Layout.preferredWidth: deadlineLabel.contentWidth + 28
                                                 radius: 4
-                                                color: urgent ? (root.isDark ? "#3B1F1F" : "#FFE3E3") : (root.isDark ? "#2C2E33" : "#E9ECEF")
+                                                color: urgent ? root.colDangerBg : root.colChip
 
                                                 Icon {
                                                     id: deadlineIcon
@@ -3290,7 +3416,7 @@ Item {
                                                     text: root.describeDeadline(taskRow.deadline, taskRow.deadlineStatus)
                                                     font.pixelSize: 11
                                                     font.weight: parent.urgent ? Font.DemiBold : Font.Normal
-                                                    color: parent.urgent ? (root.isDark ? "#FFA8A8" : "#C92A2A") : root.colTextSecondary
+                                                    color: parent.urgent ? root.colDanger : root.colTextSecondary
                                                 }
                                             }
 
@@ -3305,7 +3431,7 @@ Item {
                                                     Layout.preferredHeight: 20
                                                     Layout.preferredWidth: rowTagText.contentWidth + 14
                                                     radius: 10
-                                                    color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                    color: root.colChip
                                                     Text {
                                                         id: rowTagText
                                                         anchors.centerIn: parent
@@ -3335,7 +3461,7 @@ Item {
                                                 Layout.preferredHeight: 20
                                                 Layout.preferredWidth: reminderLabel.contentWidth + 28
                                                 radius: 4
-                                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                color: root.colChip
                                                 Accessible.role: Accessible.StaticText
                                                 Accessible.name: "Reminder at " + reminderLabel.text
 
@@ -3379,7 +3505,7 @@ Item {
                                                 Layout.preferredHeight: 20
                                                 Layout.preferredWidth: checklistLabel.contentWidth + 28
                                                 radius: 4
-                                                color: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                color: root.colChip
                                                 Accessible.role: Accessible.StaticText
                                                 Accessible.name: "Checklist: " + taskRow.checklistDone + " of " + taskRow.checklistTotal + " done"
 
@@ -3442,7 +3568,7 @@ Item {
                                             Layout.preferredHeight: 34
                                             Layout.leftMargin: 56 // in line with the title
                                             radius: 6
-                                            color: root.isDark ? "#1A1B1E" : "#FFFFFF"
+                                            color: root.colBg
                                             border.color: root.colAccent
 
                                             TextInput {
@@ -3502,6 +3628,7 @@ Item {
                                             TextArea {
                                                 id: notesInput
                                                 objectName: "notesInput"
+                                                Accessible.name: "Notes"
                                                 // Editing a task's notes selects that task.
                                                 onActiveFocusChanged: if (activeFocus) taskListView.selectedTaskId = taskRow.taskId
                                                 // Hidden (the task closed), it gives up the focus: the
@@ -3606,7 +3733,7 @@ Item {
                                                 controller: controller
                                                 textPrimary: root.colTextPrimary
                                                 textSecondary: root.colTextSecondary
-                                                chipColor: root.isDark ? "#2C2E33" : "#E9ECEF"
+                                                chipColor: root.colChip
                                                 highlightColor: root.colSidebarActive
                                                 // Escape goes on to the list, which closes the task.
                                             }
@@ -3628,6 +3755,7 @@ Item {
                                                     textPrimary: root.colTextPrimary
                                                     textSecondary: root.colTextSecondary
                                                     accent: root.colAccent
+                                                    tickColor: root.colOnAccent
                                                     border: root.colBorder
                                                     hover: root.colSidebarHover
                                                     // Escape: back to the list; the row stays open.
@@ -3739,7 +3867,7 @@ Item {
         width: undoRow.implicitWidth + 24
         height: 40
         radius: 8
-        color: root.isDark ? "#E9ECEF" : "#212529"
+        color: root.colInverseBg
 
         RowLayout {
             id: undoRow
@@ -3754,7 +3882,7 @@ Item {
                     : root.undoKind === "checklist" ? "Checklist item “" + root.undoTitle + "” deleted"
                     : (root.undoKind === "project" ? "Project" : root.undoKind === "area" ? "Area" : "Task")
                         + " “" + root.undoTitle + "” moved to Trash"
-                color: root.isDark ? "#212529" : "#F8F9FA"
+                color: root.colInverseText
                 font.pixelSize: 13
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: 360
@@ -3860,7 +3988,7 @@ Item {
         onClosed: taskListView.forceActiveFocus()
 
         background: Rectangle {
-            color: root.isDark ? "#202124" : "#FFFFFF"
+            color: root.colCardBg
             radius: 10
             border.color: root.colBorder
             border.width: 1
@@ -3872,6 +4000,7 @@ Item {
             TextField {
                 id: searchInput
                 objectName: "searchInput"
+                Accessible.name: "Quick Find"
                 Layout.fillWidth: true
                 placeholderText: "Find lists, areas, projects, tags and tasks..."
                 font.pixelSize: 15
@@ -4054,7 +4183,7 @@ Item {
         }
 
         background: Rectangle {
-            color: root.isDark ? "#202124" : "#FFFFFF"
+            color: root.colCardBg
             radius: 10
             border.color: root.colBorder
         }
@@ -4070,6 +4199,7 @@ Item {
             TextField {
                 id: batchTagInput
                 objectName: "batchTagInput"
+                Accessible.name: "Tag"
                 Layout.fillWidth: true
                 placeholderText: "Tag"
                 Keys.onReturnPressed: batchTagPopup.commit()
@@ -4395,6 +4525,7 @@ Item {
 
             TextField {
                 objectName: "newTagInput"
+                Accessible.name: "New tag"
                 Layout.fillWidth: true
                 placeholderText: "New tag"
                 font.pixelSize: 13
@@ -4418,6 +4549,7 @@ Item {
         TextField {
             id: areaTitleInput
             objectName: "areaTitleInput"
+            Accessible.name: "Area name"
             width: parent.width
             placeholderText: "Area name, e.g. Home or Work"
             focus: true
@@ -4446,6 +4578,7 @@ Item {
         TextField {
             id: renameInput
             objectName: "renameInput"
+            Accessible.name: renameDialog.kind === "area" ? "Area name" : renameDialog.kind === "project" ? "Project name" : "Heading"
             width: parent.width
             focus: true
         }
@@ -4476,6 +4609,8 @@ Item {
             spacing: 12
             TextField {
                 id: projTitleInput
+                objectName: "projectTitleInput"
+                Accessible.name: "Project name"
                 placeholderText: "Project Title..."
                 Layout.fillWidth: true
                 focus: true
@@ -4616,7 +4751,7 @@ Item {
         }
 
         background: Rectangle {
-            color: root.isDark ? "#202124" : "#FFFFFF"
+            color: root.colCardBg
             radius: 10
             border.color: root.colBorder
         }
@@ -4634,6 +4769,7 @@ Item {
             TextField {
                 id: moveFilter
                 objectName: "moveFilter"
+                Accessible.name: "Filter areas, projects and headings"
                 Layout.fillWidth: true
                 placeholderText: "Filter areas, projects and headings"
                 font.pixelSize: 13
@@ -4685,7 +4821,7 @@ Item {
                                 anchors.centerIn: parent
                                 name: destinationRow.kind
                                 size: destinationRow.kind === "project" ? 13 : 16
-                                color: destinationRow.kind === "inbox" ? "#339AF0"
+                                color: destinationRow.kind === "inbox" ? root.viewColors.inbox
                                     : destinationRow.kind === "project" ? root.colAccent : root.colTextSecondary
                             }
                         }
@@ -5060,7 +5196,7 @@ Item {
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
         background: Rectangle {
-            color: root.isDark ? "#202124" : "#FFFFFF"
+            color: root.colCardBg
             radius: 10
             border.color: root.colBorder
         }
@@ -5109,6 +5245,7 @@ Item {
             TextField {
                 id: whenInput
                 objectName: "whenInput"
+                Accessible.name: whenPopup.mode === "deadline" ? "Deadline" : "When"
                 Layout.fillWidth: true
                 placeholderText: whenPopup.mode === "deadline"
                     ? "Due: tomorrow, fri, dec 24"
@@ -5249,7 +5386,7 @@ Item {
                         anchors.centerIn: parent
                         text: day.model.day
                         font.pixelSize: 12
-                        color: day.isCursor ? "#FFFFFF" : (day.past ? root.colTextSecondary : root.colTextPrimary)
+                        color: day.isCursor ? root.colOnAccent : (day.past ? root.colTextSecondary : root.colTextPrimary)
                     }
                 }
 

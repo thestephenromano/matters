@@ -22,6 +22,8 @@ Item {
     property color textPrimary: "black"
     property color textSecondary: "gray"
     property color accent: "blue"
+    // A tick on the accent.
+    property color tickColor: "white"
     property color border: "lightgray"
     property color hover: "whitesmoke"
 
@@ -353,7 +355,7 @@ Item {
                             name: "check"
                             size: 11
                             strokeWidth: 3
-                            color: "#FFFFFF"
+                            color: editor.tickColor
                             visible: itemRow.done
                         }
                         MouseArea {
@@ -369,6 +371,7 @@ Item {
                     TextInput {
                         id: titleInput
                         objectName: "checklistTitle"
+                        Accessible.name: "Checklist item"
                         anchors.left: box.right
                         anchors.leftMargin: 8
                         anchors.right: deleteButton.left
