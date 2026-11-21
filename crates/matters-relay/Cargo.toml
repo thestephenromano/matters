@@ -13,11 +13,16 @@ matters-sync = { path = "../matters-sync" }
 # No TLS feature yet: the relay talks to its database on the same host or a
 # private network; a TLS option comes with self-hosting (#44).
 sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros"] }
-tokio = { version = "1.54", features = ["sync"] }
+tokio = { version = "1.54", features = ["sync", "rt-multi-thread", "net", "macros", "signal"] }
+# ADR 0003: axum on hyper 1 over HTTP/1.1 and HTTP/2 (TLS terminates at a
+# proxy in front, #44); `ws` for commit hints.
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
+base64 = "0.22"
 minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2.0"
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros"] }
+tower = { version = "0.5", features = ["util"] }
 uuid = { version = "1", features = ["v4"] }

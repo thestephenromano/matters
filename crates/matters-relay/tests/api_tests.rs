@@ -1,0 +1,496 @@
+//! The v0 HTTP API against a real PostgreSQL (#38): device sessions,
+//! uploads and pages over HTTP, every error in the contract's shape and
+//! status, and deterministic CBOR bodies. See store_tests.rs for the
+//! environment variables.
+
+mod common;
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode};
+use axum::Router;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use common::*;
+use matters_relay::api::{router, Clock};
+use matters_sync::authority::{sign_session, DeviceKeys, Route};
+use matters_sync::record::record_hash;
+use minicbor::{Decoder, Encoder};
+use tower::ServiceExt;
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn route_hex(route: &Route) -> String {
+    hex(&[route.application, route.tenant, route.collection].concat())
+}
+
+/// A test clock at `start` ms, advanced by the test.
+fn clock(start: u64) -> (Clock, Arc<AtomicU64>) {
+    let now = Arc::new(AtomicU64::new(start));
+    let read = now.clone();
+    (Arc::new(move || read.load(Ordering::SeqCst)), now)
+}
+
+struct Response {
+    status: StatusCode,
+    body: Vec<u8>,
+}
+
+impl Response {
+    /// The body's map, keys in their encoded order, values as raw CBOR.
+    fn map(&self) -> Vec<(String, Vec<u8>)> {
+        let mut d = Decoder::new(&self.body);
+        let n = d.map().unwrap().unwrap();
+        (0..n)
+            .map(|_| {
+                let key = d.str().unwrap().to_owned();
+                let start = d.position();
+                d.skip().unwrap();
+                (key, self.body[start..d.position()].to_vec())
+            })
+            .collect()
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.map().into_iter().map(|(k, _)| k).collect()
+    }
+
+    fn bytes(&self, key: &str) -> Vec<u8> {
+        let (_, raw) = self.map().into_iter().find(|(k, _)| k == key).unwrap();
+        Decoder::new(&raw).bytes().unwrap().to_vec()
+    }
+
+    fn text(&self, key: &str) -> String {
+        let (_, raw) = self.map().into_iter().find(|(k, _)| k == key).unwrap();
+        Decoder::new(&raw).str().unwrap().to_owned()
+    }
+
+    fn uint(&self, key: &str) -> u64 {
+        let (_, raw) = self.map().into_iter().find(|(k, _)| k == key).unwrap();
+        Decoder::new(&raw).u64().unwrap()
+    }
+
+    fn code(&self) -> String {
+        self.text("code")
+    }
+}
+
+async fn call(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    token: Option<&[u8; 32]>,
+    body: Vec<u8>,
+) -> Response {
+    let mut request = Request::builder().method(method).uri(uri);
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {}", hex(token)));
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec();
+    Response { status, body }
+}
+
+fn challenge_body(route: &Route, device: &[u8; 48]) -> Vec<u8> {
+    let mut e = Encoder::new(Vec::new());
+    e.map(2).unwrap();
+    e.str("route").unwrap();
+    e.array(3)
+        .unwrap()
+        .bytes(&route.application)
+        .unwrap()
+        .bytes(&route.tenant)
+        .unwrap()
+        .bytes(&route.collection)
+        .unwrap();
+    e.str("device").unwrap().bytes(device).unwrap();
+    e.into_writer()
+}
+
+fn session_body(route: &Route, device: &[u8; 48], challenge: &[u8], signature: &[u8]) -> Vec<u8> {
+    let mut e = Encoder::new(Vec::new());
+    e.map(4).unwrap();
+    e.str("route").unwrap();
+    e.array(3)
+        .unwrap()
+        .bytes(&route.application)
+        .unwrap()
+        .bytes(&route.tenant)
+        .unwrap()
+        .bytes(&route.collection)
+        .unwrap();
+    e.str("device").unwrap().bytes(device).unwrap();
+    e.str("challenge").unwrap().bytes(challenge).unwrap();
+    e.str("signature").unwrap().bytes(signature).unwrap();
+    e.into_writer()
+}
+
+/// Open a session for `device` through the API.
+async fn login(app: &Router, device: &DeviceKeys) -> [u8; 32] {
+    let c = call(
+        app,
+        Method::POST,
+        "/v0/session/challenge",
+        None,
+        challenge_body(&route(), &device.id()),
+    )
+    .await;
+    assert_eq!(c.status, StatusCode::OK, "{:?}", c.body);
+    let challenge: [u8; 32] = c.bytes("challenge").try_into().unwrap();
+    let signature = sign_session(device, &route(), &challenge, fresh()).unwrap();
+    let s = call(
+        app,
+        Method::POST,
+        "/v0/session",
+        None,
+        session_body(&route(), &device.id(), &challenge, &signature),
+    )
+    .await;
+    assert_eq!(s.status, StatusCode::OK);
+    assert_eq!(
+        s.keys(),
+        ["token", "expires", "generation"],
+        "deterministic order"
+    );
+    s.bytes("token").try_into().unwrap()
+}
+
+async fn setup() -> Option<(TestDb, Collection, Router, Arc<AtomicU64>)> {
+    let db = TestDb::start().await?;
+    let c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    let (clock, now) = clock(1_000_000);
+    let app = router(db.relay.clone(), clock);
+    Some((db, c, app, now))
+}
+
+#[tokio::test]
+async fn a_device_signs_in_uploads_and_pages_over_http() {
+    let Some((db, c, app, _)) = setup().await else {
+        return;
+    };
+    let token = login(&app, &c.admin).await;
+    let r = route_hex(&route());
+    let id = fresh();
+    let bytes = record(&c.admin, id, b"over http", &route());
+    let uri = format!("/v0/routes/{r}/records/{}", hex(&id));
+    let created = call(&app, Method::PUT, &uri, Some(&token), bytes.clone()).await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(created.keys(), ["digest", "sequence", "generation"]);
+    assert_eq!(created.uint("sequence"), 1);
+    assert_eq!(created.bytes("digest"), record_hash(&bytes));
+    let again = call(&app, Method::PUT, &uri, Some(&token), bytes.clone()).await;
+    assert_eq!(again.status, StatusCode::OK);
+    assert_eq!(again.body, created.body, "the original receipt");
+    let conflict = call(
+        &app,
+        Method::PUT,
+        &uri,
+        Some(&token),
+        record(&c.admin, id, b"other", &route()),
+    )
+    .await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT);
+    assert_eq!(conflict.code(), "record-conflict");
+    assert_eq!(conflict.bytes("digest"), record_hash(&bytes));
+    assert_eq!(conflict.keys(), ["code", "retry", "digest"]);
+    // A page, then resuming from its cursor.
+    let page = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/records?limit=10"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert_eq!(
+        page.keys(),
+        ["next", "records", "complete", "generation", "high-water"]
+    );
+    assert_eq!(page.uint("high-water"), 1);
+    let next = URL_SAFE_NO_PAD.encode(page.bytes("next"));
+    let rest = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/records?after={next}&limit=10"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(rest.status, StatusCode::OK);
+    // The authority log holds the genesis.
+    let authority = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/authority"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(authority.status, StatusCode::OK);
+    assert_eq!(authority.uint("high-water"), 1);
+    db.finish().await;
+}
+
+#[tokio::test]
+async fn sessions_are_single_use_short_lived_and_end_with_membership() {
+    let Some((db, mut c, app, now)) = setup().await else {
+        return;
+    };
+    let r = route_hex(&route());
+    let records = format!("/v0/routes/{r}/records");
+    // No token, a wrong token.
+    let none = call(&app, Method::GET, &records, None, vec![]).await;
+    assert_eq!(
+        (none.status, none.code().as_str()),
+        (StatusCode::UNAUTHORIZED, "unauthenticated")
+    );
+    let wrong = call(&app, Method::GET, &records, Some(&[7; 32]), vec![]).await;
+    assert_eq!(wrong.code(), "unauthenticated");
+    // A challenge answers once, within 60 s, and only with the device's key.
+    let c1 = call(
+        &app,
+        Method::POST,
+        "/v0/session/challenge",
+        None,
+        challenge_body(&route(), &c.admin.id()),
+    )
+    .await;
+    assert_eq!(c1.keys(), ["expires", "challenge"]);
+    let challenge: [u8; 32] = c1.bytes("challenge").try_into().unwrap();
+    let forged = sign_session(&device(), &route(), &challenge, fresh()).unwrap();
+    let refused = call(
+        &app,
+        Method::POST,
+        "/v0/session",
+        None,
+        session_body(&route(), &c.admin.id(), &challenge, &forged),
+    )
+    .await;
+    assert_eq!(refused.code(), "unauthenticated");
+    let signature = sign_session(&c.admin, &route(), &challenge, fresh()).unwrap();
+    let reused = call(
+        &app,
+        Method::POST,
+        "/v0/session",
+        None,
+        session_body(&route(), &c.admin.id(), &challenge, &signature),
+    )
+    .await;
+    assert_eq!(
+        reused.code(),
+        "unauthenticated",
+        "the failed answer used it up"
+    );
+    let c2 = call(
+        &app,
+        Method::POST,
+        "/v0/session/challenge",
+        None,
+        challenge_body(&route(), &c.admin.id()),
+    )
+    .await;
+    let late: [u8; 32] = c2.bytes("challenge").try_into().unwrap();
+    now.fetch_add(60_001, Ordering::SeqCst);
+    let signature = sign_session(&c.admin, &route(), &late, fresh()).unwrap();
+    let expired = call(
+        &app,
+        Method::POST,
+        "/v0/session",
+        None,
+        session_body(&route(), &c.admin.id(), &late, &signature),
+    )
+    .await;
+    assert_eq!(expired.code(), "unauthenticated");
+    // A device outside the roster gets no challenge.
+    let outsider = device();
+    let not_member = call(
+        &app,
+        Method::POST,
+        "/v0/session/challenge",
+        None,
+        challenge_body(&route(), &outsider.id()),
+    )
+    .await;
+    assert_eq!(
+        (not_member.status, not_member.code().as_str()),
+        (StatusCode::FORBIDDEN, "not-a-member")
+    );
+    // A token lasts 15 minutes.
+    let token = login(&app, &c.admin).await;
+    assert_eq!(
+        call(&app, Method::GET, &records, Some(&token), vec![])
+            .await
+            .status,
+        StatusCode::OK
+    );
+    now.fetch_add(15 * 60_000 + 1, Ordering::SeqCst);
+    let stale = call(&app, Method::GET, &records, Some(&token), vec![]).await;
+    assert_eq!(
+        (stale.status, stale.code().as_str()),
+        (StatusCode::UNAUTHORIZED, "session-expired")
+    );
+    // A member's session ends when a transition removes it.
+    let b = device();
+    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
+    let admin_token = login(&app, &c.admin).await;
+    let put = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&add))),
+        Some(&admin_token),
+        add.clone(),
+    )
+    .await;
+    assert_eq!(put.status, StatusCode::CREATED);
+    let b_token = login(&app, &b).await;
+    c.authority.apply_membership(&add).unwrap();
+    let remove = transition(&c, vec![c.admin.member(true)]);
+    call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&remove))),
+        Some(&admin_token),
+        remove,
+    )
+    .await;
+    let revoked = call(&app, Method::GET, &records, Some(&b_token), vec![]).await;
+    assert_eq!(
+        (revoked.status, revoked.code().as_str()),
+        (StatusCode::FORBIDDEN, "revoked")
+    );
+    db.finish().await;
+}
+
+#[tokio::test]
+async fn errors_carry_the_contracts_codes_and_statuses() {
+    let Some((db, c, app, _)) = setup().await else {
+        return;
+    };
+    let token = login(&app, &c.admin).await;
+    let r = route_hex(&route());
+    let id = fresh();
+    let bytes = record(&c.admin, id, b"e", &route());
+    let cases = [
+        (
+            Method::GET,
+            "/v1/routes".to_owned(),
+            vec![],
+            StatusCode::NOT_FOUND,
+            "unsupported-version",
+        ),
+        (
+            Method::GET,
+            "/v0/routes/zz/records".to_owned(),
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "malformed",
+        ),
+        (
+            Method::GET,
+            format!("/v0/routes/{r}/records?limit=0"),
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "malformed",
+        ),
+        (
+            Method::GET,
+            format!("/v0/routes/{r}/records?after=!!"),
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "malformed",
+        ),
+        (
+            Method::PUT,
+            format!("/v0/routes/{r}/records/{}", hex(&fresh())),
+            bytes.clone(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "context-mismatch",
+        ),
+        (
+            Method::PUT,
+            format!("/v0/routes/{r}/records/{}", hex(&id)),
+            vec![0; matters_sync::wire::MAX_WIRE_BYTES + 1],
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "too-large",
+        ),
+        (
+            Method::PUT,
+            format!("/v0/routes/{}/records/{}", "ab".repeat(48), hex(&id)),
+            bytes.clone(),
+            StatusCode::NOT_FOUND,
+            "unknown-route",
+        ),
+        (
+            Method::POST,
+            "/v0/session/challenge".to_owned(),
+            vec![0xa0],
+            StatusCode::BAD_REQUEST,
+            "malformed",
+        ),
+    ];
+    for (method, uri, body, status, code) in cases {
+        let response = call(&app, method, &uri, Some(&token), body).await;
+        assert_eq!(
+            (response.status, response.code()),
+            (status, code.to_owned()),
+            "{uri}"
+        );
+        assert_eq!(response.keys()[..2], ["code", "retry"]);
+    }
+    // A cursor from before a restore names the new generation.
+    let page = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/records"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    let next = URL_SAFE_NO_PAD.encode(page.bytes("next"));
+    let generation = db.relay.new_generation(&route()).await.unwrap();
+    let gone = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/records?after={next}"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        (gone.status, gone.code().as_str()),
+        (StatusCode::GONE, "generation-changed")
+    );
+    assert_eq!(gone.bytes("generation"), generation);
+    // A quota.
+    db.relay.set_quota(&route(), Some(1)).await.unwrap();
+    let full = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/records/{}", hex(&id)),
+        Some(&token),
+        bytes,
+    )
+    .await;
+    assert_eq!(
+        (full.status, full.code().as_str()),
+        (StatusCode::INSUFFICIENT_STORAGE, "quota-exhausted")
+    );
+    db.finish().await;
+}
