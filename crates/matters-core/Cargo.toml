@@ -22,6 +22,8 @@ interim = { version = "0.2.2", features = ["jiff_0_2"] }
 # The sync engine's document (ADR 0001, adopted 2026-11-20, #35).
 loro = "=1.18.0"
 serde_json = "1"
+# Sealing recorded writes into authenticated records (#36).
+matters-sync = { path = "../matters-sync" }
 
 [features]
 # Raw read-write SQL for tests that stage states the typed operations

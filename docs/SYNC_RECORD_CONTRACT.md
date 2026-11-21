@@ -78,6 +78,16 @@ The 1 MiB plaintext cap is the explicit provisional workload budget inherited fr
 
 ADR 0002's provisional 2^32 records per CEK epoch gives an honest 256-bit random-ID birthday bound below 2^-193. It is an aggregate review budget, not something an offline device can enforce globally. It does not bound derived-key collisions, GCM forgery advantage or repeated verification attempts. Production enablement remains blocked until #33/#45 establish a reviewed multi-user security bound and #34/#36 define enforceable per-device allocation, failed-verification rate/concurrency limits, rotation and exhaustion behavior. There is deliberately no undocumented operational default pretending to satisfy those gates.
 
+### Production sealing (#36, 2026-11-20)
+
+Production code seals inside the edit's own transaction, as the maintainer decided on 2026-11-20. This replaces the separate reservation-then-seal step above. Each recorded local update draws a fresh random record ID, is sealed and signed, and is stored together with the journal row and the writer's new chain head, all before the edit's single commit. The table's invariants hold in a stronger form:
+- **No uncertain reservation.** A crash or failure before the commit leaves no record and no ciphertext outside the process. The retried edit draws a new record ID, so a header is never sealed twice.
+- **No stranded edit.** Nothing waits to be sealed after the commit, so no edit is left behind under a retired writer, and no re-issue path exists.
+- **Fresh writer per open.** Each open that seals is a new writer incarnation with its own chain, so a copied or restored database never continues another copy's chain.
+- **Retries resend the stored bytes.** Retries and lost acknowledgements return the exact stored bytes.
+
+The cost is signing and encryption on each save (budget: ADR 0001), and the keys must be present whenever a sealing write happens. `matters_core::storage::sealing` implements this, and `tests/sealing_tests.rs` covers crashes at the commit, copies, reopens and concurrent handles.
+
 ## Receiver and relay obligations
 
 Client admission proceeds in stages; no earlier stage implies a later one:

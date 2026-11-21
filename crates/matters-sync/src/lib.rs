@@ -12,5 +12,6 @@ pub mod wire;
 
 pub use authority::{Authority, DeviceKeys, EpochKey, Route};
 pub use record::{
-    generate_signing_key, seal, verify, ContentKey, Error, SigningKey, VerificationKey, Verified,
+    generate_signing_key, record_hash, seal, verify, ContentKey, Error, SigningKey,
+    VerificationKey, Verified,
 };

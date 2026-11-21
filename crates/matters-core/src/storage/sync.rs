@@ -107,7 +107,7 @@ impl Database {
         apply: impl FnOnce(&Transaction<'_>) -> Result<T>,
         commands: impl FnOnce(&Transaction<'_>, &T) -> Result<Vec<Command>>,
     ) -> Result<T> {
-        self.with_engine(|conn, engine| {
+        self.with_sealing(|conn, engine, sealing| {
             let tx = conn.transaction()?;
             let value = apply(&tx)?;
             let Some(doc) = engine.as_mut() else {
@@ -119,10 +119,16 @@ impl Database {
                 if !commands.is_empty() {
                     let before = doc.version();
                     doc.apply(&commands, at)?;
+                    let update = doc.updates_since(&before)?;
                     tx.execute(
                         "INSERT INTO sync_journal (bytes, outgoing) VALUES (?1, 1)",
-                        params![doc.updates_since(&before)?],
+                        params![update],
                     )?;
+                    // Sealed in this transaction: the record commits with
+                    // the edit or not at all (#36).
+                    if let Some(sealing) = sealing.as_ref() {
+                        super::sealing::seal_update(&tx, sealing, tx.last_insert_rowid(), &update)?;
+                    }
                 }
                 crash_point("before-commit");
                 Ok::<_, MattersError>(tx.commit()?)
