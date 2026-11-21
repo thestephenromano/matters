@@ -129,3 +129,18 @@ The policy must be based on measured checkpoint size, bootstrap latency and hist
 - byte-exact agreement with an independent encoder (`tests/vectors/checkpoint_kat.py`, Python standard library).
 
 The `checkpoint` fuzz target runs the part and statement parsers, and assembly. It is seeded from that encoder, and its corpus is replayed on stable by `tests/fuzz_replay.rs`.
+
+## Measured
+
+Measured on one shared development host ([evidence record](evidence/sync-checkpoint-cost-2026-11-21.json): i9-10920X, btrfs on NVMe, release build, one run each). Each workload has *n* tasks with 1 KiB notes, a rename of every second task and a completion of every tenth, each edit its own sealed record. There is one writer and nothing is pruned.
+
+| Tasks | Records | Retained history | Checkpoint | Create | Start from it | Receive every record |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 250 | 400 | 1.9 MB | 92 KB, 1 part | 22 ms | 23 ms | 8.5 s |
+| 1,000 | 1,600 | 7.7 MB | 354 KB, 1 part | 57 ms | 99 ms | 104 s |
+| 2,000 | 3,200 | 15.4 MB | 708 KB, 2 parts | 106 ms | 208 ms | 422 s |
+
+- **Size.** A checkpoint is about 4.7% of the retained history at each size.
+- **History growth.** History grows by about 4.8 KB per edit, mostly the record's ML-DSA-65 signature.
+- **Starting a device.** Starting from a checkpoint grows with the collection's size. Receiving every record grows quadratically, which is tracked in #241.
+- **Retention budget.** None is set. Pruning, and any budget on bootstrap time, needs its own approval against these figures.

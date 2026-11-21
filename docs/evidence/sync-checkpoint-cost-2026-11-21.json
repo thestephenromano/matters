@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-21",
+  "issue": 40,
+  "what": "Same-host cost of checkpoints: retained history, checkpoint size and creation time, and a new device starting from a checkpoint against receiving every record",
+  "source_commit": "680be93315050c62a78af077d4d675f870e6871d (branch sync/checkpoint-relay; the measured code is unchanged in what merges)",
+  "command": [
+    [
+      "cargo",
+      "run",
+      "--release",
+      "-p",
+      "matters-core",
+      "--features",
+      "test-support",
+      "--example",
+      "checkpoint_cost",
+      "--",
+      "target/checkpoint-cost",
+      "1000"
+    ],
+    [
+      "cargo",
+      "run",
+      "--release",
+      "-p",
+      "matters-core",
+      "--features",
+      "test-support",
+      "--example",
+      "checkpoint_cost",
+      "--",
+      "target/checkpoint-cost",
+      "250",
+      "2000"
+    ]
+  ],
+  "host": {
+    "name": "betelgeuse",
+    "cpu": "Intel(R) Core(TM) i9-10920X CPU @ 3.50GHz",
+    "logical_cpus": 23,
+    "memory_kb": 65529560,
+    "kernel": "Linux 7.3.4-200.fc44.x86_64",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "filesystem": "btrfs on /dev/nvme0n1p3 (/home)",
+    "sqlite": "bundled, WAL, synchronous=FULL as the app opens it",
+    "conditions": "shared development host with other sessions; no CPU pinning; one run per workload"
+  },
+  "workload": "n tasks with 1 KiB notes, a rename of every second task and a completion of every tenth, each edit its own sealed record (1.6 n records); one writer; nothing pruned",
+  "runs": [
+    {
+      "bytes_per_record": 4796,
+      "checkpoint_bytes": 92107,
+      "checkpoint_parts": 1,
+      "checkpoint_payload_bytes": 87931,
+      "checkpoint_to_history": 0.04800667560012905,
+      "create_ms": 21.70259,
+      "records": 400,
+      "replay_every_record_ms": 8480.168044,
+      "retained_record_bytes": 1918629,
+      "start_from_checkpoint_ms": 23.164841,
+      "tasks": 250
+    },
+    {
+      "bytes_per_record": 4798,
+      "checkpoint_bytes": 354462,
+      "checkpoint_parts": 1,
+      "checkpoint_payload_bytes": 350286,
+      "checkpoint_to_history": 0.046164311252966,
+      "create_ms": 57.059338000000004,
+      "records": 1600,
+      "replay_every_record_ms": 104158.26037399999,
+      "retained_record_bytes": 7678269,
+      "start_from_checkpoint_ms": 98.669036,
+      "tasks": 1000
+    },
+    {
+      "bytes_per_record": 4802,
+      "checkpoint_bytes": 708254,
+      "checkpoint_parts": 2,
+      "checkpoint_payload_bytes": 700177,
+      "checkpoint_to_history": 0.046088541428402886,
+      "create_ms": 106.310751,
+      "records": 3200,
+      "replay_every_record_ms": 422249.29781899997,
+      "retained_record_bytes": 15367247,
+      "start_from_checkpoint_ms": 208.108818,
+      "tasks": 2000
+    }
+  ],
+  "findings": [
+    "A checkpoint is about 4.6-4.8% of the retained record bytes at every size measured, because sealed records carry a 3,309-byte signature each and the snapshot does not.",
+    "Retained history grows by about 4.8 KB per edit, dominated by the ML-DSA-65 signature; checkpoints add to it, as nothing is pruned.",
+    "Starting a new device from a checkpoint takes 23 ms (400 records), 99 ms (1,600) and 208 ms (3,200), growing with the collection's size.",
+    "Receiving every record from the first takes 8.5 s, 104 s and 422 s on the same workloads, growing quadratically, because each received record rebuilds the whole projection (#241)."
+  ],
+  "budgets": "None set: a pruning policy, and any budget on bootstrap time, needs its own approval against these figures (#40, #43).",
+  "limits": [
+    "One host, one run per workload, no warm-up or repetition statistics.",
+    "Single writer; many writers add per-writer coverage entries but were not measured here.",
+    "Relay transfer time is not included: both new devices read from local bytes."
+  ],
+  "source_note": "crates/matters-core/examples/checkpoint_cost.rs; both new devices are checked to hold the same tasks as the source."
+}
