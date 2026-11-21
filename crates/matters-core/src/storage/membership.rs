@@ -18,13 +18,11 @@
 #[cfg(feature = "test-support")]
 use std::collections::BTreeMap;
 
-#[cfg(feature = "test-support")]
 use matters_sync::authority::RecoverySecret;
 use matters_sync::authority::{
     self, Authority, Body, DeviceKeys, Message, Route, WriterHandoff, WriterStart,
 };
 use matters_sync::generate_signing_key;
-#[cfg(feature = "test-support")]
 use matters_sync::ContentKey;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
@@ -55,7 +53,6 @@ impl DeviceSeeds {
     /// Bytes of a stored seed pair.
     pub const BYTES: usize = 64;
 
-    #[cfg(feature = "test-support")]
     pub(super) fn generate() -> Self {
         Self {
             signing: random32(),
@@ -386,11 +383,13 @@ impl Database {
     /// on, generate the device's keys, the recovery secret and the first
     /// content key, sign the genesis and start sealing. Returns the 24
     /// recovery words: show them once, then drop them; nothing keeps them.
-    /// The database must hold no rows yet (#41 migrates existing data).
+    /// Existing rows migrate into the collection (#41) in the same
+    /// transaction: a consistent backup is taken beside the database first,
+    /// every row becomes this device's first sealed records, and the rows
+    /// rebuilt from the engine must equal the originals or nothing commits.
     ///
     /// The seeds reach `store` before the transaction commits. A crash
     /// between the two leaves an unused keyring entry and no collection.
-    #[cfg(feature = "test-support")]
     pub fn create_collection(&self, store: &dyn KeyStore, route: Route) -> Result<String> {
         let seeds = DeviceSeeds::generate();
         let device = seeds.keys()?;
@@ -412,8 +411,14 @@ impl Database {
             if engine.is_some() {
                 return Err(MattersError::Validation("sync is already on".into()));
             }
+            // A consistent copy of the database as it is, kept beside it.
+            if let Some(path) = conn.path().filter(|p| !p.is_empty()) {
+                let backup = format!("{path}.pre-sync-{}.db", crate::clock::now_millis());
+                conn.execute("VACUUM INTO ?1", params![backup])?;
+            }
             let tx = conn.transaction()?;
-            let doc = super::sync::turn_on(&tx)?;
+            let before = super::import::before(&tx)?;
+            let mut doc = super::sync::turn_on(&tx)?;
             tx.execute(
                 "INSERT INTO sync_device (singleton, application, tenant, collection, document,
                      root, device, key_name)
@@ -440,21 +445,25 @@ impl Database {
                 "INSERT INTO sync_publish (bytes) VALUES (?1)",
                 params![recovery_envelope],
             )?;
+            // Seal as this device from the start, and bring every existing
+            // row into the engine as this writer's first records.
+            let mut joined = Joined {
+                route,
+                document,
+                seeds,
+                device,
+                authority,
+            };
+            let sealing = Sealing::begin(&tx, joined.identity(&tx)?)?;
+            claim_writer(&tx, &mut joined, sealing.incarnation(), doc.peer())?;
+            super::import::import_rows(&tx, &mut doc, &sealing)?;
+            super::import::verify(&tx, &doc, &before)?;
             super::sync::crash_point("collection-before-commit");
             tx.commit()?;
-            let actor = doc.peer();
             *engine = Some(doc);
-            sync.settle(
-                conn,
-                actor,
-                Joined {
-                    route,
-                    document,
-                    seeds,
-                    device,
-                    authority,
-                },
-            )?;
+            sync.sealing = Some(sealing);
+            sync.required = true;
+            sync.membership = Some(joined);
             Ok(words)
         })
     }

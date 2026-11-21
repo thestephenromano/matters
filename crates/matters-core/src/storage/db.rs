@@ -26,6 +26,9 @@ pub(crate) const TASK_COLUMNS: &str =
 pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
 
 /// Columns read by [`Database::map_project_row`], in its expected order.
+/// The newest schema version this build migrates to.
+pub const LATEST_SCHEMA: i64 = 17;
+
 pub(crate) const PROJECT_COLUMNS: &str =
     "id, area_id, title, notes, start_date, time_of_day, is_someday,
      deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at, goal_id";
@@ -133,6 +136,14 @@ impl Database {
             conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
             })?;
+        // A newer Matters wrote this database: refuse it, rather than write
+        // around tables (sync's among them) this version does not know.
+        if version > LATEST_SCHEMA {
+            return Err(MattersError::NewerSchema {
+                found: version,
+                supported: LATEST_SCHEMA,
+            });
+        }
         for (target, migration) in [
             (2, MIGRATION_V2),
             (3, MIGRATION_V3),
@@ -1555,7 +1566,7 @@ impl Database {
         })
     }
 
-    fn map_heading_row(row: &Row) -> rusqlite::Result<Heading> {
+    pub(crate) fn map_heading_row(row: &Row) -> rusqlite::Result<Heading> {
         Ok(Heading {
             id: row.get(0)?,
             project_id: row.get(1)?,

@@ -182,3 +182,31 @@ Initial execution is recorded in [the prototype evidence](../evidence/sync-proto
 - **Evaluation plan:** the workloads, measurements and budgets above. The [exploratory 1,000-task run](../evidence/sync-prototype-2026-11-18.json) names its host and configuration. No full-workload budget is marked passed; #35 measures them.
 - **Canonical design:** [SYNC_DESIGN.md](../SYNC_DESIGN.md), linked from the [specification](../SPEC.md#54-planned-encrypted-synchronization), the README and epic [#31](https://github.com/thestephenromano/matters/issues/31).
 - **SQL write audit:** the table above audits the baseline commit and names the later ordering boundary. #35 re-runs the audit against the code it integrates, including the later headings, move and project-completion paths, before routing writes through commands.
+
+### Existing databases (#41, 2026-11-21)
+
+A database that already holds tasks enters sync through `create_collection`, as the collection's first device. That makes one lineage.
+
+**The migration commits as a whole or not at all.** In one transaction it:
+1. takes a consistent backup beside the database (`<db>.pre-sync-<ms>.db`, `VACUUM INTO`);
+2. creates the collection;
+3. imports every row as the engine commands its creation would have recorded:
+   - parents first, each list in its order, and Today's order in a second pass;
+   - each entity at its own `updated_at`;
+   - sealed in batches under the record cap, as this device's first writer;
+4. rebuilds the rows from the engine and requires them to equal the originals, every column, with list keys compared as order.
+
+Any difference aborts it, and the original rows stay exactly as they were. A crash before the commit leaves the same.
+
+**A second device with data of its own is never merged silently.** It cannot join while it holds rows. `set_aside_local_data` moves them into a consistent copy. Once the device has joined, `import_missing_from` adds, as ordinary recorded writes, every entity of the copy whose ID the collection lacks. Entities it already holds are skipped, so a copy of the same database never forks identities.
+
+**Older builds** refuse a database whose schema is newer than they know (`MattersError::NewerSchema`) and leave it untouched. They cannot write around tables they do not know, sync's among them.
+
+**Sync stays opt-in.** The entry points that turn it on (`create_collection`, joining, `recover_collection`) are available to the app now; a database that never calls them works locally as before.
+
+**Evidence:** `tests/migrate_tests.rs` covers:
+- a representative database with every entity and state the app makes migrating with its views unchanged, the backup matching it, and a restart rebuilding the same rows;
+- a second device receiving exactly the same data;
+- refusing a device with its own data, then setting it aside, joining and importing only what is new;
+- a crash before the commit leaving the original;
+- a newer schema being refused.

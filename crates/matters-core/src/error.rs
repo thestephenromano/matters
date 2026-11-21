@@ -24,6 +24,11 @@ pub enum MattersError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// The database was written by a newer Matters (#41): it is left
+    /// untouched; use that version, or restore an older backup.
+    #[error("This database needs a newer Matters (schema {found}; this version knows up to {supported})")]
+    NewerSchema { found: i64, supported: i64 },
+
     /// A transition keeps this device a member, but its envelope of the
     /// new epoch's key was not supplied: nothing changed (#39).
     #[error("The new epoch's key envelope is missing")]
