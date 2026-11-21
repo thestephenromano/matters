@@ -37,6 +37,9 @@ cxx = "1.0"
 cxx-qt = "0.10.0"
 cxx-qt-lib = { version = "0.10.0", features = ["qt_gui", "qt_qml", "qt_quickcontrols"] }
 matters-core = { path = "../matters-core" }
+# Sync (#42): the app's sync session, and this device's keys in the keyring.
+matters-sync-app = { path = "../matters-sync-app" }
+matters-keyring = { path = "../matters-keyring" }
 # Calendar events' local days and times (#62), reminder times and the
 # system time zone (#60); the core's date library.
 jiff = "0.2"
@@ -57,3 +60,6 @@ cxx-qt-build = { version = "0.10.0" }
 
 [dev-dependencies]
 tempfile = "3.13"
+# The UI tests' sync session keeps its keys in memory (#42).
+matters-core = { path = "../matters-core", features = ["test-support"] }
+matters-sync-app = { path = "../matters-sync-app" }

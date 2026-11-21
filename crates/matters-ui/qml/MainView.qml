@@ -1610,6 +1610,23 @@ Item {
                         onClicked: preferencesDialog.open()
                     }
 
+                    // Sync (#42): how it is going, and the way in.
+                    ToolButton {
+                        objectName: "syncButton"
+                        icon.width: 16
+                        Accessible.name: qsTr("Sync: %1").arg(root.syncStatusText())
+                        contentItem: Icon {
+                            name: "sync"
+                            size: 16
+                            color: controller.syncPhase === "on" && controller.syncHealth !== "up-to-date"
+                                   && controller.syncHealth !== "syncing" && controller.syncHealth !== "idle"
+                                   ? root.colDanger : root.colTextSecondary
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: root.syncStatusText()
+                        onClicked: syncDialog.open()
+                    }
+
                     ToolButton {
                         objectName: "newContainerButton"
                         Accessible.name: qsTr("New Project or Area")
@@ -4320,6 +4337,389 @@ Item {
                     font.pixelSize: 12
                     color: root.colTextSecondary
                 }
+            }
+        }
+    }
+
+    // Sync (#42), in plain words. A change saved here and not on the relay
+    // is never called backed up.
+    function syncStatusText() {
+        if (!controller.syncAvailable)
+            return qsTr("Sync is unavailable on this device")
+        switch (controller.syncPhase) {
+        case "off":
+            return qsTr("Not syncing: everything is on this device only")
+        case "joining":
+            return qsTr("Waiting for the other device to add this one")
+        case "recovering":
+            return qsTr("Recovering from the recovery kit")
+        }
+        switch (controller.syncHealth) {
+        case "up-to-date":
+            return qsTr("Synced")
+        case "syncing":
+            return qsTr("Syncing")
+        case "retrying":
+            return qsTr("Can't reach the relay. Changes are saved on this device and will be sent later.")
+        case "waiting-for-relay":
+            return qsTr("Waiting for the relay to be set up for this collection")
+        case "removed":
+            return qsTr("This device was removed from sync. Its tasks stay here.")
+        case "storage-full":
+            return qsTr("The relay's storage is full. Changes are saved on this device only.")
+        case "conflict":
+            return qsTr("The relay refused a change. Changes are saved on this device only.")
+        case "unsupported":
+            return qsTr("The relay doesn't work with this version of Matters.")
+        }
+        return qsTr("Sync is starting")
+    }
+
+    function syncUnsentText() {
+        if (controller.syncUnsent === 1)
+            return qsTr("1 change is saved on this device and not yet on the relay.")
+        return qsTr("%1 changes are saved on this device and not yet on the relay.").arg(controller.syncUnsent)
+    }
+
+    // Sync (#42): set up, add devices, recover, stop.
+    Dialog {
+        id: syncDialog
+        objectName: "syncDialog"
+        title: qsTr("Sync")
+        modal: true
+        x: (parent.width - width) / 2
+        y: 60
+        width: 480
+        standardButtons: Dialog.Close
+        onOpened: (controller.syncPhase === "off" && controller.syncAvailable
+                   ? syncEndpointField : syncCloseFocus).forceActiveFocus(Qt.TabFocusReason)
+        onClosed: taskListView.forceActiveFocus()
+
+        ColumnLayout {
+            id: syncCloseFocus
+            width: parent.width
+            spacing: 6
+            activeFocusOnTab: false
+
+            Label {
+                objectName: "syncStatus"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: root.syncStatusText()
+                Accessible.name: text
+            }
+            Label {
+                objectName: "syncUnsent"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                visible: controller.syncPhase === "on" && controller.syncUnsent > 0
+                text: root.syncUnsentText()
+                color: root.colTextSecondary
+            }
+            Label {
+                objectName: "syncError"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                visible: controller.syncError !== ""
+                text: controller.syncError
+                color: root.colDanger
+            }
+            Label {
+                objectName: "syncUnavailable"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                visible: !controller.syncAvailable
+                text: qsTr("Sync keeps this device's keys in the desktop's keyring, and none is running. Matters works on this device without it.")
+            }
+
+            // Not syncing: three ways in.
+            ColumnLayout {
+                visible: controller.syncAvailable && controller.syncPhase === "off"
+                Layout.fillWidth: true
+                spacing: 6
+
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: qsTr("Your tasks are encrypted on this device before they leave it. The relay stores them but can't read them; it can see how much you store and when you sync.")
+                    color: root.colTextSecondary
+                }
+                Label {
+                    text: qsTr("Relay address")
+                    font.bold: true
+                }
+                TextField {
+                    id: syncEndpointField
+                    objectName: "syncEndpoint"
+                    Layout.fillWidth: true
+                    placeholderText: "https://relay.example.org"
+                    text: controller.syncEndpoint
+                    Accessible.name: qsTr("Relay address")
+                    inputMethodHints: Qt.ImhUrlCharactersOnly
+                }
+                Button {
+                    objectName: "syncCreate"
+                    text: qsTr("Start syncing from this device")
+                    enabled: syncEndpointField.text.length > 0
+                    onClicked: controller.syncCreate(syncEndpointField.text)
+                }
+
+                Label {
+                    Layout.topMargin: 10
+                    text: qsTr("Join from another device")
+                    font.bold: true
+                }
+                TextArea {
+                    id: syncInvitationField
+                    objectName: "syncInvitationField"
+                    Layout.fillWidth: true
+                    wrapMode: TextEdit.WrapAnywhere
+                    placeholderText: qsTr("Paste the invitation the other device shows")
+                    Accessible.name: qsTr("Invitation from the other device")
+                }
+                Button {
+                    objectName: "syncJoin"
+                    text: qsTr("Join")
+                    enabled: syncEndpointField.text.length > 0 && syncInvitationField.text.length > 0
+                    onClicked: controller.syncJoin(syncEndpointField.text, syncInvitationField.text)
+                }
+
+                Label {
+                    Layout.topMargin: 10
+                    text: qsTr("Recover after losing every device")
+                    font.bold: true
+                }
+                TextField {
+                    id: syncCollectionField
+                    objectName: "syncCollectionField"
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Collection ID from the recovery kit")
+                    Accessible.name: qsTr("Collection ID")
+                }
+                TextArea {
+                    id: syncWordsField
+                    objectName: "syncWordsField"
+                    Layout.fillWidth: true
+                    wrapMode: TextEdit.WordWrap
+                    placeholderText: qsTr("The 24 recovery words")
+                    Accessible.name: qsTr("Recovery words")
+                }
+                Button {
+                    objectName: "syncRecover"
+                    text: qsTr("Recover")
+                    enabled: syncEndpointField.text.length > 0 && syncCollectionField.text.length > 0
+                             && syncWordsField.text.length > 0
+                    onClicked: controller.syncRecover(syncEndpointField.text, syncCollectionField.text,
+                                                      syncWordsField.text)
+                }
+            }
+
+            // A new collection the relay doesn't know yet.
+            ColumnLayout {
+                visible: controller.syncProvisionCommand !== "" && controller.syncHealth === "waiting-for-relay"
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: qsTr("The relay's operator sets it up for this collection with:")
+                }
+                TextArea {
+                    objectName: "syncProvisionCommand"
+                    Layout.fillWidth: true
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.WrapAnywhere
+                    text: controller.syncProvisionCommand
+                    Accessible.name: qsTr("Relay setup command")
+                }
+            }
+
+            // Syncing: the devices, adding one, stopping.
+            Label {
+                Layout.topMargin: 10
+                visible: controller.syncPhase === "on"
+                text: qsTr("Devices")
+                font.bold: true
+            }
+            Repeater {
+                model: controller.syncPhase === "on" ? JSON.parse(controller.syncDevicesJson) : []
+                delegate: RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Label {
+                        Layout.fillWidth: true
+                        text: modelData.thisDevice
+                              ? (modelData.admin ? qsTr("%1 (this device, admin)") : qsTr("%1 (this device)")).arg(modelData.short)
+                              : (modelData.admin ? qsTr("%1 (admin)") : "%1").arg(modelData.short)
+                    }
+                    Button {
+                        objectName: "syncRemove-" + modelData.short
+                        visible: controller.syncAdmin && !modelData.thisDevice
+                        text: qsTr("Remove")
+                        Accessible.name: qsTr("Remove device %1").arg(modelData.short)
+                        onClicked: controller.syncRemoveDevice(modelData.id)
+                    }
+                }
+            }
+            Button {
+                objectName: "syncInvite"
+                visible: controller.syncPhase === "on" && controller.syncAdmin && controller.syncInvitation === ""
+                text: qsTr("Add a device")
+                onClicked: controller.syncInvite()
+            }
+            ColumnLayout {
+                visible: controller.syncInvitation !== ""
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: qsTr("On the new device, open Sync, choose Join and paste this invitation. It works once, within an hour. Anyone who sees it can ask to join, so share it only with your own device.")
+                }
+                TextArea {
+                    id: syncInvitationText
+                    objectName: "syncInvitation"
+                    Layout.fillWidth: true
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.WrapAnywhere
+                    text: controller.syncInvitation
+                    Accessible.name: qsTr("Invitation for the new device")
+                }
+                RowLayout {
+                    Button {
+                        objectName: "syncCopyInvitation"
+                        text: qsTr("Copy")
+                        onClicked: {
+                            syncInvitationText.selectAll()
+                            syncInvitationText.copy()
+                            syncInvitationText.deselect()
+                        }
+                    }
+                    Button {
+                        objectName: "syncCancelInvitation"
+                        text: qsTr("Cancel")
+                        onClicked: controller.syncCancelInvitation()
+                    }
+                }
+            }
+            Button {
+                objectName: "syncLeave"
+                Layout.topMargin: 10
+                visible: controller.syncPhase !== "off"
+                text: qsTr("Stop syncing on this device")
+                onClicked: syncLeaveDialog.open()
+            }
+        }
+    }
+
+    // Stopping sync (#42): it keeps every task here; changes not on the
+    // relay yet are said plainly, and kept only by an explicit choice.
+    Dialog {
+        id: syncLeaveDialog
+        objectName: "syncLeaveDialog"
+        title: qsTr("Stop syncing on this device?")
+        modal: true
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 420
+        onOpened: syncLeaveCancel.forceActiveFocus(Qt.TabFocusReason)
+
+        ColumnLayout {
+            width: parent.width
+            Label {
+                objectName: "syncLeaveText"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: controller.syncUnsent > 0
+                      ? qsTr("%1 Stopping now keeps them on this device only: your other devices will never get them.").arg(root.syncUnsentText())
+                      : qsTr("Every task stays on this device. Your other devices keep syncing without it.")
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                Button {
+                    id: syncLeaveCancel
+                    objectName: "syncLeaveCancel"
+                    text: qsTr("Keep syncing")
+                    onClicked: syncLeaveDialog.close()
+                }
+                Button {
+                    objectName: "syncLeaveConfirm"
+                    text: controller.syncUnsent > 0 ? qsTr("Stop and keep changes here only") : qsTr("Stop syncing")
+                    onClicked: {
+                        controller.syncLeave(controller.syncUnsent > 0)
+                        syncLeaveDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    // The recovery kit (#42), shown once after starting a collection.
+    Dialog {
+        id: recoveryKitDialog
+        objectName: "recoveryKitDialog"
+        title: qsTr("Your recovery kit")
+        modal: true
+        closePolicy: Popup.NoAutoClose
+        visible: controller.syncKitJson !== ""
+        x: (parent.width - width) / 2
+        y: 60
+        width: 480
+        readonly property var kit: controller.syncKitJson !== "" ? JSON.parse(controller.syncKitJson) : null
+        onOpened: recoveryKitKept.forceActiveFocus(Qt.TabFocusReason)
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 6
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: qsTr("Write these down and keep them somewhere safe. If every device is lost, they are the only way to get your tasks back. Nobody else holds them: not the relay's operator, and not Matters.")
+            }
+            Label {
+                text: qsTr("Relay address")
+                font.bold: true
+            }
+            TextArea {
+                objectName: "recoveryKitEndpoint"
+                Layout.fillWidth: true
+                readOnly: true
+                selectByMouse: true
+                text: recoveryKitDialog.kit ? recoveryKitDialog.kit.endpoint : ""
+                Accessible.name: qsTr("Relay address")
+            }
+            Label {
+                text: qsTr("Collection ID")
+                font.bold: true
+            }
+            TextArea {
+                objectName: "recoveryKitCollection"
+                Layout.fillWidth: true
+                readOnly: true
+                selectByMouse: true
+                wrapMode: TextEdit.WrapAnywhere
+                text: recoveryKitDialog.kit ? recoveryKitDialog.kit.collection : ""
+                Accessible.name: qsTr("Collection ID")
+            }
+            Label {
+                text: qsTr("Recovery words")
+                font.bold: true
+            }
+            TextArea {
+                objectName: "recoveryKitWords"
+                Layout.fillWidth: true
+                readOnly: true
+                selectByMouse: true
+                wrapMode: TextEdit.WordWrap
+                text: recoveryKitDialog.kit ? recoveryKitDialog.kit.words : ""
+                Accessible.name: qsTr("Recovery words")
+            }
+            Button {
+                id: recoveryKitKept
+                objectName: "recoveryKitKept"
+                Layout.alignment: Qt.AlignRight
+                text: qsTr("I've written them down")
+                onClicked: controller.syncKitKept()
             }
         }
     }

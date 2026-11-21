@@ -215,6 +215,10 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>Sync: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>New Project or Area</source>
         <translation type="unfinished"></translation>
     </message>
@@ -380,6 +384,214 @@
     </message>
     <message>
         <source>Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sync is unavailable on this device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not syncing: everything is on this device only</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Waiting for the other device to add this one</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recovering from the recovery kit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Synced</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Syncing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Can&apos;t reach the relay. Changes are saved on this device and will be sent later.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Waiting for the relay to be set up for this collection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This device was removed from sync. Its tasks stay here.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The relay&apos;s storage is full. Changes are saved on this device only.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The relay refused a change. Changes are saved on this device only.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The relay doesn&apos;t work with this version of Matters.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sync is starting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>1 change is saved on this device and not yet on the relay.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 changes are saved on this device and not yet on the relay.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sync</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sync keeps this device&apos;s keys in the desktop&apos;s keyring, and none is running. Matters works on this device without it.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Your tasks are encrypted on this device before they leave it. The relay stores them but can&apos;t read them; it can see how much you store and when you sync.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Relay address</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Start syncing from this device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Join from another device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Paste the invitation the other device shows</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Invitation from the other device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Join</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recover after losing every device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collection ID from the recovery kit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collection ID</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The 24 recovery words</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recovery words</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The relay&apos;s operator sets it up for this collection with:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Relay setup command</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Devices</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 (this device, admin)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 (this device)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 (admin)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Remove device %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Add a device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On the new device, open Sync, choose Join and paste this invitation. It works once, within an hour. Anyone who sees it can ask to join, so share it only with your own device.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Invitation for the new device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Stop syncing on this device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Stop syncing on this device?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 Stopping now keeps them on this device only: your other devices will never get them.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Every task stays on this device. Your other devices keep syncing without it.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Keep syncing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Stop and keep changes here only</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Stop syncing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Your recovery kit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Write these down and keep them somewhere safe. If every device is lost, they are the only way to get your tasks back. Nobody else holds them: not the relay&apos;s operator, and not Matters.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>I&apos;ve written them down</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

@@ -147,6 +147,8 @@ function run(t, view, look, name) {
 
     popup("quickFindDialog", p => p.open());
     popup("preferencesDialog", p => p.open());
+    popup("syncDialog", p => p.open());
+    popup("syncLeaveDialog", p => p.open());
     popup("tagsDialog", p => p.open());
     popup("newAreaDialog", p => p.open());
     popup("newProjectDialog", p => p.open());

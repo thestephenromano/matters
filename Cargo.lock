@@ -3275,6 +3275,8 @@ dependencies = [
  "futures-core",
  "jiff",
  "matters-core",
+ "matters-keyring",
+ "matters-sync-app",
  "notify-rust",
  "serde",
  "serde_json",

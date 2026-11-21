@@ -26,7 +26,10 @@ pub mod strings;
 #[cfg(feature = "ui-tests")]
 pub mod test_translations;
 
-pub use bridge::{install_database, install_settings};
+pub use bridge::{
+    install_database, install_settings, install_sync, save_sync_endpoint, saved_sync_endpoint,
+    sync_changed_notice,
+};
 pub use calendar::install_calendar_source;
 pub use reminders::install_notifier;
 

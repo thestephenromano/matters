@@ -91,10 +91,24 @@ fn main() {
     let motion = std::env::var_os("MATTERS_UI_TEST_MOTION").is_some_and(|v| v == "1");
     std::env::set_var("MATTERS_REDUCE_MOTION", if motion { "0" } else { "1" });
     let db = matters_core::Database::open_in_memory().expect("open in-memory database");
-    matters_ui::install_database(db);
+    matters_ui::install_database(db.clone());
     // Settings live in memory only: the tests never read or write the
     // user's file.
     matters_ui::install_settings(None, None);
+    // Sync (#42) with keys in memory and no relay: the tests see a device
+    // that does not sync yet, and its ways in.
+    let sync_dir = std::env::temp_dir().join(format!("matters-ui-sync-{}", std::process::id()));
+    match matters_sync_app::SyncApp::open(
+        std::sync::Arc::new(db),
+        std::sync::Arc::new(matters_core::storage::membership::MemoryKeyStore::default()),
+        None,
+        sync_dir,
+        matters_ui::sync_changed_notice,
+        |_| {},
+    ) {
+        Ok(app) => matters_ui::install_sync(app),
+        Err(err) => panic!("sync session: {err}"),
+    }
     // A fake calendar, read at once rather than on a worker (#62). The tests
     // start with events hidden (`init()`), and those about events show them.
     matters_ui::install_calendar_source(Box::new(TodaysCalendar), false);
