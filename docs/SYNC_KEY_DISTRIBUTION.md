@@ -108,3 +108,103 @@ The [review record](../experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md) ma
 ## Signed writer handoff
 
 The [writer lifecycle extension](SYNC_WRITER_LIFECYCLE.md) adds a distinct `writer_handoff` kind and signature context, preserving existing `writer_start` bytes. Its independent populated/null closing-head vectors extend the structural oracle. The durable inbox admits roots and handoffs, replays control verdicts and gates retired history by exact signed prefixes. The strict in-memory first-record helper remains active-writer-only. Membership, epoch rotation, enrollment and key storage remain separate gates.
+
+## Production code
+
+[`matters-sync`'s authority module](../crates/matters-sync/src/authority.rs) carries this contract into production for [#37](https://github.com/thestephenromano/matters/issues/37): the same message codec, authority rules, envelope transcripts, key commitment and budgets, on the content-record keys and codec of the same crate. [Its tests](../crates/matters-sync/tests/authority_tests.rs) check the independent golden fixtures above in place. The first-record Loro import gate stays prototype test support; chain position and engine admission belong to the durable receiver.
+
+## Enrollment
+
+Production code extends the experiment for [#37](https://github.com/thestephenromano/matters/issues/37), following the maintainer decision of 2026-11-21 recorded there. A new device joins through a one-time invitation from the admin device. The construction uses only HKDF-SHA384 and HMAC-SHA384 (libcrux 0.0.9, the provider family already pinned) and ML-DSA-65, with no classical key agreement and no PAKE. [The enrollment module](../crates/matters-sync/src/authority/enrollment.rs) implements it.
+
+```text
+invitation = [0, suite, "invitation", app16, tenant16, collection16, root48, manifest48, secret16]
+offer      = [0, suite, "invitation_offer", app16, tenant16, collection16, root48, manifest48, tag48]
+code       = Crockford base32 of secret16: 26 characters, the first 0-7
+key(label) = HKDF-SHA384(salt = suite, ikm = secret16, info = CBOR([label, app16, tenant16, collection16]))
+lookup16   = key("matters-sync/v0/invitation-lookup")
+tag        = HMAC-SHA384(key("matters-sync/v0/invitation-offer"), offer's first eight items as an array)
+enrollment_request body = [manifest48, signing_key1952, kem_key1249, binding48], signer = device48
+binding    = HMAC-SHA384(key("matters-sync/v0/enrollment"),
+             CBOR(["matters-sync/v0/enrollment", suite, app16, tenant16, collection16,
+                   root48, manifest48, device48, signing_key1952, kem_key1249]))
+```
+
+- **Invitation.** The admin draws 16 bytes of OS entropy and shows the invitation as a QR code. Alternatively it shows the 26-character code and publishes the offer under the lookup, so a device that has only the code can fetch the route, root ID and manifest. The code-holding device checks the offer's tag before using anything in it. The secret is one-time, and the admin's application forgets it after one accepted request.
+- **Request.** The new device pins the root by the invitation's root ID (`Authority::bootstrap_from_invitation`) and signs an `enrollment_request` with its own signing key, as the device ID of its two keys.
+- **Acceptance.** `Authority::accept_enrollment` checks, before the admin signs anything:
+  - the invitation's route, root and current manifest;
+  - the request's route, kind and manifest;
+  - that the signer is the device ID of the named keys;
+  - the signature, under the named key, which proves possession;
+  - the binding, compared in constant time, which proves the requester saw the secret;
+  - that the device is not already a member, and that the roster has room.
+
+  It returns the roster entry, and the admin then signs an ordinary `membership` transition that adds it.
+- **Membership.** A membership transition may now add members as well as remove them. Admin transfer and recovery-key changes are still refused.
+- **Retained history.** `wrap_history_key` and `unwrap_history_key` carry the content key of any known earlier manifest, as an ordinary `key_envelope` naming that manifest and epoch. The envelope is signed by the *current* admin, its recipient must be a *current* member, and the key must match the commitment of that epoch. The resulting epoch-key handle is bound to the old epoch, so it can never seal. `unwrap_key` still refuses any envelope that doesn't name the current manifest.
+
+The server never knows the secret. An account reset therefore can't produce a valid binding, and a substituted key directory can't either: swapping in the server's keys fails the binding, and swapping only one key breaks the device ID.
+
+The secret's 128 bits face no offline attack before the admin uses it once; quantum search would leave 64 bits of work against a secret that lives for minutes.
+
+**Evidence:** `authority_tests.rs` covers:
+- QR and typed-code enrollment end to end, including retained keys for two earlier epochs;
+- server-substituted keys, requests without the secret, and requests made for other invitations, collections and roots;
+- stale invitations and requests;
+- a full roster, and offers that are forged, non-canonical or from other versions;
+- history envelopes for removed devices, wrong keys and mismatched epochs;
+- redaction of the secret.
+
+`tests/vectors/invitation_kat.py` independently computes the code, the lookup, the invitation bytes and the offer tag with the Python standard library, and the test checks all four.
+
+**Not covered yet:**
+- admitting earlier-epoch records into the engine;
+- persistence and secure storage of device keys and authority state.
+
+These remain open in #37.
+
+## Recovery
+
+When every device is lost, a 256-bit recovery secret restores the collection. This follows the maintainer decisions of 2026-11-21 on [#37](https://github.com/thestephenromano/matters/issues/37). The user keeps the secret as 24 English BIP39 words; nothing else holds the private keys it derives. [The recovery module](../crates/matters-sync/src/authority/recovery.rs) implements it.
+
+```text
+seed(label)  = HKDF-SHA384(salt = suite, ikm = secret32,
+                           info = CBOR([label, app16, tenant16, collection16])), 32 bytes
+root key     = ML-DSA-65 KeyGen(seed("matters-sync/v0/recovery-root"))
+recovery KEM = MLKEM768-P256 DeriveKeyPair(seed("matters-sync/v0/recovery-kem"))
+root_recovery body = membership body, signed by the root under "matters-sync/v0/root_recovery"
+```
+
+- **Words.** The bip39 crate (3.0.0, CC0-1.0) converts the 256-bit entropy to 24 words with an 8-bit checksum and back. BIP39's PBKDF2 seed step is not used: the words carry the secret itself. Parsing accepts any case and whitespace. It requires exactly 24 words from the English list with a matching checksum, so a typo fails with `Format` rather than deriving other keys.
+- **Bootstrap.** The first device derives both keys and signs the genesis with the root key (`genesis`). The genesis commits to the recovery KEM key. The device then shows the words once and keeps neither private key. The root ID the collection pins is therefore a function of the words and the route.
+- **Recovery envelopes.** The admin keeps one recovery envelope per epoch (`wrap_recovery_key`). It is an ordinary `key_envelope` whose recipient and recipient-key fingerprint are both the recovery KEM key's fingerprint. `unwrap_recovery_key` requires:
+  - a known manifest and its epoch;
+  - the signature of that epoch's admin;
+  - the collection's recovery key;
+  - the epoch's key commitment.
+
+  It works while the authority is frozen, because reading history back is what recovery is for.
+- **A new generation.** A recovering device bootstraps from the genesis with the root key derived from the words, so other words fail with `Identity`. It replays the control records the relay holds, opens the recovery envelopes, then signs a `root_recovery` (`Authority::recover`). The transition starts generation N+1 from the newest manifest it knows of generation N:
+  - the next sequence and epoch;
+  - one member, who is the admin;
+  - the same recovery key;
+  - a commitment to a fresh content key.
+- **Admitting a recovery** (`apply_recovery`). Every device checks the root signature against its pin. The recovery then becomes current even if generation N had later transitions the recoverer did not see, or was frozen by a membership fork, and it clears that freeze. From then on, any membership transition of an earlier generation is `Stale`, whoever signed it. Exact replays of accepted records still return a duplicate result. Two different valid recoveries to one generation retain both and freeze; a recovery to the next generation clears the freeze.
+- **After recovery.** Earlier devices are no longer members: they re-enroll through an invitation from the new admin. Until then they keep their unsent work for explicit recovery.
+
+**Material that fails safely.** Wrong words derive another root and recovery key, which bootstrap, `recover` and `unwrap_recovery_key` all refuse with `Identity`. An epoch whose recovery envelope was never written cannot be read from the words alone, and that loss is explicit rather than silent. If both the words and every device are gone, the content cannot be recovered; there is no server-held bypass.
+
+**Evidence:** `authority_tests.rs` covers:
+- the four published 256-bit English BIP39 vectors, loose typing, and bad checksums, counts and words;
+- known-answer root and KEM seeds from `tests/vectors/invitation_kat.py`, and their binding to the route;
+- the full flow: grow and rotate, lose everything, recover from the words, unwrap every epoch, start generation 1, and have a retained device follow it;
+- wrong words, missing envelopes, and forged or misdated recovery envelopes;
+- recoveries signed by the admin, with two members, another recovery key, a skipped generation or epoch, a repeated sequence or an unknown previous;
+- recovery from a stale view, competing recoveries and the way out, and a recovery clearing a membership fork;
+- redaction of the secret and keys.
+
+**Not covered yet:**
+- writing the words and recovery envelopes into the app;
+- storing envelopes on the relay (#38);
+- restore-testing the bundle as epochs change.

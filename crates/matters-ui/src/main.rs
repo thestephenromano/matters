@@ -38,6 +38,8 @@ fn main() {
     matters_ui::install_notifier(Box::new(matters_ui::notify::DesktopNotifier));
     matters_ui::init_qml();
 
+    // The desktop entry the window belongs to (#73).
+    matters_ui::set_desktop_identity();
     let mut app = QGuiApplication::new();
     // After the application (and the desktop's platform theme) has started,
     // before any QML loads.

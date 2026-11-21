@@ -43,7 +43,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// An epoch's 32-byte content key. Zeroed when dropped; never printed.
-pub struct ContentKey([u8; 32]);
+pub struct ContentKey(pub(crate) [u8; 32]);
 
 impl ContentKey {
     pub fn new(bytes: [u8; 32]) -> Self {
@@ -67,7 +67,7 @@ impl std::fmt::Debug for ContentKey {
 }
 
 /// A device's ML-DSA-65 signing key. Never printed.
-pub struct SigningKey(ml_dsa_65::MLDSA65SigningKey);
+pub struct SigningKey(pub(crate) ml_dsa_65::MLDSA65SigningKey);
 
 impl std::fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -77,7 +77,7 @@ impl std::fmt::Debug for SigningKey {
 
 /// A device's ML-DSA-65 verification key, as the membership roster lists it.
 #[derive(Clone)]
-pub struct VerificationKey(ml_dsa_65::MLDSA65VerificationKey);
+pub struct VerificationKey(pub(crate) ml_dsa_65::MLDSA65VerificationKey);
 
 impl VerificationKey {
     pub fn from_bytes(bytes: [u8; VERIFICATION_KEY_BYTES]) -> Self {
@@ -190,4 +190,10 @@ impl<'a> Verified<'a> {
 #[doc(hidden)]
 pub fn derived_key_for_vectors(header: Header<'_>, cek: &ContentKey) -> Result<Vec<u8>> {
     record_key(header.record_id, cek, &wire::record_key_info(header)?)
+}
+
+/// SHA-384 of a complete signed record: its identity in a writer's chain
+/// (the next record's `previous`).
+pub fn record_hash(bytes: &[u8]) -> [u8; 48] {
+    libcrux_sha2::sha384(bytes)
 }

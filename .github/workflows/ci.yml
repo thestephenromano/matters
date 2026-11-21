@@ -128,11 +128,36 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  flatpak:
+    name: Flatpak (build, install, start, update)
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:44
+      # flatpak-builder and flatpak run sandbox with bubblewrap, which needs
+      # namespaces a default container doesn't allow.
+      options: --privileged
+    timeout-minutes: 60
+    steps:
+      # No Rust setup: the manifest brings the pinned toolchain.
+      - run: >-
+          dnf -y install --setopt=install_weak_deps=False git curl tar xz
+          flatpak flatpak-builder desktop-file-utils appstream sqlite dbus-daemon
+          python3-aiohttp python3-tomlkit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: ci/flatpak.sh target/flatpak
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flatpak-logs
+          path: target/flatpak/*.log
+          retention-days: 14
+          if-no-files-found: ignore
+
   # The required check: passes only when every job above passed.
   result:
     name: clippy and tests
     if: always()
-    needs: [lint, tests, ui, style, coverage, mutants]
+    needs: [lint, tests, ui, style, coverage, mutants, flatpak]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

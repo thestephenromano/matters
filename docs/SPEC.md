@@ -359,6 +359,16 @@ Sync must preserve offline SQLite operation and use post-quantum end-to-end encr
 
 The [encrypted sync design](SYNC_DESIGN.md) records the security contract, proposed key lifecycle, adoption alternatives and evaluation gates. The CRDT engine is Loro 1.18, adopted for integration ([ADR 0001](decisions/0001-crdt-adoption.md)). The post-quantum record and key-distribution stack is approved for prototype evaluation ([ADR 0002](decisions/0002-post-quantum-sync.md)), and the relay contract and components are recorded in the [service contract](SYNC_SERVICE_CONTRACT.md) and [ADR 0003](decisions/0003-relay-components.md). This is planned functionality.
 
+### 5.5 Installing as a Flatpak
+
+Matters' application ID is `io.github.thestephenromano.Matters`. It names the desktop entry, the icon, the AppStream metainfo (`packaging/linux`) and the Flatpak (`packaging/flatpak`), and the app tells the desktop which entry its window belongs to (`matters_ui::APP_ID`).
+
+* **Runtime and build:** the Flatpak runs on KDE's Qt 6.11 runtime (`org.kde.Platform//6.11`). It is built offline: the crates are generated from `Cargo.lock` at build time, and the compiler is the official toolchain pinned in `rust-toolchain.toml`, downloaded as checksummed archives. `ci/hygiene.sh` checks that the two versions agree.
+* **Data:** inside the sandbox, `$XDG_DATA_HOME` is `~/.var/app/io.github.thestephenromano.Matters/data`, so the database is `matters/matters.db` there (`Database::default_path`). The settings follow `$XDG_CONFIG_HOME` the same way.
+* **Permissions:** Wayland (X11 as a fallback), GPU access and desktop notifications for reminders. Nothing else.
+* **Calendar events:** the runtime has no Evolution Data Server client library, so the Flatpak shows no calendar events, and Preferences says why (see *Calendar events*).
+* **Checked:** `ci/flatpak.sh`, a CI job, validates the desktop entry and metainfo, builds and installs the Flatpak, starts Matters in the sandbox, and checks that its data is still there after a `flatpak update`.
+
 ---
 
 ## 6. MVP Scope (v0.1) vs. Future Roadmap
