@@ -22,6 +22,9 @@ pub struct Project {
     /// `Database::restore_project` change it.
     #[serde(default)]
     pub trashed_at: Option<i64>,
+    /// The goal in the Goals app this project serves (#202, ADR 0004).
+    #[serde(default)]
+    pub goal_id: Option<String>,
     pub sort_order: f64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -62,6 +65,7 @@ impl Project {
             status: Status::Open,
             completed_at: None,
             trashed_at: None,
+            goal_id: None,
             sort_order,
             created_at: now,
             updated_at: now,

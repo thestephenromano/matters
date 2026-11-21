@@ -59,6 +59,11 @@ pub struct Task {
     pub series: Option<String>,
     #[serde(default)]
     pub occurrence: Option<Date>,
+    /// The goal in the Goals app this occurrence serves (#202, ADR 0004):
+    /// set on the newest occurrence of a series, handed on with the rule,
+    /// and kept by earlier occurrences. `None` on tasks that never repeated.
+    #[serde(default)]
+    pub goal_id: Option<String>,
     pub status: Status,
     pub completed_at: Option<i64>,
     /// When the task was moved to the Trash; `None` while it is not trashed.
@@ -94,6 +99,7 @@ impl Task {
             repeat: None,
             series: None,
             occurrence: None,
+            goal_id: None,
             status: Status::Open,
             completed_at: None,
             trashed_at: None,

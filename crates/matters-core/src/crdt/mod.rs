@@ -132,6 +132,12 @@ pub enum Command {
         series: String,
         date: Date,
     },
+    /// The goal in the Goals app a project or a series' occurrence serves
+    /// (#202, ADR 0004): a goal ID, or `None`.
+    SetGoal {
+        id: String,
+        goal: Option<String>,
+    },
     /// Status, finish time and the "closed by its project" mark change
     /// together, so they can never disagree.
     SetStatus {
@@ -224,6 +230,12 @@ pub(super) fn scalar_string(map: &LoroMap, key: &str) -> Option<String> {
         Some(ValueOrContainer::Value(loro::LoroValue::String(s))) => Some(s.to_string()),
         _ => None,
     }
+}
+
+/// A goal ID from the Goals app: a UUID of any version, in canonical text
+/// form (ADR 0004). Matters never interprets it further.
+pub(crate) fn is_goal_id(goal: &str) -> bool {
+    uuid::Uuid::parse_str(goal).is_ok_and(|parsed| parsed.to_string() == goal)
 }
 
 /// A node's kind as stored (`put` writes it as a JSON string). `None` is a
@@ -587,6 +599,7 @@ impl Document {
             Command::SetTrashed { id, .. } => {
                 (id, |k| matches!(k, Kind::Area | Kind::Project | Kind::Task))
             }
+            Command::SetGoal { id, .. } => (id, |k| matches!(k, Kind::Project | Kind::Task)),
             Command::SetRemoved { id, .. } => {
                 (id, |k| matches!(k, Kind::Heading | Kind::ChecklistItem))
             }
@@ -619,6 +632,12 @@ impl Document {
             Command::SetRepeat { rule, .. } => put(&meta, "repeat", rule)?,
             Command::SetOccurrence { series, date, .. } => {
                 put(&meta, "occurrence", &(series, date))?
+            }
+            Command::SetGoal { goal, .. } => {
+                if let Some(goal) = goal.as_deref().filter(|g| !is_goal_id(g)) {
+                    return Err(invalid(format!("'{goal}' is not a goal ID")));
+                }
+                put(&meta, "goal", goal)?
             }
             Command::SetStatus {
                 status,
