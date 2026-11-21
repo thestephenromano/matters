@@ -3232,6 +3232,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "matters-syncd"
+version = "0.1.0"
+dependencies = [
+ "matters-core",
+ "matters-keyring",
+ "matters-sync-client",
+ "tokio",
+]
+
+[[package]]
 name = "matters-ui"
 version = "0.1.0"
 dependencies = [
