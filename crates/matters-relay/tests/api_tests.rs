@@ -494,3 +494,79 @@ async fn errors_carry_the_contracts_codes_and_statuses() {
     );
     db.finish().await;
 }
+
+#[tokio::test]
+async fn health_readiness_and_redacted_metrics() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    let metrics = Arc::new(matters_relay::metrics::Metrics::new());
+    let (clock, _) = clock(1_000_000);
+    let app = matters_relay::api::router_with(
+        db.relay.clone(),
+        clock,
+        matters_relay::api::Options {
+            metrics: Some(metrics.clone()),
+            ..Default::default()
+        },
+    );
+    let health = call(&app, Method::GET, "/healthz", None, vec![]).await;
+    assert_eq!(
+        (health.status, health.body.as_slice()),
+        (StatusCode::OK, &b"ok"[..])
+    );
+    let ready = call(&app, Method::GET, "/readyz", None, vec![]).await;
+    assert_eq!(ready.status, StatusCode::OK);
+    // A durable acknowledgement, a replay and a refusal.
+    let token = login(&app, &c.admin).await;
+    let r = route_hex(&route());
+    let id = fresh();
+    let bytes = record(&c.admin, id, b"counted", &route());
+    let uri = format!("/v0/routes/{r}/records/{}", hex(&id));
+    for _ in 0..2 {
+        call(&app, Method::PUT, &uri, Some(&token), bytes.clone()).await;
+    }
+    call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/records?limit=0"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    metrics.refresh(&db.relay).await.unwrap();
+    let text = metrics.encode();
+    for expected in [
+        r#"matters_relay_requests_total{endpoint="/v0/routes/{route}/records/{record}",status="201"} 1"#,
+        r#"matters_relay_requests_total{endpoint="/v0/routes/{route}/records/{record}",status="200"} 1"#,
+        r#"matters_relay_requests_total{endpoint="/v0/routes/{route}/records",status="400"} 1"#,
+        r#"matters_relay_requests_total{endpoint="/healthz",status="200"} 1"#,
+        "matters_relay_routes 1",
+        "matters_relay_stored_records 1",
+        "matters_relay_request_duration_seconds_count{endpoint=\"/v0/session\"} 1",
+    ] {
+        assert!(text.contains(expected), "missing {expected} in\n{text}");
+    }
+    // Nothing that identifies a route, device, record or content.
+    for secret in [
+        r.clone(),
+        hex(&id),
+        hex(&c.admin.id()),
+        hex(&record_hash(&bytes)),
+        "counted".to_string(),
+    ] {
+        assert!(!text.contains(&secret), "metrics carry {secret}");
+    }
+    // The database goes away: not ready, though still alive.
+    db.relay.pool().close().await;
+    let ready = call(&app, Method::GET, "/readyz", None, vec![]).await;
+    assert_eq!(ready.status, StatusCode::SERVICE_UNAVAILABLE);
+    let health = call(&app, Method::GET, "/healthz", None, vec![]).await;
+    assert_eq!(health.status, StatusCode::OK);
+    db.finish().await;
+}

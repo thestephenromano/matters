@@ -17,6 +17,18 @@ The durable encrypted sync relay (#38). It implements [the sync service contract
 
 The `matters-relay` binary serves it. Set `MATTERS_RELAY_DATABASE_URL` and optionally `MATTERS_RELAY_LISTEN` (default `127.0.0.1:8484`). TLS terminates at a proxy in front (#44).
 
+**Health and metrics (#44).**
+- `GET /healthz` answers `200` while the process is up.
+- `GET /readyz` answers `200` while its database answers within a second too, and `503` otherwise.
+- With `MATTERS_RELAY_METRICS_LISTEN` set (for example `127.0.0.1:9484`), a second listener serves `GET /metrics` in OpenMetrics text for Prometheus.
+
+The metrics are:
+- `matters_relay_requests_total`, by matched path template and status. Durable acknowledgements are `PUT /v0/routes/{route}/records/{record}` answered `201`; replays are `200`; refusals and backpressure have their own statuses.
+- `matters_relay_request_duration_seconds`, by template.
+- `matters_relay_routes`, `matters_relay_stored_records` and `matters_relay_stored_bytes`, across every route.
+
+Labels come only from the API's path templates and HTTP statuses. No route, tenant, device, record ID, digest or content ever appears in them, and the tests check this. Keep the metrics listener on a private interface.
+
 **Operations:**
 - **Commit hints.** `GET /v0/routes/{route}/hints` is a WebSocket. An append's `pg_notify` is delivered only when its transaction commits, so a hint never precedes its record, and duplicates send none.
 - **Limits.** A per-device rate limit gives `429` with `retry-after-ms`. Operator quotas on bytes and on record count give `507`.
