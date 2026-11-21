@@ -432,21 +432,26 @@ fn another_devices_envelope_is_accepted_and_stored_nowhere() {
         }
     }
     assert_eq!(p.b.sync_envelopes().unwrap(), before);
+}
+
+#[test]
 fn rereading_ones_own_log_after_rotations_changes_nothing() {
     let p = pair();
     p.a.rotate_epoch().unwrap();
     let before = p.a.sync_membership().unwrap();
     let mut log = vec![p.a.sync_controls().unwrap().remove(0)];
-    log.extend(p.a.outgoing_controls().unwrap().into_iter().map(|o| o.bytes));
+    log.extend(
+        p.a.outgoing_controls()
+            .unwrap()
+            .into_iter()
+            .map(|o| o.bytes),
+    );
     for bytes in &log {
         match p.a.apply_control(bytes, None) {
             Ok(_) => {}
             // The genesis is no control to apply again.
             Err(MattersError::Authority(matters_sync::authority::Error::Unsupported)) => {}
-            Err(other) => panic!(
-                "{}: {other:?}",
-                parse(bytes).unwrap().message.body.kind()
-            ),
+            Err(other) => panic!("{}: {other:?}", parse(bytes).unwrap().message.body.kind()),
         }
     }
     assert_eq!(p.a.sync_membership().unwrap(), before);
@@ -479,6 +484,8 @@ fn a_second_definition_of_an_admitted_writer_freezes_its_lineage() {
     .unwrap();
     assert!(matches!(
         p.b.apply_control(&conflicting, None),
-        Err(MattersError::Authority(matters_sync::authority::Error::Fork))
+        Err(MattersError::Authority(
+            matters_sync::authority::Error::Fork
+        ))
     ));
 }

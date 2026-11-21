@@ -281,3 +281,14 @@ It reports the manifests of epochs that had no recovery envelope. Their records 
 - refusing wrong words and a database that already syncs;
 - a surviving device following the recovery;
 - an epoch without its envelope being reported unrecoverable.
+
+## Writer admission in production
+
+Production admits a writer claim signed under any known manifest of the current membership generation, provided the claiming device was in that manifest's roster. The claim's signature is checked with the key that roster lists. The experiment admitted only claims signed under the current manifest.
+
+The change follows from how claims are read. Replicas read the relay's authority log in order. A claim a device signs just before a concurrent transition therefore reaches every replica after it, and under the old rule every replica refused it, so that writer's records waited forever. #39's recorded-schedule convergence test found exactly this case.
+
+- **What admission grants:** nothing by itself. Each record is authorized against the roster of its own epoch (`Authority::authenticate_at`), so admitting a claim from an earlier manifest gives no device rights it lacked when it signed.
+- **Replays:** an admitted claim replayed later is the same step and changes nothing.
+- **Competing definitions:** these still freeze the lineage.
+- **Refused claims:** a claim under an unknown manifest, or one from a recovery's earlier generation, is stale. A device outside the claim manifest's roster is refused.

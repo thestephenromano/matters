@@ -152,7 +152,7 @@ It then applies in one transaction: journalled as received, merged, the rows reb
 
 **Records that wait.** A record waiting for its key, its writer's claim or its predecessor stays in `sync_pending`, across restarts. It is retried whenever a record, writer claim, transition or envelope arrives. A record after its writer's close, or of a frozen lineage, is kept there as well, never applied and never discarded. Forged or malformed bytes are refused and not kept.
 
-**Limit.** A writer claim is admitted only under the manifest it was signed under. A claim signed just before a concurrent rotation therefore arrives stale everywhere, and its writer must claim again under the new epoch. That is the sync client's job (#39).
+A writer claim signed just before a concurrent transition is still admitted: see "Writer admission in production" in `SYNC_KEY_DISTRIBUTION.md`.
 
 **Evidence:**
 - `tests/receive_tests.rs` covers:

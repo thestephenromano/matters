@@ -78,7 +78,8 @@ async fn world() -> Option<World> {
     // A, then B and C joined out of band.
     let dir = tempfile::tempdir().unwrap();
     let a = Database::open(dir.path().join("a.db")).unwrap();
-    a.create_collection(&MemoryKeyStore::default(), route()).unwrap();
+    a.create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
     let mut devices = vec![Arc::new(a)];
     for name in ["b", "c"] {
         let a = &devices[0];
@@ -110,7 +111,10 @@ async fn world() -> Option<World> {
     let Body::Genesis(g) = parse(&genesis).unwrap().message.body else {
         unreachable!()
     };
-    relay.provision(&route(), &g.root_key, &genesis).await.unwrap();
+    relay
+        .provision(&route(), &g.root_key, &genesis)
+        .await
+        .unwrap();
     let clients = devices
         .iter()
         .map(|d| Client::new(&endpoint, d.clone()).unwrap())
@@ -168,8 +172,12 @@ async fn run_schedule(seed: u64, steps: usize) {
             // Edits, offline.
             0..=24 => {
                 created += 1;
-                db.add_task(&mut Task::new(id(created), &format!("t{created} by {d}"), step as f64))
-                    .unwrap_or_else(|e| panic!("{context}: add: {e}"));
+                db.add_task(&mut Task::new(
+                    id(created),
+                    format!("t{created} by {d}"),
+                    step as f64,
+                ))
+                .unwrap_or_else(|e| panic!("{context}: add: {e}"));
             }
             25..=44 if created > 0 => {
                 let n = 1 + rng.below(created as u64) as u128;
@@ -226,7 +234,10 @@ async fn run_schedule(seed: u64, steps: usize) {
     }
     let views: Vec<Vec<String>> = w.devices.iter().map(|db| view(db, created)).collect();
     for (d, v) in views.iter().enumerate().skip(1) {
-        assert_eq!(v, &views[0], "seed {seed}: device {d} differs from device 0");
+        assert_eq!(
+            v, &views[0],
+            "seed {seed}: device {d} differs from device 0"
+        );
     }
     assert!(
         views[0].iter().all(|line| line != "absent"),
