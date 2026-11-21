@@ -1073,3 +1073,26 @@ fn handing_the_rule_on_does_not_stop_the_merge() {
         1
     );
 }
+
+#[test]
+fn identical_ordinary_tasks_under_one_uuid_stay_conflict_copies() {
+    // Only generated occurrences merge: identical hand-made tasks keep C18.
+    let (mut a, mut b) = pair();
+    a.apply(&[create(530, Kind::Task, None, "same")], 20)
+        .unwrap();
+    b.apply(&[create(530, Kind::Task, None, "same")], 20)
+        .unwrap();
+    let s = converged(&mut a, &mut b);
+    assert_eq!(s.tasks.iter().filter(|t| t.title == "same").count(), 2);
+    assert!(s.repairs.iter().any(|r| r.starts_with("identity-copy:")));
+    assert!(!s.repairs.iter().any(|r| r.starts_with("occurrence-merge:")));
+}
+
+#[test]
+fn a_lone_generated_occurrence_is_no_merge() {
+    let (mut a, mut b) = pair();
+    generate_occurrence(&mut a, 540, 541);
+    let s = converged(&mut a, &mut b);
+    assert_eq!(task(&s, 540).title, "Water plants");
+    assert!(s.repairs.is_empty(), "{:?}", s.repairs);
+}
