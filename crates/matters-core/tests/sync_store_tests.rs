@@ -343,9 +343,8 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
         controls.push(c);
     }
     for o in a.outgoing_controls().unwrap() {
-        match parse(&o.bytes).unwrap().message.body {
-            Body::KeyEnvelope(_) => envelopes.push(o.bytes),
-            _ => {}
+        if matches!(parse(&o.bytes).unwrap().message.body, Body::KeyEnvelope(_)) {
+            envelopes.push(o.bytes);
         }
     }
     for (_, e) in a.sync_envelopes().unwrap() {
