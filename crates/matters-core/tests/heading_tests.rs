@@ -324,6 +324,7 @@ fn an_empty_heading_has_a_row_where_its_tasks_would_be() {
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
             ListRow::Project(p) => format!("<{}>", p.id),
             ListRow::Event(e) => format!("({})", e.key()),
+            ListRow::Preview(p) => format!("~{}", p.key()),
         })
         .collect();
     assert_eq!(rows, ["loose", "p1", "[empty]", "b1", "[last]"]);
@@ -354,6 +355,7 @@ fn rows_keep_the_order_of_the_tasks_given_within_each_heading() {
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
             ListRow::Project(p) => format!("<{}>", p.id),
             ListRow::Event(e) => format!("({})", e.key()),
+            ListRow::Preview(p) => format!("~{}", p.key()),
         })
         .collect();
     assert_eq!(rows, ["x", "b", "a"]);

@@ -204,6 +204,7 @@ fn names(rows: &[ListRow]) -> Vec<String> {
             ListRow::Project(p) => format!("<{}>", p.id),
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
             ListRow::Event(e) => format!("({} {})", e.event.id, e.day),
+            ListRow::Preview(p) => format!("~{}", p.key()),
         })
         .collect()
 }

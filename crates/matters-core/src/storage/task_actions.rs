@@ -167,7 +167,7 @@ impl Database {
 }
 
 /// Task `id`, if it is live; `NotFound` otherwise.
-fn live_task(tx: &Transaction, id: &str) -> Result<Task> {
+pub(super) fn live_task(tx: &Transaction, id: &str) -> Result<Task> {
     tx.query_row(
         &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND {LIVE_TASK}"),
         params![id],
@@ -182,7 +182,7 @@ fn live_task(tx: &Transaction, id: &str) -> Result<Task> {
 
 /// A key in task order `column` just after `key`: halfway to the next one,
 /// or one past it when it is the last.
-fn key_after(tx: &Transaction, column: &str, key: f64) -> Result<f64> {
+pub(super) fn key_after(tx: &Transaction, column: &str, key: f64) -> Result<f64> {
     let next: Option<f64> = tx.query_row(
         &format!("SELECT MIN({column}) FROM tasks WHERE {column} > ?1"),
         params![key],
@@ -193,7 +193,7 @@ fn key_after(tx: &Transaction, column: &str, key: f64) -> Result<f64> {
 
 /// Task `id`'s checklist, in order: each item's title, whether it is
 /// ticked, and its order key.
-fn checklist(tx: &Transaction, id: &str) -> Result<Vec<(String, bool, f64)>> {
+pub(super) fn checklist(tx: &Transaction, id: &str) -> Result<Vec<(String, bool, f64)>> {
     let mut stmt = tx.prepare(
         "SELECT title, is_completed, sort_order FROM checklist_items
          WHERE task_id = ?1 ORDER BY sort_order ASC, created_at ASC, id ASC",

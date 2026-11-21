@@ -62,6 +62,7 @@ fn ids(rows: &[ListRow]) -> Vec<String> {
             ListRow::Project(p) => format!("<{}>", p.id),
             ListRow::EmptyHeading(h) => format!("[{}]", h.id),
             ListRow::Event(e) => format!("({})", e.key()),
+            ListRow::Preview(p) => format!("~{}", p.key()),
         })
         .collect()
 }

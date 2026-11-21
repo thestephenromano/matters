@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::schema::{
-    MIGRATION_V10, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
-    MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
+    MIGRATION_V10, MIGRATION_V11, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5,
+    MIGRATION_V6, MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -18,7 +18,8 @@ use crate::error::{MattersError, Result};
 pub(crate) const TASK_COLUMNS: &str =
     "id, area_id, project_id, heading_id, title, notes, start_date,
      time_of_day, is_someday, deadline, status, completed_at, sort_order,
-     created_at, updated_at, trashed_at, today_order, reminder_time";
+     created_at, updated_at, trashed_at, today_order, reminder_time,
+     repeat_rule, repeat_series, repeat_date";
 
 /// Columns read by [`Database::map_area_row`], in its expected order.
 pub(crate) const AREA_COLUMNS: &str = "id, title, sort_order, created_at, updated_at, trashed_at";
@@ -119,6 +120,7 @@ impl Database {
             (8, MIGRATION_V8),
             (9, MIGRATION_V9),
             (10, MIGRATION_V10),
+            (11, MIGRATION_V11),
         ] {
             if version < target {
                 let tx = conn.transaction()?;
@@ -917,9 +919,10 @@ impl Database {
                     "INSERT INTO tasks (
                 id, area_id, project_id, heading_id, title, notes, start_date,
                 time_of_day, is_someday, deadline, status, completed_at, sort_order,
-                created_at, updated_at, trashed_at, today_order, reminder_time
+                created_at, updated_at, trashed_at, today_order, reminder_time,
+                repeat_rule, repeat_series, repeat_date
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                ?18)",
+                ?18, ?19, ?20, ?21)",
                     params![
                         task.id,
                         task.area_id,
@@ -939,6 +942,9 @@ impl Database {
                         task.trashed_at,
                         task.today_order,
                         task.reminder.map(crate::reminders::stored_time),
+                        crate::repeat::stored_rule(task.repeat.as_ref()),
+                        task.series,
+                        task.occurrence.map(|d| d.to_string()),
                     ],
                 )?;
                 Ok(())
@@ -1210,22 +1216,10 @@ impl Database {
         })
     }
 
+    /// Complete task `id` today; a task repeating after completion gets
+    /// its next occurrence (`Database::complete_task_on`, #61).
     pub fn complete_task(&self, id: &str) -> Result<()> {
-        let now = crate::clock::now_millis();
-        self.update_if(
-            "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1,
-                closed_by_project = 0 WHERE id = ?2",
-            &[&now, &id],
-            now,
-            || {
-                vec![crate::crdt::Command::SetStatus {
-                    id: id.into(),
-                    status: Status::Completed,
-                    completed_at: Some(now),
-                    closed_by_project: false,
-                }]
-            },
-        )
+        self.complete_task_on(id, crate::clock::local_today())
     }
 
     /// Cancel a task: it is finished without being done, and goes to the
@@ -1571,6 +1565,13 @@ impl Database {
             reminder: row
                 .get::<_, Option<String>>(17)?
                 .and_then(|s| crate::reminders::parse_stored_time(&s)),
+            repeat: row
+                .get::<_, Option<String>>(18)?
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            series: row.get(19)?,
+            occurrence: row
+                .get::<_, Option<String>>(20)?
+                .and_then(|s| crate::clock::parse_iso_date(&s)),
         })
     }
 

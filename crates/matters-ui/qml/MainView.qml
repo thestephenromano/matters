@@ -1058,6 +1058,7 @@ Item {
         whenPopup.forProject = false;
         whenPopup.mode = mode;
         whenPopup.reminder = taskModel.reminderAt(row);
+        whenPopup.repeat = taskModel.repeatAt(row);
         whenPopup.open();
     }
 
@@ -2720,6 +2721,50 @@ Item {
                                 }
                             }
 
+                            // A repeating task's coming occurrence (#61), in
+                            // Upcoming: what will be created on its day.
+                            // Quieter than a task, and not a task yet.
+                            DelegateChoice {
+                                roleValue: "preview"
+                                delegate: Item {
+                                    id: previewRow
+                                    objectName: "previewRow"
+                                    required property string taskId
+                                    required property string title
+                                    required property string startDate
+                                    required property string repeat
+                                    required property string section
+                                    required property int index
+                                    readonly property real targetHeight: height
+                                    width: taskListView.width
+                                    height: 36
+                                    opacity: 0.65
+                                    Accessible.role: Accessible.StaticText
+                                    Accessible.name: "Will repeat: " + title + ", " + repeat
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 32
+                                        anchors.rightMargin: 16
+                                        spacing: 10
+
+                                        Icon {
+                                            name: "repeat"
+                                            size: 16
+                                            color: root.colTextSecondary
+                                        }
+                                        Text {
+                                            objectName: "previewTitle"
+                                            Layout.fillWidth: true
+                                            text: previewRow.title
+                                            elide: Text.ElideRight
+                                            font.pixelSize: 14
+                                            color: root.colTextSecondary
+                                        }
+                                    }
+                                }
+                            }
+
                             // A calendar event (#62): read-only context in
                             // Today and Upcoming, drawn quieter than a task,
                             // with its calendar's colour. Nothing happens on
@@ -2895,6 +2940,8 @@ Item {
                                     required property string deadlineStatus
                                     // `HH:MM` while the task has a reminder due (#60).
                                     required property string reminder
+                                    // The rule it carries, in words, or "" (#61).
+                                    required property string repeat
                                     required property bool someday
                                     required property int checklistDone
                                     required property int checklistTotal
@@ -3267,6 +3314,18 @@ Item {
                                                         color: root.colTextSecondary
                                                     }
                                                 }
+                                            }
+
+                                            // It repeats (#61): the newest occurrence
+                                            // of a series carries the rule.
+                                            Icon {
+                                                objectName: "repeatMarker"
+                                                visible: taskRow.repeat !== ""
+                                                name: "repeat"
+                                                size: 14
+                                                color: root.colTextSecondary
+                                                Accessible.role: Accessible.StaticText
+                                                Accessible.name: "Repeats: " + taskRow.repeat
                                             }
 
                                             // A reminder (#60): a bell and its time.
@@ -4647,6 +4706,249 @@ Item {
         }
     }
 
+    // How a task repeats (#61): every N days, weeks (on chosen days), months
+    // (on a day, or a weekday of the month) or years; on a schedule or after
+    // completion; until a day or for a number of times; paused.
+    Dialog {
+        id: repeatDialog
+        objectName: "repeatDialog"
+        title: "Repeat"
+        modal: true
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 440
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        // The tasks it applies to, and the day the schedule starts from.
+        property var taskIds: []
+        property date anchor: new Date()
+        // Whether the tasks repeat already (Paused is offered then).
+        property bool existing: false
+        readonly property var weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        readonly property var weekdayNames: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        // Monday is 1.
+        readonly property int anchorWeekday: anchor.getDay() === 0 ? 7 : anchor.getDay()
+        readonly property int anchorNth: Math.floor((anchor.getDate() - 1) / 7) + 1
+        property var days: []
+
+        function iso(d) {
+            return Qt.formatDate(d, "yyyy-MM-dd");
+        }
+
+        // Open for tasks `ids`, with their rule `json` ("" for none), whose
+        // date is `startDate` ("" for today).
+        function edit(ids, json, startDate) {
+            taskIds = ids;
+            anchor = startDate !== "" ? root.parseLocal(startDate) : new Date();
+            existing = json !== "";
+            let rule = null;
+            try {
+                rule = json !== "" ? JSON.parse(json) : null;
+            } catch (e) {}
+            const kinds = ["daily", "weekly", "monthly_on_day", "monthly_on_weekday", "yearly"];
+            const kind = rule ? rule.frequency.kind : "weekly";
+            frequencyBox.currentIndex = rule ? [1, 2, 3, 3, 4][kinds.indexOf(kind)] : 0;
+            everyBox.value = rule ? rule.every : 1;
+            days = rule && kind === "weekly" ? rule.frequency.days.slice() : [anchorWeekday];
+            monthlyBox.currentIndex = !rule ? 0
+                : kind === "monthly_on_day" ? (rule.frequency.day === -1 ? 3 : 0)
+                : kind === "monthly_on_weekday" ? (rule.frequency.nth === -1 ? 2 : 1) : 0;
+            modeBox.currentIndex = rule && rule.after_completion ? 1 : 0;
+            endsBox.currentIndex = !rule ? 0 : rule.until ? 1 : rule.left !== null && rule.left !== undefined ? 2 : 0;
+            untilInput.text = rule && rule.until ? rule.until : "";
+            countBox.value = rule && rule.left !== null && rule.left !== undefined ? rule.left + 1 : 5;
+            pausedBox.checked = rule ? rule.paused === true : false;
+            open();
+        }
+
+        // The rule as `RepeatRule` serializes it, or "" for Never.
+        function ruleJson() {
+            const f = frequencyBox.currentIndex;
+            if (f === 0)
+                return "";
+            let frequency;
+            if (f === 1)
+                frequency = { kind: "daily" };
+            else if (f === 2)
+                frequency = { kind: "weekly", days: days.slice().sort() };
+            else if (f === 3) {
+                const m = monthlyBox.currentIndex;
+                frequency = m === 0 ? { kind: "monthly_on_day", day: anchor.getDate() }
+                    : m === 1 ? { kind: "monthly_on_weekday", nth: Math.min(anchorNth, 5), weekday: anchorWeekday }
+                    : m === 2 ? { kind: "monthly_on_weekday", nth: -1, weekday: anchorWeekday }
+                    : { kind: "monthly_on_day", day: -1 };
+            } else
+                frequency = { kind: "yearly", month: anchor.getMonth() + 1, day: anchor.getDate() };
+            const until = endsBox.currentIndex === 1 ? controller.previewDeadline(untilInput.text, root.monthFirst) : "";
+            return JSON.stringify({
+                every: everyBox.value,
+                frequency: frequency,
+                after_completion: modeBox.currentIndex === 1,
+                start: iso(anchor),
+                until: until !== "" ? until : null,
+                left: endsBox.currentIndex === 2 ? countBox.value - 1 : null,
+                paused: existing && pausedBox.checked
+            });
+        }
+
+        readonly property string json: ruleJson()
+        readonly property bool usable: json === "" || controller.describeRepeat(json) !== ""
+        function okButton() {
+            return standardButton(Dialog.Ok);
+        }
+        // OK only for a rule that can be used.
+        function updateOk() {
+            const ok = okButton();
+            if (ok)
+                ok.enabled = usable;
+        }
+        onUsableChanged: updateOk()
+
+        onAccepted: {
+            const rule = json;
+            if (!usable)
+                return;
+            root.actOn(taskIds, id => controller.setTaskRepeat(id, rule),
+                rule === "" ? "%n tasks no longer repeat" : "%n tasks repeat");
+        }
+        onOpened: {
+            updateOk();
+            frequencyBox.forceActiveFocus();
+        }
+        onClosed: taskListView.forceActiveFocus()
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+
+            RowLayout {
+                spacing: 8
+                ComboBox {
+                    id: frequencyBox
+                    objectName: "repeatFrequency"
+                    Accessible.name: "Repeats"
+                    model: ["Never", "Daily", "Weekly", "Monthly", "Yearly"]
+                }
+                Label {
+                    visible: frequencyBox.currentIndex > 0
+                    text: "every"
+                }
+                SpinBox {
+                    id: everyBox
+                    objectName: "repeatEvery"
+                    visible: frequencyBox.currentIndex > 0
+                    Accessible.name: "Every"
+                    from: 1
+                    to: 999
+                    editable: true
+                }
+                Label {
+                    visible: frequencyBox.currentIndex > 0
+                    text: ["", "days", "weeks", "months", "years"][frequencyBox.currentIndex].replace(/s$/, everyBox.value === 1 ? "" : "s")
+                }
+            }
+
+            // Weekly: the days.
+            RowLayout {
+                visible: frequencyBox.currentIndex === 2 && modeBox.currentIndex === 0
+                spacing: 2
+                Repeater {
+                    model: 7
+                    delegate: Button {
+                        required property int index
+                        objectName: "repeatDay-" + (index + 1)
+                        text: repeatDialog.weekdays[index]
+                        checkable: true
+                        checked: repeatDialog.days.includes(index + 1)
+                        font.pixelSize: 11
+                        implicitWidth: 52
+                        onClicked: {
+                            const d = index + 1;
+                            const days = repeatDialog.days.filter(x => x !== d);
+                            if (checked)
+                                days.push(d);
+                            repeatDialog.days = days;
+                        }
+                    }
+                }
+            }
+
+            // Monthly: which day of the month.
+            ComboBox {
+                id: monthlyBox
+                objectName: "repeatMonthly"
+                visible: frequencyBox.currentIndex === 3 && modeBox.currentIndex === 0
+                Layout.fillWidth: true
+                Accessible.name: "On"
+                model: [
+                    "On day " + repeatDialog.anchor.getDate(),
+                    "On the " + ["first", "second", "third", "fourth", "fifth"][Math.min(repeatDialog.anchorNth, 5) - 1]
+                        + " " + repeatDialog.weekdayNames[repeatDialog.anchorWeekday - 1],
+                    "On the last " + repeatDialog.weekdayNames[repeatDialog.anchorWeekday - 1],
+                    "On the last day"
+                ]
+            }
+
+            ComboBox {
+                id: modeBox
+                objectName: "repeatMode"
+                visible: frequencyBox.currentIndex > 0
+                Layout.fillWidth: true
+                Accessible.name: "Counted"
+                model: ["On a schedule", "After each is completed"]
+            }
+
+            RowLayout {
+                visible: frequencyBox.currentIndex > 0
+                spacing: 8
+                ComboBox {
+                    id: endsBox
+                    objectName: "repeatEnds"
+                    Accessible.name: "Ends"
+                    model: ["Never ends", "Ends on a day", "Ends after"]
+                }
+                TextField {
+                    id: untilInput
+                    objectName: "repeatUntil"
+                    visible: endsBox.currentIndex === 1
+                    Layout.fillWidth: true
+                    placeholderText: "dec 24, in 3 months"
+                    Accessible.name: "Ends on"
+                }
+                SpinBox {
+                    id: countBox
+                    objectName: "repeatCount"
+                    visible: endsBox.currentIndex === 2
+                    Accessible.name: "Times"
+                    from: 1
+                    to: 999
+                    editable: true
+                }
+                Label {
+                    visible: endsBox.currentIndex === 2
+                    text: countBox.value === 1 ? "time" : "times"
+                }
+            }
+
+            CheckBox {
+                id: pausedBox
+                objectName: "repeatPaused"
+                visible: repeatDialog.existing && frequencyBox.currentIndex > 0
+                text: "Paused"
+            }
+
+            Label {
+                objectName: "repeatDescription"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: repeatDialog.json === "" ? "Doesn't repeat"
+                    : repeatDialog.usable ? controller.describeRepeat(repeatDialog.json)
+                    : "Choose at least one day, and an end after the start"
+                color: repeatDialog.usable ? root.colTextPrimary : root.colTextSecondary
+            }
+        }
+    }
+
     // When popover for a task (Ctrl+S, Date…): quick choices, a typed date
     // with a preview of what it means, and a calendar (#59).
     Popup {
@@ -4664,6 +4966,8 @@ Item {
         // The task's reminder time (#60), `HH:MM` or "".
         property string reminder: ""
         readonly property bool remindable: mode === "when" && !forProject
+        // The rule the task carries (#61), as JSON, or "".
+        property string repeat: ""
 
         // A typed reminder time for the tasks; false when it is refused.
         function applyReminder(text) {
@@ -4991,6 +5295,37 @@ Item {
                     }
                 }
             }
+            // How it repeats (#61), changed in the Repeat dialog.
+            RowLayout {
+                visible: whenPopup.remindable
+                Layout.fillWidth: true
+                spacing: 6
+
+                Icon {
+                    name: "repeat"
+                    size: 16
+                    color: root.colTextSecondary
+                }
+                Label {
+                    objectName: "repeatSummary"
+                    Layout.fillWidth: true
+                    text: whenPopup.repeat === "" ? "Doesn't repeat" : controller.describeRepeat(whenPopup.repeat)
+                    elide: Text.ElideRight
+                    color: whenPopup.repeat === "" ? root.colTextSecondary : root.colTextPrimary
+                }
+                Button {
+                    objectName: "repeatButton"
+                    text: "Repeat…"
+                    font.pixelSize: 11
+                    onClicked: {
+                        const ids = whenPopup.taskIds;
+                        const first = root.rowItem(whenPopup.taskId);
+                        whenPopup.close();
+                        repeatDialog.edit(ids, whenPopup.repeat, first ? first.startDate : "");
+                    }
+                }
+            }
+
             Label {
                 objectName: "reminderPreview"
                 readonly property string meaning: controller.previewReminder(reminderInput.text)

@@ -32,6 +32,7 @@ use matters_core::calendar::{
     event_days, event_section_key, events_by_day, merge_events, Calendar, DayEvent,
 };
 use matters_core::list_diff::{reconcile, ListSink};
+use matters_core::repeat::RepeatRule;
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -383,6 +384,18 @@ pub mod qobject {
         /// Clear a task's reminder.
         #[qinvokable]
         fn clear_task_reminder(self: Pin<&mut AppController>, task_id: &QString);
+        /// Make a task repeat by a rule (#61), as JSON (`RepeatRule`), or
+        /// stop it repeating (an empty string). False, changing nothing,
+        /// when the rule can't be used.
+        #[qinvokable]
+        fn set_task_repeat(
+            self: Pin<&mut AppController>,
+            task_id: &QString,
+            rule: &QString,
+        ) -> bool;
+        /// A rule (JSON) in words, or an empty string when it can't be used.
+        #[qinvokable]
+        fn describe_repeat(self: &AppController, rule: &QString) -> QString;
         /// Show the reminders now due (#60). Called every few seconds.
         #[qinvokable]
         fn check_reminders(self: Pin<&mut AppController>);
@@ -570,6 +583,10 @@ pub mod qobject {
         /// empty string when it has none.
         #[qinvokable]
         fn reminder_at(self: &TaskListModel, row: i32) -> QString;
+        /// The repeat rule the task at `row` carries (#61), as JSON, or an
+        /// empty string when it carries none.
+        #[qinvokable]
+        fn repeat_at(self: &TaskListModel, row: i32) -> QString;
         /// The status of the task at `row` (`open`, `completed` or
         /// `canceled`), or an empty string when out of range.
         #[qinvokable]
@@ -935,6 +952,8 @@ impl Default for AppControllerRust {
 
 impl cxx_qt::Initialize for qobject::AppController {
     fn initialize(mut self: Pin<&mut Self>) {
+        // Occurrences that came due while Matters was closed (#61).
+        self.as_mut().advance_repeats();
         self.as_mut().changed();
         let problem = settings().problem.clone();
         if let Some(problem) = problem {
@@ -1522,6 +1541,45 @@ impl qobject::AppController {
         ok
     }
 
+    pub fn set_task_repeat(self: Pin<&mut Self>, task_id: &QString, rule: &QString) -> bool {
+        let rule = String::from(rule);
+        let rule = if rule.trim().is_empty() {
+            None
+        } else {
+            match serde_json::from_str::<RepeatRule>(&rule) {
+                Ok(rule) if rule.check().is_ok() => Some(rule),
+                _ => return false,
+            }
+        };
+        let result = gone_task_is_fine(self.db.set_task_repeat(
+            &String::from(task_id),
+            rule,
+            local_today(),
+        ));
+        let ok = result.is_ok();
+        self.finish(result);
+        ok
+    }
+
+    pub fn describe_repeat(&self, rule: &QString) -> QString {
+        let text = serde_json::from_str::<RepeatRule>(&String::from(rule))
+            .ok()
+            .filter(|r| r.check().is_ok())
+            .map(|r| r.describe())
+            .unwrap_or_default();
+        QString::from(text.as_str())
+    }
+
+    /// Create the repeating tasks' occurrences due today (#61); the lists
+    /// reload if any were.
+    fn advance_repeats(self: Pin<&mut Self>) {
+        match self.db.advance_repeats(local_today()) {
+            Ok(created) if created.is_empty() => {}
+            Ok(_) => self.changed(),
+            Err(err) => self.report(err.to_string()),
+        }
+    }
+
     pub fn clear_task_reminder(self: Pin<&mut Self>, task_id: &QString) {
         let result = gone_task_is_fine(self.db.set_task_reminder(&String::from(task_id), None));
         self.finish(result);
@@ -1808,6 +1866,7 @@ impl qobject::AppController {
         if self.day.day() != local_today() {
             self.as_mut().changed();
         }
+        self.as_mut().advance_repeats();
         self.refresh_calendars();
     }
 
@@ -2419,6 +2478,8 @@ enum Role {
     Tags,
     /// The time an open, dated task reminds at, `HH:MM`, or empty (#60).
     Reminder,
+    /// The repeat rule a task carries, in words, or empty (#61).
+    Repeat,
     /// An event's local start and end, `YYYY-MM-DDTHH:MM:SS` (#62); the
     /// end is exclusive. Its day is `startDate`.
     EventStart,
@@ -2431,7 +2492,7 @@ enum Role {
 }
 
 impl Role {
-    const ALL: [(Role, &'static str); 22] = [
+    const ALL: [(Role, &'static str); 23] = [
         (Role::TaskId, "taskId"),
         (Role::Title, "title"),
         (Role::Notes, "notes"),
@@ -2449,6 +2510,7 @@ impl Role {
         (Role::Status, "status"),
         (Role::Tags, "tags"),
         (Role::Reminder, "reminder"),
+        (Role::Repeat, "repeat"),
         (Role::EventStart, "eventStart"),
         (Role::EventEnd, "eventEnd"),
         (Role::AllDay, "allDay"),
@@ -2472,6 +2534,7 @@ fn row_key(row: &ListRow) -> String {
         ListRow::EmptyHeading(heading) => format!("heading:{}", heading.id),
         ListRow::Project(project) => format!("project:{}", project.id),
         ListRow::Event(listed) => listed.key(),
+        ListRow::Preview(preview) => preview.key(),
     }
 }
 
@@ -2500,10 +2563,32 @@ fn with_events(view: &View, rows: Vec<ListRow>) -> (Vec<ListRow>, HashMap<String
     (rows, calendars)
 }
 
+/// Upcoming's `rows` with the repeating series' future occurrences among
+/// them (#61), over the days it lists events; other views are unchanged.
+fn with_previews(
+    db: &Database,
+    view: &View,
+    rows: Vec<ListRow>,
+) -> matters_core::Result<Vec<ListRow>> {
+    if *view != View::Upcoming {
+        return Ok(rows);
+    }
+    let Some((from, until)) = event_days(view, local_today()) else {
+        return Ok(rows);
+    };
+    Ok(matters_core::repeat::merge_previews(
+        rows,
+        db.repeat_previews(from, until)?,
+    ))
+}
+
 fn row_task(row: &ListRow) -> Option<&Task> {
     match row {
         ListRow::Task(task) => Some(task),
-        ListRow::EmptyHeading(_) | ListRow::Project(_) | ListRow::Event(_) => None,
+        ListRow::EmptyHeading(_)
+        | ListRow::Project(_)
+        | ListRow::Event(_)
+        | ListRow::Preview(_) => None,
     }
 }
 
@@ -2616,8 +2701,11 @@ impl qobject::TaskListModel {
                     let present = tag_entries(&engine.tags_present(&tasks)?);
                     let rows = engine.list_rows(&view, tasks, local_today())?;
                     // Events have no tags: a list narrowed to one has none.
+                    // Events and previews have no tags: a list narrowed to one
+                    // has neither.
                     let (rows, calendars) = if tag.is_empty() {
-                        with_events(&view, rows)
+                        let (rows, calendars) = with_events(&view, rows);
+                        (with_previews(db, &view, rows)?, calendars)
                     } else {
                         (engine.filter_rows(rows, tag)?, HashMap::new())
                     };
@@ -2628,6 +2716,7 @@ impl qobject::TaskListModel {
                             }
                             ListRow::Project(p) => matters_core::project_section_key(&view, p),
                             ListRow::Event(e) => event_section_key(&view, e),
+                            ListRow::Preview(p) => format!("date:{}", p.day),
                             ListRow::Task(_) => continue,
                         };
                         sections.insert(row_key(row), key);
@@ -2693,6 +2782,15 @@ impl qobject::TaskListModel {
         self.task_at(row).is_some_and(Task::is_evening)
     }
 
+    pub fn repeat_at(&self, row: i32) -> QString {
+        let rule = self.task_at(row).and_then(|task| task.repeat.as_ref());
+        QString::from(
+            matters_core::repeat::stored_rule(rule)
+                .unwrap_or_default()
+                .as_str(),
+        )
+    }
+
     pub fn reminder_at(&self, row: i32) -> QString {
         let time = self.task_at(row).and_then(|task| task.reminder);
         QString::from(
@@ -2711,7 +2809,7 @@ impl qobject::TaskListModel {
         let heading = match usize::try_from(row).ok().and_then(|r| self.rows.get(r)) {
             Some(ListRow::Task(task)) => task.heading_id.as_deref(),
             Some(ListRow::EmptyHeading(heading)) => Some(heading.id.as_str()),
-            Some(ListRow::Project(_) | ListRow::Event(_)) | None => None,
+            Some(ListRow::Project(_) | ListRow::Event(_) | ListRow::Preview(_)) | None => None,
         };
         QString::from(heading.unwrap_or_default())
     }
@@ -2734,6 +2832,7 @@ impl qobject::TaskListModel {
             ListRow::EmptyHeading(heading) => return self.heading_data(row, heading, role),
             ListRow::Project(project) => return self.project_data(row, project, role),
             ListRow::Event(listed) => return self.event_data(row, listed, role),
+            ListRow::Preview(preview) => return self.preview_data(row, preview, role),
         };
         match role {
             Role::Kind => QVariant::from(&QString::from("task")),
@@ -2786,6 +2885,13 @@ impl qobject::TaskListModel {
                     .unwrap_or_default()
                     .as_str(),
             )),
+            Role::Repeat => QVariant::from(&QString::from(
+                task.repeat
+                    .as_ref()
+                    .map(RepeatRule::describe)
+                    .unwrap_or_default()
+                    .as_str(),
+            )),
             Role::EventStart | Role::EventEnd | Role::CalendarColor | Role::CalendarName => {
                 QVariant::from(&QString::default())
             }
@@ -2827,7 +2933,54 @@ impl qobject::TaskListModel {
             | Role::Deadline
             | Role::DeadlineStatus
             | Role::Status
-            | Role::Reminder => QVariant::from(&QString::default()),
+            | Role::Reminder
+            | Role::Repeat => QVariant::from(&QString::default()),
+            Role::Tags => text("[]"),
+        }
+    }
+
+    /// A repeating task's future occurrence (#61): kind `preview`, its key
+    /// (as `taskId`), title, day (as `startDate`), This Evening, rule and
+    /// section; the other roles are empty.
+    fn preview_data(
+        &self,
+        row: &ListRow,
+        preview: &matters_core::repeat::Preview,
+        role: Role,
+    ) -> QVariant {
+        let task = &preview.task;
+        let text = |s: &str| QVariant::from(&QString::from(s));
+        match role {
+            Role::Kind => text("preview"),
+            Role::TaskId => text(&preview.key()),
+            Role::Title => text(&task.title),
+            Role::StartDate => text(&preview.day.to_string()),
+            Role::Evening => QVariant::from(&task.is_evening()),
+            Role::Repeat => text(
+                &task
+                    .repeat
+                    .as_ref()
+                    .map(RepeatRule::describe)
+                    .unwrap_or_default(),
+            ),
+            Role::Section => text(
+                self.sections
+                    .get(&row_key(row))
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            ),
+            Role::Done | Role::Someday | Role::AllDay => QVariant::from(&false),
+            Role::ChecklistDone | Role::ChecklistTotal => QVariant::from(&0_i32),
+            Role::Notes
+            | Role::HeadingId
+            | Role::Deadline
+            | Role::DeadlineStatus
+            | Role::Status
+            | Role::Reminder
+            | Role::EventStart
+            | Role::EventEnd
+            | Role::CalendarColor
+            | Role::CalendarName => QVariant::from(&QString::default()),
             Role::Tags => text("[]"),
         }
     }
@@ -2861,6 +3014,7 @@ impl qobject::TaskListModel {
             Role::Notes
             | Role::HeadingId
             | Role::Reminder
+            | Role::Repeat
             | Role::EventStart
             | Role::EventEnd
             | Role::CalendarColor
@@ -2892,6 +3046,7 @@ impl qobject::TaskListModel {
             | Role::DeadlineStatus
             | Role::Status
             | Role::Reminder
+            | Role::Repeat
             | Role::EventStart
             | Role::EventEnd
             | Role::CalendarColor

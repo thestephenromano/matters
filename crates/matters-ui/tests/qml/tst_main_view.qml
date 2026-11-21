@@ -31,7 +31,7 @@ Item {
             for (const name of ["whenPopup", "newAreaDialog", "renameDialog", "newProjectDialog",
                                 "emptyTrashDialog", "quickFindDialog", "movePopup",
                                 "finishProjectDialog", "tagsDialog", "preferencesDialog",
-                                "openLinkDialog", "taskMenu"]) {
+                                "openLinkDialog", "taskMenu", "repeatDialog"]) {
                 const popup = findChild(view, name);
                 if (popup)
                     tryVerify(() => !popup.visible, 2000, name + " has closed");
@@ -3617,6 +3617,159 @@ Item {
             // A reminder of several opens Today.
             controller.reminderOpened("");
             tryCompare(controller, "currentView", "today");
+        }
+
+        // ---- Repeating tasks (#61) ------------------------------------------
+
+        // Open the Repeat dialog from the open row's When popover.
+        function openRepeat(row) {
+            expandRow(row);
+            mouseClick(findChild(row, "schedule-date"));
+            const popup = findChild(view, "whenPopup");
+            tryVerify(() => popup.opened, 1000);
+            waitForRendering(popup.contentItem);
+            mouseClick(findChild(popup.contentItem, "repeatButton"));
+            const dialog = findChild(view, "repeatDialog");
+            tryVerify(() => dialog.opened, 1000, "Repeat… opens the dialog");
+            waitForRendering(dialog.contentItem);
+            return dialog;
+        }
+
+        function accept(dialog) {
+            dialog.accept();
+            tryVerify(() => !dialog.visible, 2000);
+        }
+
+        // Choose how often, and wait for the dialog to lay out what that
+        // shows (the days of the week, say) before clicking in it.
+        function chooseFrequency(dialog, index) {
+            findChild(dialog.contentItem, "repeatFrequency").currentIndex = index;
+            waitForRendering(dialog.contentItem);
+            wait(30);
+        }
+
+        // Make the week's chosen days exactly `wanted` (1 is Monday).
+        function chooseDays(dialog, wanted) {
+            for (let d = 1; d <= 7; ++d) {
+                const day = findChild(dialog.contentItem, "repeatDay-" + d);
+                if (day.checked !== wanted.includes(d)) {
+                    mouseClick(day);
+                    tryCompare(day, "checked", wanted.includes(d));
+                }
+            }
+        }
+
+        function test_a_task_repeats_weekly_on_the_days_chosen() {
+            const row = addToToday("rp-weekly");
+            const dialog = openRepeat(row);
+            compare(findChild(dialog.contentItem, "repeatFrequency").currentText, "Never");
+            chooseFrequency(dialog, 2); // Weekly
+            // Today's weekday is chosen to start with.
+            const today = new Date().getDay() || 7;
+            verify(findChild(dialog.contentItem, "repeatDay-" + today).checked);
+            chooseDays(dialog, [1, 4]);
+            compare(findChild(dialog.contentItem, "repeatDescription").text, "Every week on Mon, Thu");
+            accept(dialog);
+            tryCompare(row, "repeat", "Every week on Mon, Thu");
+            clickRowBody(row);
+            tryVerify(() => !row.isExpanded, 1000);
+            const marker = findChild(row, "repeatMarker");
+            verify(marker.visible, "a closed row shows that it repeats");
+            compare(marker.Accessible.name, "Repeats: Every week on Mon, Thu");
+
+            // The popover says how it repeats, and the dialog opens on it.
+            const again = openRepeat(row);
+            compare(findChild(again.contentItem, "repeatFrequency").currentText, "Weekly");
+            verify(findChild(again.contentItem, "repeatDay-4").checked);
+            verify(!findChild(again.contentItem, "repeatDay-2").checked);
+            verify(findChild(again.contentItem, "repeatPaused").visible, "it can be paused now");
+            // Never stops it.
+            findChild(again.contentItem, "repeatFrequency").currentIndex = 0;
+            accept(again);
+            tryCompare(row, "repeat", "");
+        }
+
+        function test_a_weekly_repeat_needs_a_day() {
+            const row = addToToday("rp-noday");
+            const dialog = openRepeat(row);
+            chooseFrequency(dialog, 2);
+            chooseDays(dialog, []);
+            compare(findChild(dialog.contentItem, "repeatDescription").text,
+                    "Choose at least one day, and an end after the start");
+            verify(!dialog.okButton().enabled, "OK waits for a day");
+            chooseDays(dialog, [3]);
+            verify(dialog.okButton().enabled);
+            dialog.reject();
+            tryVerify(() => !dialog.visible, 2000);
+            compare(row.repeat, "", "nothing changed");
+        }
+
+        function test_monthly_and_yearly_repeats_follow_the_tasks_date() {
+            const row = addToToday("rp-monthly");
+            const dialog = openRepeat(row);
+            chooseFrequency(dialog, 3);
+            const monthly = findChild(dialog.contentItem, "repeatMonthly");
+            const today = new Date();
+            compare(monthly.currentText, "On day " + today.getDate());
+            monthly.currentIndex = 3;
+            findChild(dialog.contentItem, "repeatEvery").value = 2;
+            compare(findChild(dialog.contentItem, "repeatDescription").text,
+                    "Every 2 months on the last day");
+            accept(dialog);
+            tryCompare(row, "repeat", "Every 2 months on the last day");
+        }
+
+        function test_upcoming_previews_a_repeat_without_creating_it() {
+            const row = addToToday("rp-daily");
+            const rule = JSON.stringify({ every: 1, frequency: { kind: "daily" }, start: isoInDays(0) });
+            verify(controller.setTaskRepeat(row.taskId, rule));
+            const upcoming = controller.upcomingCount;
+            controller.selectView("upcoming");
+            wait(0);
+            const previews = () => {
+                const found = [];
+                for (let i = 0; i < list.count; ++i) {
+                    list.positionViewAtIndex(i, ListView.Contain);
+                    const item = list.itemAtIndex(i);
+                    if (item && item.objectName === "previewRow" && item.title === "rp-daily")
+                        found.push(item.startDate);
+                }
+                list.positionViewAtBeginning();
+                return found;
+            };
+            tryVerify(() => previews().length === 14, 2000, "each of the next two weeks' days");
+            compare(previews()[0], isoInDays(1));
+            compare(indexOf("rp-daily"), -1, "previews aren't tasks");
+            compare(controller.upcomingCount, upcoming, "nor counted");
+            verify(controller.setTaskRepeat(row.taskId, ""));
+            tryVerify(() => previews().length === 0, 2000);
+        }
+
+        function test_an_after_completion_repeat_comes_back_when_done() {
+            const row = addToToday("rp-after");
+            const dialog = openRepeat(row);
+            chooseFrequency(dialog, 1); // Daily
+            findChild(dialog.contentItem, "repeatEvery").value = 3;
+            findChild(dialog.contentItem, "repeatMode").currentIndex = 1;
+            compare(findChild(dialog.contentItem, "repeatDescription").text, "Every 3 days after completion");
+            accept(dialog);
+            tryCompare(row, "repeat", "Every 3 days after completion");
+            const id = row.taskId;
+            mouseClick(findChild(row, "checkCircle"));
+            tryCompare(row, "done", true);
+            controller.selectView("upcoming");
+            const next = waitForRow("rp-after");
+            verify(next.taskId !== id, "a new occurrence");
+            compare(next.startDate, isoInDays(3));
+            compare(next.repeat, "Every 3 days after completion", "it carries the rule on");
+        }
+
+        function test_a_refused_rule_changes_nothing() {
+            const row = addToToday("rp-bad");
+            verify(!controller.setTaskRepeat(row.taskId, "{\"every\":0}"));
+            verify(!controller.setTaskRepeat(row.taskId, "not json"));
+            compare(controller.describeRepeat("not json"), "");
+            compare(row.repeat, "");
         }
     }
 }

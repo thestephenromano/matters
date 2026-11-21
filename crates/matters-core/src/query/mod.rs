@@ -39,6 +39,9 @@ pub enum ListRow {
     EmptyHeading(Heading),
     Project(Project),
     Event(crate::calendar::DayEvent),
+    /// A repeating task's future occurrence, in Upcoming: shown, not yet
+    /// created (#61, [`crate::repeat::merge_previews`]).
+    Preview(crate::repeat::Preview),
 }
 
 /// The section key of tasks under heading `id` titled `title`.
@@ -743,7 +746,7 @@ impl<'a> QueryEngine<'a> {
             .filter(|row| match row {
                 ListRow::Task(t) => tasks.contains(&t.id),
                 ListRow::Project(p) => projects.contains(&p.id),
-                ListRow::EmptyHeading(_) | ListRow::Event(_) => false,
+                ListRow::EmptyHeading(_) | ListRow::Event(_) | ListRow::Preview(_) => false,
             })
             .collect())
     }
