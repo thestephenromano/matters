@@ -764,3 +764,86 @@ async fn the_roots_session_reads_the_authority_log_and_publishes_only_a_recovery
     assert_eq!(refused.code(), "not-a-member");
     db.finish().await;
 }
+
+#[tokio::test]
+async fn the_newest_checkpoint_parts_are_found_without_reading_the_log() {
+    let Some((db, c, app, _)) = setup().await else {
+        return;
+    };
+    let token = login(&app, &c.admin).await;
+    let r = route_hex(&route());
+    let mut snapshots = Vec::new();
+    for n in 0..4u8 {
+        let id = fresh();
+        let bytes = if n % 2 == 1 {
+            let bytes = snapshot_record(&c.admin, id, &[n; 20], &route());
+            snapshots.push(bytes.clone());
+            bytes
+        } else {
+            record(&c.admin, id, &[n; 20], &route())
+        };
+        let uri = format!("/v0/routes/{r}/records/{}", hex(&id));
+        let stored = call(&app, Method::PUT, &uri, Some(&token), bytes).await;
+        assert_eq!(stored.status, StatusCode::CREATED);
+    }
+    let entries = |response: &Response| -> Vec<(u64, Vec<u8>)> {
+        let (_, raw) = response
+            .map()
+            .into_iter()
+            .find(|(k, _)| k == "records")
+            .unwrap();
+        let mut d = Decoder::new(&raw);
+        let n = d.array().unwrap().unwrap();
+        (0..n)
+            .map(|_| {
+                d.array().unwrap();
+                (d.u64().unwrap(), d.bytes().unwrap().to_vec())
+            })
+            .collect()
+    };
+    let found = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/snapshots"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(found.status, StatusCode::OK);
+    assert_eq!(found.keys(), ["records", "generation"]);
+    assert_eq!(
+        entries(&found),
+        [(4, snapshots[1].clone()), (2, snapshots[0].clone())],
+        "snapshot records only, newest first"
+    );
+    let newest = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/snapshots?limit=1"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(entries(&newest), [(4, snapshots[1].clone())]);
+    for bad in ["limit=0", "limit=257", "after=AA", "limit=1&limit=2"] {
+        let refused = call(
+            &app,
+            Method::GET,
+            &format!("/v0/routes/{r}/snapshots?{bad}"),
+            Some(&token),
+            vec![],
+        )
+        .await;
+        assert_eq!(refused.code(), "malformed", "{bad}");
+    }
+    let anonymous = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/snapshots"),
+        None,
+        vec![],
+    )
+    .await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    db.finish().await;
+}

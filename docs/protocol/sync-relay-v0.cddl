@@ -27,6 +27,9 @@ page = {
 }
 cursor = bstr .cbor [generation: id16, last-sequence: seq / 0]
 
+; GET /v0/routes/{route}/snapshots: snapshot records only, newest first.
+snapshots = {"generation": id16, "records": [* [seq, bstr]]}
+
 hint = {"generation": id16, "sequence": seq}
 
 error = {
