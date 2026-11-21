@@ -9,21 +9,27 @@ The sync stack splits into a part any application reuses and a part that is Matt
 | Records, controls, crypto, checkpoints | `matters-sync` | yes | Nothing about the application: opaque payloads, routes, members, epochs |
 | The relay | `matters-relay` | yes | Routes, opaque records, signed public authority objects |
 | The client | `matters-sync-client` | yes | The `LocalStore`, `JoiningStore` and `RecoveringStore` traits; the relay's HTTP contract |
-| Local persistence, engine, projection | `matters-core` storage | **no**: Matters' tasks | Matters' schema, its Loro document and its commands |
+| Local persistence, engine, projection | `matters-core` storage | **no**: Matters' tasks. Its device side moves to a shared crate in #246 | Matters' schema, its Loro document and its commands |
 | The app session | `matters-sync-app` | as a pattern | Matters' database, and its `MATTERS_APPLICATION` ID |
 
 ## What a second application writes
 
-1. **An application ID.** It routes the application's collections apart from Matters' (16 bytes, like `MATTERS_APPLICATION`).
-2. **A store implementing `LocalStore`.** It must:
-   - persist outgoing records and controls until acknowledged, and resend the same bytes;
-   - apply received controls and records durably and idempotently;
-   - keep two cursors, and requeue everything on a generation change.
+**After #246.** The device side moves out of `matters-core` into a shared crate, behind a small engine trait: apply an update, project, snapshot, the version vector and frontier in the canonical encodings `crdt::encode_version` and `encode_frontiers` define, and the actors an update carries. The shared crate does the security-critical parts:
+- sealing inside the application's write transaction, through a call it provides;
+- receive: authentication, chain order and pending records;
+- membership, enrollment and recovery state;
+- checkpoints.
 
-   `matters-core`'s `sync_store.rs` is the worked example, and `matters_sync::store` documents every method.
-3. **Sealing in the write's own transaction.** It seals each recorded change with `matters_sync::seal` as the next record of this open's writer (`matters-core/src/storage/sealing.rs`).
-4. **Receive with the authority's checks.** It uses `Authority::authenticate_at` and the same chain rules (SYNC_DURABLE_RECEIVE.md, `matters-core/src/storage/receive.rs`).
-5. **Optionally, `JoiningStore` and `RecoveringStore`.** They let devices join through invitations and recover from the words, as `Enrolling` and `Recovering` do.
+The application then writes only:
+1. **an application ID**, routing its collections apart from Matters' (16 bytes, like `MATTERS_APPLICATION`);
+2. **the engine trait**, for its own document;
+3. **its session wiring**, following `matters-sync-app`.
+
+**Until #246 lands**, those parts exist only inside `matters-core`, written for Matters' document. A second application should wait for #246 rather than copy them. The places they live are listed below, for reviewing #246, not as a template:
+- the `LocalStore` implementation in `matters-core/src/storage/sync_store.rs`, as `matters_sync::store` documents each method;
+- sealing in the write's own transaction (`matters-core/src/storage/sealing.rs`);
+- receive with the authority's checks (`matters-core/src/storage/receive.rs`, SYNC_DURABLE_RECEIVE.md);
+- the joining and recovering stores (`Enrolling`, `Recovering`).
 
 The relay needs no change: routes are application-scoped, and the relay never reads payloads.
 
@@ -32,7 +38,7 @@ The relay needs no change: routes are application-scoped, and the relay never re
 The candidate is the Goals app (#223). It has its own data model (goals and their progress, no tasks), its own repository, and already a link to Matters through goal IDs (#212).
 
 To show the integration works, it must:
-- integrate through the crates above with no task types, and no change to the relay;
+- integrate through the crates above, after #246, with no task types and no change to the relay;
 - cover local persistence, joining a second device, sync, recovery, and moving between a self-hosted and a hosted relay through export and import (SYNC_SERVICE_CONTRACT.md);
 - report the integration effort in changed lines and in days, plus the questions it raised. Each question is a gap in this guide.
 
