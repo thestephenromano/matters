@@ -28,8 +28,9 @@ Matters needs only to record which goal a project or repeating series serves, an
   - converting a task to a project starts with no goal, because single tasks hold none.
 
   A command is refused if its value is not a UUID.
-- **Damaged values:** in an imported document, a value that is not a UUID string or null projects as no goal and is reported as a repair. It is never an error, so a damaged reference cannot stop projection.
+- **Damaged values:** in an imported document, a value that is not a UUID string or null projects as no goal and is reported as the repair `goal-invalid:{id}`. It is never an error, so a damaged reference cannot stop projection.
 - **Older versions:** they keep the register unchanged and ignore it ([#217](https://github.com/thestephenromano/matters/issues/217), ADR 0001 *Forward compatibility*).
+- **Occurrence merge:** `goal` is added to the fields compared when identical generated occurrences merge (`visible_occurrence` in `crdt/projection.rs`), in the same change that adds the register (#212).
 
 ### What Matters shows
 
@@ -65,14 +66,14 @@ These extend ADR 0001's fixture table. Each runs from a shared genesis on replic
 | G03 | A moves P to the Trash; B links P to g1 | P stays in the Trash with the link kept; putting P back shows g1 (as C06). |
 | G04 | A finishes P; B changes P's goal | Both survive: P is finished and serves B's goal. A finished project keeps its link. |
 | G05 | A empties a Trash containing P; B links P | P is permanently absent from SQL, and its reference with it (as C09). |
-| G06 | A completes series occurrence O1, creating O2; B changes O1's goal to g2 | O1 serves g2. O2 serves the goal handed on when A created it. B's change landed on an occurrence that was no longer the newest, so it does not reach O2; the user sees O2's goal and can change it. Same on both replicas. The sync review confirms this matches how a concurrent change to the rule itself behaves. |
-| G07 | A and B generate the same occurrence of a series | Like the rule, the reference is handed on and is not compared for the occurrence merge (ADR 0001, *Generated occurrences*). The merged occurrence keeps the reference of the node that survives the merge. |
+| G06 | A completes series occurrence O1, creating O2; B changes O1's goal to g2 | O1 serves g2 and O2 serves the goal handed on when A created it, the same on both replicas. B's change lands on O1, which A no longer writes, so it does not reach O2; the user sees O2's goal and can change it. Handing on copies the goal to O2 and never writes O1's `goal`, so there is no concurrent write to race. |
+| G07 | A and B generate the same occurrence of a series | `goal` is one of the fields compared for the occurrence merge (ADR 0001, *Generated occurrences*). Twins with the same reference merge as before; twins whose references differ stay conflict copies (C18). Unlike the rule, generating the next occurrence never rewrites `goal`, so twins differ only after a concurrent edit, and the user can see that difference. |
 | G08 | A, on a build that knows goals, links P; B, on an older build, renames P | P is renamed and still serves the goal. B's edit leaves the register untouched (#217). |
-| G09 | A imports a document whose P has a `goal` value that is not a UUID string | P projects with no goal, a repair is reported, and the rest of the document projects. |
+| G09 | A imports a document whose P has a `goal` value that is not a UUID string | P projects with no goal, the repair `goal-invalid:{id}` is reported, and the rest of the document projects. |
 
 ## Consequences
 
-- **Matters' document gains one register on two kinds of entity, and no new entity kind.** The sync work's review shrinks to G01–G09.
+- **Matters' document gains one register on two kinds of entity, and no new entity kind.** The sync work reviewed G01–G09 on 2026-11-21 (#232).
 - **The Goals app's MVP includes the three methods and the signal above.** They are the first use of its D-Bus interface from outside the app.
 - **No goal data in Matters.** Achieving, abandoning or deleting a goal happens in the Goals app only, and Matters only shows the result.
 - **Matters works without the Goals app.** Linking is unavailable without it, but nothing else depends on it.
