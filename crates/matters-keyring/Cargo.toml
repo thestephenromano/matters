@@ -1,0 +1,21 @@
+[package]
+name = "matters-keyring"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+authors = ["Matters Contributors"]
+description = "The platform keyring for Matters' sync device keys (oo7, #37)"
+
+[dependencies]
+matters-core = { path = "../matters-core" }
+# Decided for #37 on 2026-11-21: the Secret Service on the host, the
+# secret portal's file keyring under Flatpak. The async-io runtime (zbus's
+# default) rather than tokio; RustCrypto for the file keyring.
+oo7 = { version = "=0.7.2", default-features = false, features = ["async-std", "native_crypto"] }
+futures-lite = "2.6"
+
+[dev-dependencies]
+tempfile = "3.13"
+matters-core = { path = "../matters-core", features = ["test-support"] }
+matters-sync = { path = "../matters-sync" }

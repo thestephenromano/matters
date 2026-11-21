@@ -44,3 +44,7 @@ compile_commands.json
 # Flatpak builds (ci/flatpak.sh): the generated crate sources and builder state
 /packaging/flatpak/cargo-sources.json
 .flatpak-builder/
+# cargo-fuzz build output and found inputs (ci/fuzz.sh).
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/coverage/

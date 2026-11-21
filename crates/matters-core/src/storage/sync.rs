@@ -16,7 +16,7 @@ use crate::error::{MattersError, Result};
 /// Test seam for crash tests: with the `test-support` feature, a process
 /// whose `MATTERS_CRASH_AT` names this point exits on the spot, as a crash
 /// would, without unwinding or committing.
-fn crash_point(point: &str) {
+pub(crate) fn crash_point(point: &str) {
     #[cfg(feature = "test-support")]
     if std::env::var("MATTERS_CRASH_AT").as_deref() == Ok(point) {
         std::process::exit(86);
@@ -59,22 +59,7 @@ impl Database {
             if engine.is_some() {
                 return Err(MattersError::Validation("sync is already on".into()));
             }
-            let rows: i64 = conn.query_row(
-                "SELECT (SELECT COUNT(*) FROM areas) + (SELECT COUNT(*) FROM projects)
-                      + (SELECT COUNT(*) FROM tasks) + (SELECT COUNT(*) FROM tags)",
-                [],
-                |r| r.get(0),
-            )?;
-            if rows > 0 {
-                return Err(MattersError::Validation(
-                    "existing data must be migrated before sync (#41)".into(),
-                ));
-            }
-            conn.execute(
-                "INSERT INTO sync_state (singleton, enabled_at) VALUES (1, ?1)",
-                params![crate::clock::now_millis()],
-            )?;
-            *engine = Some(Document::new(fresh_peer())?);
+            *engine = Some(turn_on(conn)?);
             Ok(())
         })
     }
@@ -107,7 +92,14 @@ impl Database {
         apply: impl FnOnce(&Transaction<'_>) -> Result<T>,
         commands: impl FnOnce(&Transaction<'_>, &T) -> Result<Vec<Command>>,
     ) -> Result<T> {
-        self.with_sealing(|conn, engine, sealing| {
+        self.with_sealing(|conn, engine, keys| {
+            // A joined, active device seals every write; until its keys are
+            // loaded nothing is written, so nothing is left to seal later.
+            if keys.required && keys.sealing.is_none() {
+                return Err(MattersError::Validation(
+                    "sync keys are not loaded; resume sync first".into(),
+                ));
+            }
             let tx = conn.transaction()?;
             let value = apply(&tx)?;
             let Some(doc) = engine.as_mut() else {
@@ -126,7 +118,7 @@ impl Database {
                     )?;
                     // Sealed in this transaction: the record commits with
                     // the edit or not at all (#36).
-                    if let Some(sealing) = sealing.as_ref() {
+                    if let Some(sealing) = keys.sealing.as_ref() {
                         super::sealing::seal_update(&tx, sealing, tx.last_insert_rowid(), &update)?;
                     }
                 }
@@ -141,6 +133,29 @@ impl Database {
             Ok(value)
         })
     }
+}
+
+/// Turn sync on in `conn` (a transaction, when the caller has more to
+/// commit with it) and return the new engine document. The database must
+/// hold no rows yet: existing data waits for the migration of #41.
+#[cfg(feature = "test-support")]
+pub(crate) fn turn_on(conn: &rusqlite::Connection) -> Result<Document> {
+    let rows: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM areas) + (SELECT COUNT(*) FROM projects)
+              + (SELECT COUNT(*) FROM tasks) + (SELECT COUNT(*) FROM tags)",
+        [],
+        |r| r.get(0),
+    )?;
+    if rows > 0 {
+        return Err(MattersError::Validation(
+            "existing data must be migrated before sync (#41)".into(),
+        ));
+    }
+    conn.execute(
+        "INSERT INTO sync_state (singleton, enabled_at) VALUES (1, ?1)",
+        params![crate::clock::now_millis()],
+    )?;
+    Document::new(fresh_peer())
 }
 
 /// Where an entity goes among its siblings: right after the one before it

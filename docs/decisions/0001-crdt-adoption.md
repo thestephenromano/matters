@@ -136,6 +136,14 @@ Repeating tasks derive each occurrence's ID from its series and date. Two device
 - **Otherwise keep C18.** Nodes that differ in anything visible stay conflict copies, as C18 says, so no edit is lost.
 - **Not compared:** the repeat rule and timestamps. A device hands the rule on and stamps the occurrence when it generates the next one.
 
+### Forward compatibility (#217, 2026-11-21)
+
+A newer version may add entity kinds (goals, #202) and fields that an older version syncs before it can read them. The rule:
+- **Unknown kinds.** A node of a kind this build doesn't know is kept and merged like any other, but it is neither projected nor addressable. A command naming its ID, or creating that ID, is refused.
+- **Their children.** A known child of such a node projects under its nearest ancestor that may host it, as under a removed heading. That may be the top level, ranked among the top level's own rows. If no ancestor fits, it goes to recovery. The tree keeps the newer placement until someone moves the child.
+- **Unknown fields** on a known kind are ignored by projection. Edits never remove them, because commands write their own keys only.
+- **Damage.** A `kind` that is not a JSON string is still a damaged document and an error.
+
 ### Measured cost (#35, 2026-11-20)
 
 [The engine cost record](../evidence/sync-engine-cost-2026-11-20.json) compares sync on with the unchanged write path on `betelgeuse` (i9-10920X, NVMe/Btrfs, Fedora 44), at 1,000 and 10,000 tasks with 1 KiB notes:

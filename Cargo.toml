@@ -4,6 +4,7 @@ members = [
     "crates/matters-ui",
     "crates/matters-gtk",
     "crates/matters-sync",
+    "crates/matters-keyring",
     # Sync-prototype measurement helper: shares the app lockfile so it measures
     # the app's exact SQLite stack.
     "experiments/sync-prototype/baseline",

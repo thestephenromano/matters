@@ -146,6 +146,11 @@ impl EpochKey {
     pub fn content_key(&self) -> &ContentKey {
         &self.key
     }
+
+    /// The key itself, for a sealer that owns it.
+    pub fn into_content_key(self) -> ContentKey {
+        self.key
+    }
 }
 
 impl std::fmt::Debug for EpochKey {

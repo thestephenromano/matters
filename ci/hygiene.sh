@@ -37,7 +37,7 @@ if [ "$archives" -ne 3 ] || [ "$matching" -ne 3 ]; then
     refuse "$manifest builds with another Rust than $channel (rust-toolchain.toml)"
 fi
 echo "Flatpak toolchain $channel"
-for tool in cargo-deny cargo-mutants cargo-llvm-cov; do
+for tool in cargo-deny cargo-mutants cargo-llvm-cov cargo-fuzz fuzz-nightly; do
     echo "$tool $(pinned_version "$tool")"
 done
 endgroup

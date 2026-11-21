@@ -1096,3 +1096,159 @@ fn a_lone_generated_occurrence_is_no_merge() {
     assert_eq!(task(&s, 540).title, "Water plants");
     assert!(s.repairs.is_empty(), "{:?}", s.repairs);
 }
+
+// Kinds and fields a newer version wrote (#217).
+
+const GOAL: u128 = 700;
+
+/// The node holding entity `n` in a raw engine document.
+fn raw_node(raw: &loro::LoroDoc, n: u128) -> loro::TreeID {
+    let home = raw.get_tree("home");
+    home.nodes()
+        .into_iter()
+        .find(|node| {
+            home.get_meta(*node)
+                .unwrap()
+                .get("id")
+                .and_then(|v| v.into_value().ok())
+                .and_then(|v| v.into_string().ok())
+                .is_some_and(|s| *s == id(n))
+        })
+        .expect("node")
+}
+
+/// As a newer version would: a top-level "Goal" node holding project
+/// PROJECT, the Inbox task OTHER and a heading of its own, and an unknown
+/// field on TASK. Merged into `doc`; returns the raw replica.
+fn newer_peer_edits(doc: &mut Document, heading: u128) -> loro::LoroDoc {
+    let raw = loro::LoroDoc::new();
+    raw.set_peer_id(99).unwrap();
+    raw.import(&doc.snapshot().unwrap()).unwrap();
+    let home = raw.get_tree("home");
+    let goal = home.create(loro::TreeParentId::Root).unwrap();
+    let meta = home.get_meta(goal).unwrap();
+    meta.insert("id", id(GOAL).as_str()).unwrap();
+    meta.insert("kind", "\"Goal\"").unwrap();
+    meta.insert("title", "Grow food").unwrap();
+    meta.insert("target", "2027-06-01").unwrap();
+    for child in [PROJECT, OTHER, heading] {
+        home.mov(raw_node(&raw, child), goal).unwrap();
+    }
+    home.get_meta(raw_node(&raw, TASK))
+        .unwrap()
+        .insert("energy", 3)
+        .unwrap();
+    raw.commit();
+    doc.merge(
+        &raw.export(loro::ExportMode::updates(&doc.version()))
+            .unwrap(),
+    )
+    .unwrap();
+    raw
+}
+
+#[test]
+fn a_newer_kind_is_kept_while_its_known_children_still_project() {
+    let (mut a, mut b) = pair();
+    a.apply(&[create(707, Kind::Heading, Some(PROJECT), "Later")], 15)
+        .unwrap();
+    let raw = newer_peer_edits(&mut a, 707);
+    let s = a.project().unwrap();
+    // The goal itself appears nowhere.
+    let goal = id(GOAL);
+    assert!(s.areas.iter().all(|r| r.id != goal));
+    assert!(s.projects.iter().all(|r| r.id != goal));
+    assert!(s.tasks.iter().all(|r| r.id != goal));
+    assert!(!s.recovery.contains(&goal));
+    // Its known children project where their kinds may live: the project
+    // and the task at the top level, the heading (which needs a project)
+    // for recovery. Everything under the project is unchanged.
+    let project = s.projects.iter().find(|p| p.id == id(PROJECT)).unwrap();
+    assert_eq!(project.area_id, None);
+    assert_eq!(task(&s, OTHER).project_id, None);
+    assert_eq!(task(&s, OTHER).area_id, None);
+    assert!(s.recovery.contains(&id(707)), "{:?}", s.recovery);
+    // They rank among the top level's own rows, not in a group of their
+    // own under the goal.
+    let area = s.areas.iter().find(|r| r.id == id(AREA)).unwrap();
+    let top = [
+        area.sort_order,
+        project.sort_order,
+        task(&s, OTHER).sort_order,
+    ];
+    assert!(
+        top[0] != top[1] && top[1] != top[2] && top[0] != top[2],
+        "{top:?}"
+    );
+    assert_eq!(task(&s, TASK).heading_id, Some(id(HEADING)));
+    assert_eq!(task(&s, TASK).title, "Dig", "unknown fields are ignored");
+    assert!(s.checklist_items.iter().any(|i| i.id == id(ITEM)));
+    // This build cannot address or reuse the goal's ID.
+    for command in [
+        Command::Rename {
+            id: goal.clone(),
+            title: "x".into(),
+        },
+        create(GOAL, Kind::Task, None, "x"),
+        Command::Move {
+            id: id(TASK),
+            parent: Some(goal.clone()),
+            at: Anchor::Last,
+        },
+    ] {
+        assert!(
+            matches!(a.apply(&[command], 20), Err(MattersError::Validation(_))),
+            "the goal is not addressable"
+        );
+    }
+    // Local edits keep the newer data, and it reaches other replicas.
+    a.apply(
+        &[Command::Rename {
+            id: id(TASK),
+            title: "Dig beds".into(),
+        }],
+        30,
+    )
+    .unwrap();
+    let s = converged(&mut a, &mut b);
+    assert_eq!(task(&s, TASK).title, "Dig beds");
+    raw.import(&a.updates_since(&raw.oplog_vv()).unwrap())
+        .unwrap();
+    let home = raw.get_tree("home");
+    let goal_node = raw_node(&raw, GOAL);
+    assert_eq!(
+        home.parent(raw_node(&raw, PROJECT)),
+        Some(loro::TreeParentId::Node(goal_node)),
+        "the newer placement stands"
+    );
+    let task_meta = home.get_meta(raw_node(&raw, TASK)).unwrap();
+    assert_eq!(
+        task_meta.get("energy").and_then(|v| v.into_value().ok()),
+        Some(loro::LoroValue::I64(3))
+    );
+    let goal_meta = home.get_meta(goal_node).unwrap();
+    assert_eq!(
+        goal_meta.get("target").and_then(|v| v.into_value().ok()),
+        Some(loro::LoroValue::String("2027-06-01".into()))
+    );
+}
+
+#[test]
+fn a_kind_that_is_not_a_json_string_is_a_damaged_document() {
+    let (mut a, _) = pair();
+    let raw = loro::LoroDoc::new();
+    raw.set_peer_id(99).unwrap();
+    raw.import(&a.snapshot().unwrap()).unwrap();
+    let home = raw.get_tree("home");
+    home.get_meta(raw_node(&raw, OTHER))
+        .unwrap()
+        .insert("kind", "Task")
+        .unwrap();
+    raw.commit();
+    let damaged = raw.export(loro::ExportMode::updates(&a.version())).unwrap();
+    assert!(matches!(
+        a.merge(&damaged),
+        Err(MattersError::Validation(_))
+    ));
+    assert!(matches!(a.project(), Err(MattersError::Validation(_))));
+}
