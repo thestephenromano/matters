@@ -12,7 +12,7 @@
 
 mod projection;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::civil::Date;
 use loro::{
@@ -226,10 +226,22 @@ pub(super) fn scalar_string(map: &LoroMap, key: &str) -> Option<String> {
     }
 }
 
+/// A node's kind as stored (`put` writes it as a JSON string). `None` is a
+/// kind a newer version wrote (#217): such a node is kept and merged like
+/// any other, but this build neither addresses nor projects it. Anything
+/// that is not a JSON string is a damaged document.
+pub(super) fn kind_of(stored: &str) -> Result<Option<Kind>> {
+    let name: String = serde_json::from_str(stored).map_err(|_| invalid("invalid node kind"))?;
+    Ok(serde_json::from_value(serde_json::Value::String(name)).ok())
+}
+
 /// The document, with an index from entity and tag UUIDs to tree nodes.
 pub struct Document {
     doc: LoroDoc,
     entities: BTreeMap<String, (TreeID, Kind)>,
+    /// IDs of nodes of kinds a newer version wrote: neither addressable
+    /// nor reusable here.
+    foreign: BTreeSet<String>,
     tags: BTreeMap<String, TreeID>,
 }
 
@@ -241,6 +253,7 @@ impl Document {
         Ok(Self {
             doc,
             entities: BTreeMap::new(),
+            foreign: BTreeSet::new(),
             tags: BTreeMap::new(),
         })
     }
@@ -281,10 +294,9 @@ impl Document {
         for node in tree.nodes() {
             let meta = tree.get_meta(node).map_err(engine)?;
             let id = scalar_string(&meta, "id").ok_or_else(|| invalid("node without id"))?;
-            let kind: Kind = serde_json::from_str(
+            let kind = kind_of(
                 &scalar_string(&meta, "kind").ok_or_else(|| invalid("node without kind"))?,
-            )
-            .map_err(engine)?;
+            )?;
             raw.push((node, id, kind));
         }
         let owners: BTreeMap<String, TreeID> =
@@ -294,10 +306,15 @@ impl Document {
                 .collect();
         // Merged duplicates of a generated occurrence are not addressable.
         let (hidden, _) = projection::merged_occurrences(&self.doc)?;
+        self.foreign.clear();
         for (node, id, kind) in raw {
             if hidden.contains(&node) {
                 continue;
             }
+            let Some(kind) = kind else {
+                self.foreign.insert(id);
+                continue;
+            };
             let key = if owners[&id] == node {
                 id
             } else {
@@ -348,6 +365,9 @@ impl Document {
     fn entity(&self, id: &str) -> Result<(TreeID, Kind)> {
         if self.purged(id) {
             return Err(invalid(format!("'{id}' was permanently deleted")));
+        }
+        if self.foreign.contains(id) {
+            return Err(invalid(format!("'{id}' was made by a newer version")));
         }
         self.entities
             .get(id)
@@ -419,7 +439,7 @@ impl Document {
                     self.place(&home, node, parent, anchor, false)?;
                     return Ok(());
                 }
-                if self.tags.contains_key(id) || self.purged(id) {
+                if self.tags.contains_key(id) || self.purged(id) || self.foreign.contains(id) {
                     return Err(invalid(format!("'{id}' already exists")));
                 }
                 let parent = self.parent(*kind, parent.as_deref())?;

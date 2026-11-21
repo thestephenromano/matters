@@ -217,3 +217,34 @@ CREATE TABLE IF NOT EXISTS sync_records (
     acked INTEGER NOT NULL DEFAULT 0 CHECK (acked IN (0, 1))
 );
 "#;
+
+/// v13: this device's membership of a sync collection (#37). The device's
+/// private keys live in the platform keyring under `key_name`; SQLite holds
+/// only public, signed or encrypted material. The authority is rebuilt on
+/// each open by replaying `sync_controls` in order.
+pub const MIGRATION_V13: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_device (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    application BLOB NOT NULL CHECK (length(application) = 16),
+    tenant BLOB NOT NULL CHECK (length(tenant) = 16),
+    collection BLOB NOT NULL CHECK (length(collection) = 16),
+    document BLOB NOT NULL CHECK (length(document) = 16),
+    root BLOB NOT NULL CHECK (length(root) = 48),
+    device BLOB NOT NULL CHECK (length(device) = 48),
+    key_name TEXT NOT NULL,
+    -- active: writes seal. revoked or frozen: writes are kept locally,
+    -- unsent, for explicit recovery.
+    state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'revoked', 'frozen'))
+);
+-- Signed control records in the order this device accepted them, with
+-- the competing record of a fork as evidence.
+CREATE TABLE IF NOT EXISTS sync_controls (
+    seq INTEGER PRIMARY KEY,
+    bytes BLOB NOT NULL UNIQUE
+);
+-- Key envelopes addressed to this device, one per epoch manifest.
+CREATE TABLE IF NOT EXISTS sync_envelopes (
+    manifest BLOB PRIMARY KEY CHECK (length(manifest) = 48),
+    bytes BLOB NOT NULL
+);
+"#;

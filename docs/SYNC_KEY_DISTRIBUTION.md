@@ -158,11 +158,7 @@ The secret's 128 bits face no offline attack before the admin uses it once; quan
 
 `tests/vectors/invitation_kat.py` independently computes the code, the lookup, the invitation bytes and the offer tag with the Python standard library, and the test checks all four.
 
-**Not covered yet:**
-- admitting earlier-epoch records into the engine;
-- persistence and secure storage of device keys and authority state.
-
-These remain open in #37.
+**Not covered yet:** admitting earlier-epoch records into the engine. It remains open in #37.
 
 ## Recovery
 
@@ -208,3 +204,31 @@ root_recovery body = membership body, signed by the root under "matters-sync/v0/
 - writing the words and recovery envelopes into the app;
 - storing envelopes on the relay (#38);
 - restore-testing the bundle as epochs change.
+
+## Persistence
+
+A device's membership survives restarts, and is never split between stores ([`matters_core::storage::membership`](../crates/matters-core/src/storage/membership.rs), migration v13).
+
+- **Keyring.** It holds only the two 32-byte seeds the device's ML-DSA and MLKEM keys are made from, under a random entry name. Behind the `KeyStore` trait this is oo7 in the app, per the #37 decision ([`matters-keyring`](../crates/matters-keyring/src/lib.rs): the Secret Service on the host, the secret portal's encrypted file keyring under Flatpak), and a map in tests. `matters-keyring`'s tests run against oo7's file backend; the Secret Service backend shares the adapter code above it but needs a keyring daemon that CI does not run.
+- **SQLite** holds only public, signed or encrypted material:
+  - `sync_device`: the route, the document, the pinned root ID, the device ID, the keyring entry's name and the device's standing;
+  - `sync_controls`: the signed control records the device accepted, in order, including the competing record of any fork;
+  - `sync_envelopes`: the key envelopes addressed to the device, one per epoch.
+- **Replay on open.** Each open rebuilds the authority by replaying `sync_controls`, pinned by the stored root ID.
+- **One commit per change.** `apply_control` commits a transition, the new epoch's envelope and the device's standing in one transaction. If the device stays a member, the envelope is required, and without it nothing is stored.
+- **Sealing follows.** It continues under the new epoch's key, or stops when the device is removed or the authority freezes on a fork.
+
+**Writes always seal or wait.** A joined, active device seals every recorded write, keeping #36's rule that nothing is left to seal later. After an open, writes are refused until `resume_sync` loads the keys. Missing keys, or a keyring entry holding another device's keys, are explicit errors and change nothing.
+
+**Unsent work is kept.** A removed or frozen device keeps editing locally. Its writes are journalled, unsealed and unsent, for explicit recovery.
+
+`create_collection` makes the first device's collection in one transaction: the device's keys, the recovery words, the genesis signed by the words' root, and the device's own envelope of the first key. Its seeds reach the keyring before that commit. A crash in between leaves an unused keyring entry and no collection, and a retry starts clean.
+
+**Evidence:** `tests/membership_tests.rs` covers:
+- creating a collection and sealing under it;
+- refusing writes after a reopen, then resuming as a new writer under the same key;
+- refusing missing or foreign keys;
+- transitions without an envelope, with a damaged one, as replays, and across a restart;
+- a recovery that revokes the device, keeping writes unsent, across a restart;
+- a fork that freezes sealing, keeping both successors, across a restart;
+- a crash before the collection commits.

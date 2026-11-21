@@ -1,0 +1,45 @@
+[package]
+name = "matters-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for the sync parsers (#36); run by ci/fuzz.sh"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+matters-sync = { path = "../crates/matters-sync", features = ["fuzzing"] }
+
+# Its own workspace: built only on the pinned nightly, by ci/fuzz.sh.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "record"
+path = "fuzz_targets/record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control"
+path = "fuzz_targets/control.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "invitation"
+path = "fuzz_targets/invitation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typed"
+path = "fuzz_targets/typed.rs"
+test = false
+doc = false
+bench = false

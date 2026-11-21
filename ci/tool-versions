@@ -3,3 +3,7 @@
 cargo-deny=0.20.2
 cargo-mutants=27.1.0
 cargo-llvm-cov=0.8.7
+cargo-fuzz=0.13.2
+# The nightly ci/fuzz.sh builds the fuzz targets with (cargo-fuzz needs
+# nightly for its sanitizer flags). Nothing else is built with it.
+fuzz-nightly=nightly-2026-10-12
