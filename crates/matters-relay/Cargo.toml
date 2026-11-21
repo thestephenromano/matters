@@ -32,4 +32,8 @@ tower = { version = "0.5", features = ["util"] }
 # The hints client in the tests; already in the graph through axum's ws.
 tokio-tungstenite = "0.29"
 futures-util = "0.3"
+serde_json = "1"
+tempfile = "3.13"
+# The conformance runner needs the crash points.
+matters-relay = { path = ".", features = ["fault-injection"] }
 uuid = { version = "1", features = ["v4"] }

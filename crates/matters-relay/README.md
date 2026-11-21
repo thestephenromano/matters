@@ -35,7 +35,14 @@ matters-relay quota <route-hex> (bytes | records) (<n> | none)
 
 `serve` reads `MATTERS_RELAY_RATE` (`<per-second>/<burst>`) and `MATTERS_RELAY_OPERATOR_TOKEN` (64 hex digits).
 
-The conformance runner follows in a later #38 pull request.
+**Conformance.** `tests/conformance.rs` runs every scenario of [the contract's fixtures](../../docs/protocol/sync-relay-v0-conformance.json) against the real binary, as a child process:
+- restarts kill the process;
+- crashes use the `fault-injection` crash points before and after an append's commit;
+- backups and restores copy the database and run `new-generation --all`.
+
+It also:
+- takes the database away, which must answer `503 unavailable` and acknowledge nothing;
+- checks every table and every log line for plaintext and session tokens.
 
 ## Development
 
