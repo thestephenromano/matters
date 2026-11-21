@@ -124,7 +124,9 @@ fn visible_occurrence(tree: &LoroTree, node: TreeID) -> Result<Option<Value>> {
         .map_err(engine)?
         .get_deep_value()
         .to_json_value();
-    if json::<Kind>(&value, "kind")? != Kind::Task || value.get("occurrence").is_none() {
+    if super::kind_of(&text(&value, "kind")?)? != Some(Kind::Task)
+        || value.get("occurrence").is_none()
+    {
         return Ok(None);
     }
     let fields: Vec<Value> = [
@@ -212,7 +214,8 @@ fn int(value: &Value, key: &str) -> i64 {
 
 struct Node {
     id: String,
-    kind: Kind,
+    /// `None`: a kind a newer version wrote, kept but never projected.
+    kind: Option<Kind>,
     value: Value,
 }
 
@@ -239,7 +242,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
             .get_deep_value()
             .to_json_value();
         let id = text(&value, "id")?;
-        let kind: Kind = json(&value, "kind")?;
+        let kind = super::kind_of(&text(&value, "kind")?)?;
         raw.push((node, id, kind, value));
     }
     let owners = identity_owners(raw.iter().map(|(n, id, ..)| (*n, id.as_str())));
@@ -266,12 +269,16 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
         );
     }
 
-    // A node hosts children when it survives: not permanently deleted and,
-    // for headings and checklist items, not removed.
+    // A node hosts children when it survives: of a kind this build knows,
+    // not permanently deleted and, for headings and checklist items, not
+    // removed. Children of a kind a newer version wrote project under the
+    // nearest ancestor that hosts them, as under a removed heading.
     let tombstones = out.tombstones.clone();
     let hosts = |node: &TreeID| -> bool {
         let n = &nodes[node];
-        !tombstones.contains(&n.id) && !n.value["removed"].as_bool().unwrap_or(false)
+        n.kind.is_some()
+            && !tombstones.contains(&n.id)
+            && !n.value["removed"].as_bool().unwrap_or(false)
     };
 
     // Projected parent of each surviving node: the nearest hosting ancestor
@@ -284,6 +291,9 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
         if tombstones.contains(&n.id) || hidden.contains(&node) {
             continue;
         }
+        let Some(kind) = n.kind else {
+            continue;
+        };
         let mut ancestor = match tree.parent(node) {
             Some(TreeParentId::Node(p)) => Some(p),
             Some(TreeParentId::Root) => None,
@@ -291,7 +301,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
         };
         let mut selected = None;
         while let Some(p) = ancestor {
-            if hosts(&p) && n.kind.permits(Some(nodes[&p].kind)) {
+            if hosts(&p) && kind.permits(nodes[&p].kind) {
                 selected = Some(p);
                 break;
             }
@@ -300,7 +310,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
                 _ => None,
             };
         }
-        if selected.is_none() && !n.kind.permits(None) {
+        if selected.is_none() && !kind.permits(None) {
             out.recovery.insert(n.id.clone());
             continue;
         }
@@ -321,8 +331,10 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
         let v = &n.value;
         let sort_order = rank_of[node];
         let (created_at, updated_at) = (int(v, "created_at"), int(v, "updated_at"));
-        let parent_kind = parent.map(|p| nodes[&p].kind);
-        match n.kind {
+        let parent_kind = parent.and_then(|p| nodes[&p].kind);
+        // Only known kinds reach `parent_of`.
+        let Some(kind) = n.kind else { continue };
+        match kind {
             Kind::Area => out.areas.push(Area {
                 id: n.id.clone(),
                 title: text(v, "title")?,
@@ -416,7 +428,7 @@ pub(super) fn project(doc: &LoroDoc) -> Result<Snapshot> {
     }
     let surviving: BTreeMap<String, Kind> = parent_of
         .keys()
-        .map(|n| (nodes[n].id.clone(), nodes[n].kind))
+        .filter_map(|n| Some((nodes[n].id.clone(), nodes[n].kind?)))
         .collect();
     let merged = project_tags(doc, &out.tombstones, &mut out.tags, &mut out.repairs)?;
 
@@ -447,12 +459,12 @@ fn today_ranks(
 ) -> Result<BTreeMap<String, f64>> {
     let tasks: BTreeSet<&str> = parent_of
         .keys()
-        .filter(|n| nodes[n].kind == Kind::Task)
+        .filter(|n| nodes[n].kind == Some(Kind::Task))
         .map(|n| nodes[n].id.as_str())
         .collect();
     let others: BTreeSet<&str> = parent_of
         .keys()
-        .filter(|n| nodes[n].kind != Kind::Task)
+        .filter(|n| nodes[n].kind != Some(Kind::Task))
         .map(|n| nodes[n].id.as_str())
         .collect();
     let list = doc.get_movable_list(TODAY).get_deep_value().to_json_value();
