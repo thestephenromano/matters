@@ -454,6 +454,9 @@ fn a_device_sets_its_own_data_aside_joins_and_imports_what_is_new() {
         .unwrap();
     b.add_tag(&mut Tag::new(id(4), "B's tag", None)).unwrap();
     b.add_tag_to(Tagged::Task(&id(2)), &id(4)).unwrap();
+    b.add_project(&mut Project::new(id(5), "B's project", 0.0))
+        .unwrap();
+    b.add_tag_to(Tagged::Project(&id(5)), &id(4)).unwrap();
     let aside = b.set_aside_local_data().unwrap();
     assert!(b.get_task(&id(2)).unwrap().is_none(), "set aside, not lost");
     assert_eq!(
@@ -491,6 +494,12 @@ fn a_device_sets_its_own_data_aside_joins_and_imports_what_is_new() {
         report.skipped, 1,
         "the shared task keeps the collection's version"
     );
+    assert_eq!(report.added, ADDED, "the project, the task and the tag");
+    assert_eq!(
+        b.tags_of(Tagged::Project(&id(5))).unwrap()[0].id,
+        id(4),
+        "a project's tags come too"
+    );
     assert_eq!(
         b.get_task(&id(1)).unwrap().unwrap().title,
         "shared, A's version"
@@ -511,4 +520,78 @@ fn a_device_sets_its_own_data_aside_joins_and_imports_what_is_new() {
     }
     assert_eq!(a.get_task(&id(2)).unwrap().unwrap().title, "B's own");
     assert!(a.pending_records().unwrap().is_empty());
+}
+
+/// What B's set-aside data adds: its project, its task (whose checklist
+/// comes with it) and its tag.
+const ADDED: usize = 3;
+
+#[test]
+fn a_large_database_migrates_in_bounded_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("big.db")).unwrap();
+    let notes = "n".repeat(6 * 1024);
+    for n in 0..120 {
+        let mut task = Task::new(id(1000 + n), format!("task {n}"), n as f64);
+        task.notes = notes.clone();
+        db.add_task(&mut task).unwrap();
+    }
+    db.create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    let records = db.outgoing_records().unwrap();
+    // About 0.7 MB of updates: several records, each near the batch size
+    // and well under the 1 MiB record cap.
+    assert!(
+        (3..=6).contains(&records.len()),
+        "{} records",
+        records.len()
+    );
+    for r in &records {
+        assert!(
+            r.bytes.len() < 400 * 1024,
+            "a record of {} bytes",
+            r.bytes.len()
+        );
+    }
+    assert!(
+        records[..records.len() - 1]
+            .iter()
+            .all(|r| r.bytes.len() > 200 * 1024),
+        "every batch but the last is full"
+    );
+    db.verify_rows_match_engine().unwrap();
+}
+
+#[test]
+fn the_migration_check_sees_rows_changed_behind_the_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("m.db")).unwrap();
+    db.add_task(&mut Task::new(id(1), "first", 0.0)).unwrap();
+    db.add_task(&mut Task::new(id(2), "second", 1.0)).unwrap();
+    db.create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    db.verify_rows_match_engine().unwrap();
+    // A field changed behind the engine's back.
+    db.with_raw_conn(|c| {
+        c.execute("UPDATE tasks SET notes = 'tampered' WHERE id = ?1", [id(1)])?;
+        Ok(())
+    })
+    .unwrap();
+    let error = db.verify_rows_match_engine().unwrap_err().to_string();
+    assert!(error.contains("migration changed tasks"), "{error}");
+    assert!(error.contains("tampered"), "{error}");
+    db.with_raw_conn(|c| {
+        c.execute("UPDATE tasks SET notes = '' WHERE id = ?1", [id(1)])?;
+        Ok(())
+    })
+    .unwrap();
+    db.verify_rows_match_engine().unwrap();
+    // The order of a list changed: compared as ranks, not raw keys.
+    db.with_raw_conn(|c| {
+        c.execute("UPDATE tasks SET sort_order = 5 WHERE id = ?1", [id(1)])?;
+        Ok(())
+    })
+    .unwrap();
+    let error = db.verify_rows_match_engine().unwrap_err().to_string();
+    assert!(error.contains("migration changed tasks"), "{error}");
 }

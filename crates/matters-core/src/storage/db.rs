@@ -50,18 +50,6 @@ const MIGRATIONS: &[(i64, &str)] = &[
 /// The newest schema version this build migrates to: the last migration's.
 pub const LATEST_SCHEMA: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 
-// Versions run 2, 3, 4, … with no gap or repeat.
-const _: () = {
-    let mut i = 0;
-    while i < MIGRATIONS.len() {
-        assert!(
-            MIGRATIONS[i].0 == i as i64 + 2,
-            "migration versions must be consecutive from 2"
-        );
-        i += 1;
-    }
-};
-
 pub(crate) const PROJECT_COLUMNS: &str =
     "id, area_id, title, notes, start_date, time_of_day, is_someday,
      deadline, status, completed_at, sort_order, created_at, updated_at, trashed_at, goal_id";
@@ -1698,4 +1686,17 @@ pub(crate) fn insert_checklist_item(conn: &Connection, item: &ChecklistItem) -> 
         ],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod migration_list_tests {
+    /// Versions run 2, 3, 4, … with no gap or repeat, so `LATEST_SCHEMA`
+    /// is the last migration's and every one runs once.
+    #[test]
+    fn migration_versions_are_consecutive_from_two() {
+        for (i, (version, _)) in super::MIGRATIONS.iter().enumerate() {
+            assert_eq!(*version, i as i64 + 2);
+        }
+        assert_eq!(super::LATEST_SCHEMA, super::MIGRATIONS.len() as i64 + 1);
+    }
 }

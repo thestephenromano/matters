@@ -145,14 +145,13 @@ fn creations(tx: &Transaction<'_>) -> Result<Vec<(i64, Vec<Command>)>> {
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     for (id, updated_at) in ordered {
+        // Tasks not in Today place nothing; `import_rows` skips them.
         let placed: Vec<Command> =
             super::sync::reorder(tx, "tasks", "today_order", std::slice::from_ref(&id))?
                 .into_iter()
                 .filter(|c| matches!(c, Command::PlaceInToday { .. }))
                 .collect();
-        if !placed.is_empty() {
-            out.push((updated_at, placed));
-        }
+        out.push((updated_at, placed));
     }
     Ok(out)
 }
@@ -163,8 +162,7 @@ pub(super) fn import_rows(
     tx: &Transaction<'_>,
     doc: &mut Document,
     sealing: &Sealing,
-) -> Result<usize> {
-    let mut batches = 0;
+) -> Result<()> {
     let mut since = doc.version();
     let mut pending = 0usize;
     let flush = |doc: &Document, since: &loro::VersionVector| -> Result<()> {
@@ -187,14 +185,12 @@ pub(super) fn import_rows(
             flush(doc, &since)?;
             since = doc.version();
             pending = 0;
-            batches += 1;
         }
     }
     if pending > 0 {
         flush(doc, &since)?;
-        batches += 1;
     }
-    Ok(batches)
+    Ok(())
 }
 
 /// One table's rows as text, list keys replaced by order within the list.
@@ -277,6 +273,24 @@ pub(super) fn verify(
 /// The synced tables as they are now, for `verify`.
 pub(super) fn before(conn: &Connection) -> Result<Vec<(&'static str, Vec<String>)>> {
     snapshot(conn)
+}
+
+impl Database {
+    /// Rebuild the rows from the engine and require them to equal the rows
+    /// as they are: the check a migration ends with, for tests that change
+    /// rows behind the engine's back.
+    #[cfg(feature = "test-support")]
+    pub fn verify_rows_match_engine(&self) -> Result<()> {
+        self.with_sealing(|conn, engine, _| {
+            let doc = engine
+                .as_ref()
+                .ok_or_else(|| MattersError::Validation("sync is off".into()))?;
+            let tx = conn.transaction()?;
+            let rows = before(&tx)?;
+            // Never kept: the rows stay as the test left them.
+            verify(&tx, doc, &rows)
+        })
+    }
 }
 
 /// What [`Database::import_missing_from`] did.
