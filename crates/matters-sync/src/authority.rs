@@ -32,6 +32,7 @@ mod envelope;
 mod identity;
 mod message;
 mod recovery;
+mod session;
 
 pub use enrollment::{
     request_enrollment, Invitation, InvitationSecret, CODE_LENGTH, INVITATION_SECRET_BYTES,
@@ -51,6 +52,7 @@ pub use message::{
 #[doc(hidden)]
 pub use recovery::recovery_seeds;
 pub use recovery::{genesis, RecoveryKeys, RecoverySecret, RECOVERY_WORDS};
+pub use session::{session_bytes, sign_session, verify_session, SESSION_LABEL};
 
 /// A SHA-384 hash or device ID.
 pub type Hash = [u8; 48];

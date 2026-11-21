@@ -11,7 +11,13 @@ The durable encrypted sync relay (#38). It implements [the sync service contract
 - authority objects, with membership transitions verified before they authorize uploads;
 - operator quotas.
 
-The HTTP API, device sessions, commit hints, export and import, and the conformance runner follow in later #38 pull requests.
+**The v0 HTTP API** (`api::router`, on axum over HTTP/1.1 and cleartext HTTP/2) has:
+- device sessions: a single-use 60-second challenge answered with the enrolled ML-DSA-65 key, and a 15-minute bearer token stored as its SHA-384, with membership checked again on every request;
+- record and authority uploads and pages, with deterministic CBOR bodies and every error in the contract's code and status.
+
+The `matters-relay` binary serves it. Set `MATTERS_RELAY_DATABASE_URL` and optionally `MATTERS_RELAY_LISTEN` (default `127.0.0.1:8484`). TLS terminates at a proxy in front (#44).
+
+Commit hints, export and import, and the conformance runner follow in a later #38 pull request.
 
 ## Development
 

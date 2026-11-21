@@ -24,6 +24,12 @@ pub enum RelayError {
     RouteExists,
     #[error("the device is not a current member of the route")]
     NotAMember,
+    #[error("the device was removed from the route")]
+    Revoked,
+    #[error("no valid session")]
+    Unauthenticated,
+    #[error("the session expired")]
+    SessionExpired,
     #[error("another record is stored under this ID")]
     RecordConflict { digest: Hash },
     #[error("the record's routing fields do not match")]
@@ -50,6 +56,9 @@ impl RelayError {
             Self::UnknownRoute => "unknown-route",
             Self::RouteExists => "route-exists",
             Self::NotAMember => "not-a-member",
+            Self::Revoked => "revoked",
+            Self::Unauthenticated => "unauthenticated",
+            Self::SessionExpired => "session-expired",
             Self::RecordConflict { .. } => "record-conflict",
             Self::ContextMismatch => "context-mismatch",
             Self::UnsupportedSuite => "unsupported-suite",
@@ -165,10 +174,10 @@ pub struct Relay {
 }
 
 /// A provisioned route's row.
-struct RouteRow {
-    id: i64,
+pub(crate) struct RouteRow {
+    pub(crate) id: i64,
     root_key: Vec<u8>,
-    generation: [u8; 16],
+    pub(crate) generation: [u8; 16],
 }
 
 fn random16() -> [u8; 16] {
@@ -523,13 +532,13 @@ fn generation_of(bytes: Vec<u8>) -> Result<[u8; 16]> {
     bytes.try_into().map_err(|_| RelayError::Malformed)
 }
 
-fn member(authority: &Authority, device: &Hash) -> bool {
+pub(crate) fn member(authority: &Authority, device: &Hash) -> bool {
     authority
         .members()
         .is_ok_and(|m| m.iter().any(|m| m.id == *device))
 }
 
-async fn route_row(
+pub(crate) async fn route_row(
     tx: &mut Transaction<'static, Postgres>,
     route: &Route,
     lock: bool,
@@ -557,7 +566,7 @@ async fn route_row(
 
 /// Replay the route's genesis, transitions and recoveries, in acceptance
 /// order, against its pinned root.
-async fn route_authority(
+pub(crate) async fn route_authority(
     tx: &mut Transaction<'static, Postgres>,
     route: &Route,
     row: &RouteRow,
