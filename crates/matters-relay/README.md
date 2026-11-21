@@ -17,6 +17,8 @@ The durable encrypted sync relay (#38). It implements [the sync service contract
 
 The `matters-relay` binary serves it. Set `MATTERS_RELAY_DATABASE_URL` and optionally `MATTERS_RELAY_LISTEN` (default `127.0.0.1:8484`). TLS terminates at a proxy in front (#44).
 
+**Self-hosting** is described in [docs/SELF_HOSTING.md](../../docs/SELF_HOSTING.md): the image (`packaging/relay/Containerfile`), and a stack of PostgreSQL, the relay and Caddy (`packaging/relay/compose.yaml`).
+
 **Health and metrics (#44).**
 - `GET /healthz` answers `200` while the process is up.
 - `GET /readyz` answers `200` while its database answers within a second too, and `503` otherwise.

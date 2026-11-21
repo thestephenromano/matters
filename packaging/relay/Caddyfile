@@ -1,0 +1,15 @@
+# TLS in front of the relay (#44). Caddy obtains and renews the certificate
+# for MATTERS_RELAY_DOMAIN from a public CA, with MATTERS_RELAY_TLS as
+# the ACME contact address. "internal" uses Caddy's own private CA instead,
+# for a host without a public name, as the CI smoke test does.
+{$MATTERS_RELAY_DOMAIN} {
+	tls {$MATTERS_RELAY_TLS}
+	# Only the v0 API and health are public. Metrics stay on the private network.
+	@api path /v0/* /healthz /readyz
+	handle @api {
+		reverse_proxy relay:8484
+	}
+	handle {
+		respond 404
+	}
+}

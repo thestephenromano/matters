@@ -16,4 +16,5 @@ ci/coverage.sh
 ci/mutants.sh
 ci/fuzz.sh
 ci/relay-tests.sh
+ci/relay-image.sh
 ci/flatpak.sh

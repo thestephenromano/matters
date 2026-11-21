@@ -1,0 +1,29 @@
+# The relay's container image (#44). Build from the repository root:
+#
+#   docker build -f packaging/relay/Containerfile -t matters-relay .
+#
+# Base images are pinned by digest and the build is --locked, with a fixed
+# SOURCE_DATE_EPOCH and the checkout path remapped. The same source then
+# builds the same binary. The runtime is distroless: no shell or package
+# manager, running as an unprivileged user.
+
+# rust:1.100.0-slim-trixie, the toolchain rust-toolchain.toml names.
+FROM docker.io/library/rust:1.100.0-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS build
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    CARGO_TERM_COLOR=never \
+    RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/usr/local/cargo=cargo"
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked -p matters-relay \
+    && install -D -m 0755 target/release/matters-relay /out/matters-relay
+
+# distroless/cc-debian13:nonroot: glibc and libgcc only.
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2
+COPY --from=build /out/matters-relay /usr/local/bin/matters-relay
+ENV MATTERS_RELAY_LISTEN=0.0.0.0:8484
+EXPOSE 8484
+USER nonroot
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 CMD ["/usr/local/bin/matters-relay", "probe"]
+ENTRYPOINT ["/usr/local/bin/matters-relay"]
+CMD ["serve"]

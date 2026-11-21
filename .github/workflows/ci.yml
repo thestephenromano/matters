@@ -211,11 +211,32 @@ jobs:
       - uses: ./.github/actions/setup
       - run: ci/relay-tests.sh
 
+  image:
+    name: self-hosted relay image
+    runs-on: ubuntu-24.04
+    # A release build in the image, then the stack's start.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The diff is taken against main's history.
+          fetch-depth: 0
+      # Only a change to the relay, matters-sync or the packaging builds the
+      # image (ci/relay-image.sh checks the diff).
+      - run: ci/relay-image.sh
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: relay-image-log
+          path: target/relay-image.log
+          retention-days: 14
+          if-no-files-found: ignore
+
   # The required check: passes only when every job above passed.
   result:
     name: clippy and tests
     if: always()
-    needs: [lint, tests, ui, style, coverage, mutants, flatpak, fuzz, relay]
+    needs: [lint, tests, ui, style, coverage, mutants, flatpak, fuzz, relay, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

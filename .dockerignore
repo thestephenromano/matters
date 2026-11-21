@@ -1,0 +1,8 @@
+# Build context for container images (packaging/relay/Containerfile): the
+# sources only.
+target/
+.git/
+.claude/
+experiments/sync-prototype/target/
+fuzz/target/
+fuzz/artifacts/
