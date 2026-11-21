@@ -279,12 +279,12 @@ CREATE TABLE IF NOT EXISTS sync_publish (
 );
 "#;
 
-/// v15: receiving other devices' sealed records (#39). Each writer's
+/// v16: receiving other devices' sealed records (#39). Each writer's
 /// records apply in its signed chain order, once each; a record that waits
 /// for its key, its writer's admission or its predecessor is kept pending,
 /// and one that can never apply (after its writer's closing head, or under
 /// a frozen lineage) is kept too, never applied and never discarded.
-pub const MIGRATION_V15: &str = r#"
+pub const MIGRATION_V16: &str = r#"
 CREATE TABLE IF NOT EXISTS sync_received (
     record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
     incarnation BLOB NOT NULL CHECK (length(incarnation) = 32),

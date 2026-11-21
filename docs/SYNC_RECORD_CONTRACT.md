@@ -134,7 +134,7 @@ The [active execution record](../experiments/sync-prototype/evidence/record-cont
 
 ## Production receiving
 
-[`matters_core::storage::receive`](../crates/matters-core/src/storage/receive.rs) (#39, migration v15) is the receiver's half of this contract.
+[`matters_core::storage::receive`](../crates/matters-core/src/storage/receive.rs) (#39, migration v16) is the receiver's half of this contract.
 
 **Writer claims.** Each open that seals is a new writer. It signs a writer control for its incarnation and engine actor (`SYNC_WRITER_LIFECYCLE.md`), admits it locally, and queues it to publish with the device's other controls.
 - A device's later writers hand off from its active admitted incarnation, naming the exact closing head of its record chain.
