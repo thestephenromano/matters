@@ -2,9 +2,10 @@
 
 Status: design for [#40](https://github.com/thestephenromano/matters/issues/40), delivered in steps.
 - The encoding, assembly and comparison rules are implemented in `matters_sync::checkpoint`.
-- Creating, receiving and bootstrapping from checkpoints follow in matters-core, the relay and the client.
+- Creating, receiving, judging and bootstrapping from checkpoints are implemented in `matters_core::storage::checkpoint`.
+- The relay's snapshot index and the client's use of it follow.
 
-Until the receiver rules below are implemented, a `snapshot` record is never imported as state (SYNC_RECORD_CONTRACT.md).
+A device with history never imports a checkpoint. Only a device that holds nothing yet imports one, through `Database::start_from_checkpoint`, after the checks below.
 
 ## Adopted components
 
@@ -81,7 +82,9 @@ It then reads the log from the cursor. Every record after it is tail: it either 
 
 **Limit.** A fresh device holds no history, so the relay is its only source of freshness. It can check a checkpoint's structure, signatures and internal consistency. It cannot tell whether a newer checkpoint, or later records, are being withheld. Only an authorized writer can author a checkpoint. Its signature identifies that writer, but does not prove the snapshot matches the records it lists. A malicious member can author a dishonest checkpoint (SYNC_DESIGN.md threat model). Devices with history detect a contradiction at check 2 or 3. A fresh device cannot.
 
-When the cursor's generation is not the relay's current one (the relay was restored), the device does not use the cursor. It reads the whole log and lets covered records count as duplicates by their chains.
+When the cursor's generation is not the relay's current one (the relay was restored), the device does not use the checkpoint. It reads the whole log instead.
+
+A device that started from a checkpoint knows each covered chain only by its length and head. If it meets covered records again, for example after a later relay restore, it recognises them by walking each chain back from its covered head, by hash, through its pending records. Each one found is recorded as held and is no longer pending.
 
 ## Old offline devices
 
@@ -103,6 +106,20 @@ Pruning history needs its own approved policy, which must name:
 The policy must be based on measured checkpoint size, bootstrap latency and history growth for named workloads (#40, #43).
 
 ## Evidence
+
+`crates/matters-core/tests/checkpoint_tests.rs` covers:
+- a checkpoint waiting for the device's own records to be acknowledged, and not made twice for the same state;
+- a member with history accepting one and importing nothing;
+- a fresh device starting from one and following the tail from both writers;
+- a checkpoint from another relay generation starting nothing;
+- pending records travelling with a checkpoint and applying later;
+- covered records met again after a relay restore, recognised by their chains;
+- dishonest checkpoints refused and kept as evidence: another head, a version the snapshot does not hold, another author, a counter that disagrees, another epoch;
+- an older checkpoint never replacing a newer one;
+- publication surviving a restart and a relay restore with the same bytes;
+- a crash while creating a checkpoint leaving nothing and losing nothing.
+
+`authority_tests.rs` checks that snapshot records authenticate only as snapshots, and only without a predecessor.
 
 `crates/matters-sync/tests/checkpoint_tests.rs` covers:
 - one-part and multi-part round trips, in any delivery order and with duplicates;

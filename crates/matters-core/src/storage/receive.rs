@@ -21,14 +21,21 @@
 //! writer claim, transition or envelope through `apply_control`. One that can never apply (past its writer's close,
 //! or under a frozen lineage) is kept there too, never applied and never
 //! discarded. Forged or malformed bytes are refused and not kept.
+//!
+//! A `snapshot` record is a checkpoint part (#40). It is authenticated and
+//! opened the same way, outside any chain, and handed to the checkpoint
+//! module (`checkpoint.rs`), which keeps it until its checkpoint is
+//! complete.
 
 use std::collections::BTreeSet;
 
 use matters_sync::authority::{self, Boundary, Hash};
+use matters_sync::checkpoint::Sealed;
 use matters_sync::record::record_hash;
 use matters_sync::wire;
 use rusqlite::{params, Connection, OptionalExtension};
 
+use super::checkpoint::{self, Checkpointed};
 use super::db::Database;
 use super::membership::{Joined, HOME_DOCUMENT};
 use super::sync::{load_engine, rebuild_rows};
@@ -36,13 +43,15 @@ use crate::crdt::Document;
 use crate::error::{MattersError, Result};
 
 /// What receiving a record did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Received {
     Applied,
     /// Already applied, or this device's own.
     Duplicate,
     /// Kept, waiting.
     Pending(Waiting),
+    /// A checkpoint part, and what became of its checkpoint.
+    Checkpoint(Checkpointed),
 }
 
 /// Why a record waits.
@@ -86,6 +95,12 @@ enum Attempt {
         incarnation: [u8; 32],
         update: Vec<u8>,
     },
+    /// A checkpoint part, authenticated and opened.
+    Part {
+        record_id: [u8; 32],
+        sealed: Sealed,
+        plaintext: Vec<u8>,
+    },
 }
 
 fn known(conn: &Connection, record_id: &[u8; 32]) -> Result<bool> {
@@ -98,7 +113,9 @@ fn known(conn: &Connection, record_id: &[u8; 32]) -> Result<bool> {
         .optional()?;
     let received: Option<i64> = conn
         .query_row(
-            "SELECT 1 FROM sync_received WHERE record_id = ?1",
+            "SELECT 1 FROM sync_received WHERE record_id = ?1
+             UNION ALL SELECT 1 FROM sync_checkpoint_out WHERE record_id = ?1
+             UNION ALL SELECT 1 FROM sync_checkpoint_parts WHERE record_id = ?1",
             params![record_id.as_slice()],
             |r| r.get(0),
         )
@@ -130,6 +147,29 @@ fn attempt(conn: &Connection, joined: &Joined, bytes: &[u8]) -> Result<Attempt> 
     let record_id = *h.record_id;
     let incarnation = *h.incarnation;
     let previous = h.previous.copied();
+    if h.kind == wire::Kind::Snapshot {
+        let sealed = Sealed {
+            author: *h.author,
+            incarnation,
+            epoch: h.epoch,
+        };
+        let authenticated =
+            match joined
+                .authority
+                .authenticate_snapshot_at(bytes, &key, &HOME_DOCUMENT)
+            {
+                Ok(a) => a,
+                Err(authority::Error::MissingWriter) => return Ok(Attempt::Wait(Waiting::Writer)),
+                Err(authority::Error::Fork) => return Ok(Attempt::Wait(Waiting::Frozen)),
+                Err(error) => return Err(refused(&error.to_string())),
+            };
+        let plaintext = authenticated.open().map_err(|e| refused(&e.to_string()))?;
+        return Ok(Attempt::Part {
+            record_id,
+            sealed,
+            plaintext,
+        });
+    }
     let authenticated = match joined
         .authority
         .authenticate_at(bytes, &key, &HOME_DOCUMENT)
@@ -173,6 +213,55 @@ fn attempt(conn: &Connection, joined: &Joined, bytes: &[u8]) -> Result<Attempt> 
         incarnation,
         update,
     })
+}
+
+/// A checkpoint part's record ID, the header facts of its record, and its
+/// plaintext.
+pub(super) type OpenedPart = ([u8; 32], Sealed, Vec<u8>);
+
+/// Authenticate and open a checkpoint part without keeping it: `None` when
+/// it must wait for its key or its writer.
+pub(super) fn open_part(
+    conn: &Connection,
+    joined: &Joined,
+    bytes: &[u8],
+) -> Result<Option<OpenedPart>> {
+    let parsed = wire::parse(bytes, joined.route.content(&HOME_DOCUMENT))
+        .map_err(|e| refused(&e.to_string()))?;
+    if parsed.header.kind != wire::Kind::Snapshot {
+        return Err(refused("not a checkpoint part"));
+    }
+    let id = *parsed.header.record_id;
+    // Not known yet on a device that holds nothing; checked anyway.
+    let _ = known(conn, &id)?;
+    let envelope: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT bytes FROM sync_envelopes WHERE manifest = ?1",
+            params![parsed.header.manifest.as_slice()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(envelope) = envelope else {
+        return Ok(None);
+    };
+    let key = joined
+        .authority
+        .unwrap_history_key(&envelope, &joined.device)?;
+    let sealed = Sealed {
+        author: *parsed.header.author,
+        incarnation: *parsed.header.incarnation,
+        epoch: parsed.header.epoch,
+    };
+    let authenticated = match joined
+        .authority
+        .authenticate_snapshot_at(bytes, &key, &HOME_DOCUMENT)
+    {
+        Ok(a) => a,
+        Err(authority::Error::MissingWriter) => return Ok(None),
+        Err(error) => return Err(refused(&error.to_string())),
+    };
+    let plaintext = authenticated.open().map_err(|e| refused(&e.to_string()))?;
+    Ok(Some((id, sealed, plaintext)))
 }
 
 /// Apply a ready record in one transaction.
@@ -248,6 +337,7 @@ pub(super) fn drain(
     engine: &mut Option<Document>,
     joined: &Joined,
 ) -> Result<()> {
+    checkpoint::walk_covered(conn, joined)?;
     let passes: i64 = conn.query_row("SELECT COUNT(*) FROM sync_pending", [], |r| r.get(0))?;
     for _ in 0..=passes {
         let pending: Vec<(Vec<u8>, String)> = {
@@ -277,12 +367,21 @@ pub(super) fn drain(
                     )?;
                 }
                 Attempt::Wait(waiting) => keep(conn, joined, &bytes, waiting)?,
+                Attempt::Part {
+                    record_id,
+                    sealed,
+                    plaintext,
+                } => {
+                    checkpoint::keep_part(conn, engine, joined, &record_id, &sealed, &plaintext)?;
+                }
             }
         }
         if !progress {
             break;
         }
     }
+    checkpoint::walk_covered(conn, joined)?;
+    checkpoint::finish_waiting(conn, engine, joined)?;
     Ok(())
 }
 
@@ -310,6 +409,13 @@ impl Database {
                     apply(conn, engine, bytes, record_id, incarnation, &update)?;
                     Received::Applied
                 }
+                Attempt::Part {
+                    record_id,
+                    sealed,
+                    plaintext,
+                } => Received::Checkpoint(checkpoint::keep_part(
+                    conn, engine, joined, &record_id, &sealed, &plaintext,
+                )?),
             };
             drain(conn, engine, joined)?;
             Ok(outcome)

@@ -137,9 +137,47 @@ pub(crate) fn seal_update(
     Ok(())
 }
 
+/// Seal one checkpoint part (#40) as a `snapshot` record of this open's
+/// writer. Snapshot records stand outside the writer's data chain: no
+/// predecessor, and the chain head does not move. Every part of one
+/// checkpoint shares `batch`. Returns the record ID and bytes.
+pub(crate) fn seal_snapshot(
+    sealing: &Sealing,
+    batch: &[u8; 32],
+    plaintext: &[u8],
+) -> Result<([u8; 32], Vec<u8>)> {
+    let id = sealing.identity();
+    let record_id = random32();
+    let header = wire::Header {
+        context: id.context(),
+        kind: wire::Kind::Snapshot,
+        epoch: id.epoch,
+        manifest: &id.manifest,
+        author: &id.author,
+        incarnation: &sealing.incarnation,
+        record_id: &record_id,
+        logical_batch: batch,
+        previous: None,
+    };
+    let bytes = matters_sync::seal(
+        header,
+        &id.content_key,
+        plaintext,
+        &id.signing_key,
+        random32(),
+    )
+    .map_err(sealing_error)?;
+    Ok((record_id, bytes))
+}
+
 impl Sealing {
     fn identity(&self) -> &SealingIdentity {
         &self.identity
+    }
+
+    /// The epoch this writer seals under.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.identity.epoch
     }
 
     /// Start sealing as `identity` under a new writer incarnation.

@@ -247,6 +247,25 @@ pub(super) fn kind_of(stored: &str) -> Result<Option<Kind>> {
     Ok(serde_json::from_value(serde_json::Value::String(name)).ok())
 }
 
+/// The version vector and frontier a full-history snapshot holds, encoded,
+/// read from its own engine. Anything else (updates, a shallow snapshot) is
+/// refused.
+pub fn snapshot_version(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    let meta = LoroDoc::decode_import_blob_meta(snapshot, true).map_err(engine)?;
+    if !matches!(meta.mode, loro::EncodedBlobMode::Snapshot) {
+        return Err(invalid("not a full-history snapshot"));
+    }
+    let doc = LoroDoc::new();
+    doc.import(snapshot).map_err(engine)?;
+    Ok((doc.oplog_vv().encode(), doc.oplog_frontiers().encode()))
+}
+
+/// Decode an engine version vector into actor and counter end.
+pub fn decode_version(bytes: &[u8]) -> Result<BTreeMap<u64, i32>> {
+    let vv = VersionVector::decode(bytes).map_err(engine)?;
+    Ok(vv.iter().map(|(peer, counter)| (*peer, *counter)).collect())
+}
+
 /// The engine actors whose operations an update carries, so a receiver
 /// can check them against the writer the update's record was signed by.
 /// Only an updates blob qualifies: a snapshot carries other actors' history.
@@ -366,6 +385,11 @@ impl Document {
     /// The version this document has seen.
     pub fn version(&self) -> VersionVector {
         self.doc.oplog_vv()
+    }
+
+    /// The frontier of everything this document has seen, encoded.
+    pub fn frontiers(&self) -> Vec<u8> {
+        self.doc.oplog_frontiers().encode()
     }
 
     /// Everything the document holds, for a new replica or a checkpoint.

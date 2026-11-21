@@ -1,3 +1,4 @@
+pub mod checkpoint;
 pub mod db;
 pub mod enrollment;
 mod goals;

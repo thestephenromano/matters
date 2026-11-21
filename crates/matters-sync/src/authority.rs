@@ -163,6 +163,8 @@ struct WriterLineage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WriterHistory {
     pub device: Hash,
+    /// The engine actor the writer's claim pinned.
+    pub actor: u64,
     /// Previous writer and how it was retired.
     pub predecessor: Option<(Id, Boundary)>,
     /// None: active. Otherwise how its admitted successor retired it.
@@ -727,6 +729,7 @@ impl Authority {
                     *incarnation,
                     WriterHistory {
                         device: w.claim.device,
+                        actor: w.claim.actor,
                         predecessor: w.claim.previous,
                         closed: None,
                         frozen: self.lineage_frozen(document, &w.claim.device),
@@ -1057,6 +1060,29 @@ impl Authority {
         key: &'a EpochKey,
         document: &[u8; 16],
     ) -> Result<AuthenticatedData<'a>> {
+        self.authenticate_kind_at(bytes, key, document, wire::Kind::Data)
+    }
+
+    /// Authenticate a `snapshot` record (a checkpoint part, #40) as
+    /// [`authenticate_at`](Self::authenticate_at) does a `data` record. A
+    /// snapshot record stands outside its writer's chain, so it must name
+    /// no predecessor.
+    pub fn authenticate_snapshot_at<'a>(
+        &self,
+        bytes: &'a [u8],
+        key: &'a EpochKey,
+        document: &[u8; 16],
+    ) -> Result<AuthenticatedData<'a>> {
+        self.authenticate_kind_at(bytes, key, document, wire::Kind::Snapshot)
+    }
+
+    fn authenticate_kind_at<'a>(
+        &self,
+        bytes: &'a [u8],
+        key: &'a EpochKey,
+        document: &[u8; 16],
+        kind: wire::Kind,
+    ) -> Result<AuthenticatedData<'a>> {
         if self.fork_evidence.is_some() {
             return Err(Error::Fork);
         }
@@ -1069,8 +1095,11 @@ impl Authority {
         }
         let p = wire::parse(bytes, self.route.content(document)).map_err(|_| Error::Format)?;
         let h = p.header;
-        if h.kind != wire::Kind::Data {
+        if h.kind != kind {
             return Err(Error::Unsupported);
+        }
+        if kind == wire::Kind::Snapshot && h.previous.is_some() {
+            return Err(Error::Format);
         }
         if *h.manifest != key.manifest || h.epoch != key.epoch {
             return Err(Error::Stale);
