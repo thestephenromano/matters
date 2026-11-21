@@ -1,33 +1,201 @@
-//! The relay server: the v0 API over HTTP/1.1 and cleartext HTTP/2. TLS
-//! terminates at a proxy in front (self-hosting, #44).
+//! The relay server and its operator commands (#38, #44).
+//!
+//! ```text
+//! matters-relay [serve]
+//! matters-relay provision <route-hex> <root-key-file> <genesis-file>
+//! matters-relay export <route-hex> <file>
+//! matters-relay import <file>
+//! matters-relay new-generation (<route-hex> | --all)
+//! matters-relay quota <route-hex> (bytes | records) (<n> | none)
+//! ```
 //!
 //! - `MATTERS_RELAY_DATABASE_URL`: the PostgreSQL connection (required).
-//! - `MATTERS_RELAY_LISTEN`: the address to listen on (default
-//!   127.0.0.1:8484).
+//! - `MATTERS_RELAY_LISTEN`: where `serve` listens (default 127.0.0.1:8484).
+//!   It speaks HTTP/1.1 and cleartext HTTP/2; TLS terminates at a proxy.
+//! - `MATTERS_RELAY_RATE`: `<per-second>/<burst>` per route and device.
+//! - `MATTERS_RELAY_OPERATOR_TOKEN`: 64 hex digits, the export credential.
+//!
+//! A route is a 96-digit lowercase hex of application, tenant and
+//! collection. `new-generation --all` is the last step of restoring the
+//! database from a backup.
+
+use std::process::ExitCode;
+
+use matters_relay::api::{self, Options, RateLimit};
+use matters_relay::hints::Hints;
+use matters_relay::Relay;
+use matters_sync::authority::Route;
+use matters_sync::record::VERIFICATION_KEY_BYTES;
+use matters_sync::VerificationKey;
+
+fn fail(message: impl std::fmt::Display) -> ExitCode {
+    eprintln!("matters-relay: {message}");
+    ExitCode::from(1)
+}
+
+fn usage() -> ExitCode {
+    eprintln!(
+        "usage: matters-relay [serve] | provision <route> <root-key> <genesis> | \
+         export <route> <file> | import <file> | new-generation (<route> | --all) | \
+         quota <route> (bytes | records) (<n> | none)"
+    );
+    ExitCode::from(2)
+}
+
+fn hex_bytes(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+fn route(text: &str) -> Option<Route> {
+    let bytes = hex_bytes(text)?;
+    if bytes.len() != 48 {
+        return None;
+    }
+    Some(Route {
+        application: bytes[..16].try_into().ok()?,
+        tenant: bytes[16..32].try_into().ok()?,
+        collection: bytes[32..].try_into().ok()?,
+    })
+}
 
 #[tokio::main]
-async fn main() -> std::process::ExitCode {
+async fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let Ok(url) = std::env::var("MATTERS_RELAY_DATABASE_URL") else {
         eprintln!("matters-relay: set MATTERS_RELAY_DATABASE_URL");
-        return std::process::ExitCode::from(2);
+        return ExitCode::from(2);
     };
-    let listen = std::env::var("MATTERS_RELAY_LISTEN").unwrap_or_else(|_| "127.0.0.1:8484".into());
-    let relay = match matters_relay::Relay::connect(&url).await {
+    let relay = match Relay::connect(&url).await {
         Ok(relay) => relay,
-        Err(error) => {
-            eprintln!("matters-relay: {error}");
-            return std::process::ExitCode::from(1);
+        Err(error) => return fail(error),
+    };
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        [] | ["serve"] => serve(relay).await,
+        ["provision", r, key, genesis] => {
+            let Some(r) = route(r) else { return usage() };
+            let (Ok(key), Ok(genesis)) = (std::fs::read(key), std::fs::read(genesis)) else {
+                return fail("cannot read the root key or genesis");
+            };
+            let Ok(key) = <[u8; VERIFICATION_KEY_BYTES]>::try_from(key.as_slice()) else {
+                return fail("the root key must be a raw ML-DSA-65 verification key");
+            };
+            match relay
+                .provision(&r, &VerificationKey::from_bytes(key), &genesis)
+                .await
+            {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(error) => fail(error),
+            }
         }
+        ["export", r, file] => {
+            let Some(r) = route(r) else { return usage() };
+            match relay.export(&r).await {
+                Ok(bytes) => match std::fs::write(file, bytes) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => fail(error),
+                },
+                Err(error) => fail(error),
+            }
+        }
+        ["import", file] => {
+            let Ok(bytes) = std::fs::read(file) else {
+                return fail("cannot read the export");
+            };
+            match relay.import(&bytes).await {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(error) => fail(error),
+            }
+        }
+        ["new-generation", "--all"] => match relay.new_generation_everywhere().await {
+            Ok(n) => {
+                eprintln!("matters-relay: new generation on {n} routes");
+                ExitCode::SUCCESS
+            }
+            Err(error) => fail(error),
+        },
+        ["new-generation", r] => {
+            let Some(r) = route(r) else { return usage() };
+            match relay.new_generation(&r).await {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(error) => fail(error),
+            }
+        }
+        ["quota", r, what, n] => {
+            let Some(r) = route(r) else { return usage() };
+            let n = match *n {
+                "none" => None,
+                n => match n.parse::<u64>() {
+                    Ok(n) => Some(n),
+                    Err(_) => return usage(),
+                },
+            };
+            let result = match *what {
+                "bytes" => relay.set_quota(&r, n).await,
+                "records" => relay.set_record_quota(&r, n).await,
+                _ => return usage(),
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => fail(error),
+            }
+        }
+        _ => usage(),
+    }
+}
+
+async fn serve(relay: Relay) -> ExitCode {
+    let listen = std::env::var("MATTERS_RELAY_LISTEN").unwrap_or_else(|_| "127.0.0.1:8484".into());
+    let rate_limit = match std::env::var("MATTERS_RELAY_RATE") {
+        Err(_) => None,
+        Ok(text) => {
+            let parsed = text.split_once('/').and_then(|(rate, burst)| {
+                Some(RateLimit {
+                    per_second: rate.parse().ok()?,
+                    burst: burst.parse().ok()?,
+                })
+            });
+            match parsed {
+                Some(limit) => Some(limit),
+                None => return fail("MATTERS_RELAY_RATE must be <per-second>/<burst>"),
+            }
+        }
+    };
+    let operator_token = match std::env::var("MATTERS_RELAY_OPERATOR_TOKEN") {
+        Err(_) => None,
+        Ok(text) => match hex_bytes(&text).and_then(|b| <[u8; 32]>::try_from(b).ok()) {
+            Some(token) => Some(token),
+            None => return fail("MATTERS_RELAY_OPERATOR_TOKEN must be 64 hex digits"),
+        },
+    };
+    let hints = match Hints::start(&relay).await {
+        Ok(hints) => hints,
+        Err(error) => return fail(error),
     };
     let listener = match tokio::net::TcpListener::bind(&listen).await {
         Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("matters-relay: cannot listen on {listen}: {error}");
-            return std::process::ExitCode::from(1);
-        }
+        Err(error) => return fail(format!("cannot listen on {listen}: {error}")),
     };
-    eprintln!("matters-relay: listening on {listen}");
-    let app = matters_relay::api::router(relay, matters_relay::api::system_clock());
+    // The bound address, for a caller that asked for port 0.
+    match listener.local_addr() {
+        Ok(addr) => eprintln!("matters-relay: listening on {addr}"),
+        Err(_) => eprintln!("matters-relay: listening on {listen}"),
+    }
+    let app = api::router_with(
+        relay,
+        api::system_clock(),
+        Options {
+            hints: Some(hints),
+            rate_limit,
+            operator_token,
+        },
+    );
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -35,10 +203,7 @@ async fn main() -> std::process::ExitCode {
         .with_graceful_shutdown(shutdown)
         .await
     {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("matters-relay: {error}");
-            std::process::ExitCode::from(1)
-        }
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => fail(error),
     }
 }

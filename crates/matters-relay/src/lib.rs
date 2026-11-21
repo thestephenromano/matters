@@ -23,6 +23,9 @@
 
 pub mod api;
 mod cbor;
+mod export;
+mod fault;
+pub mod hints;
 mod sessions;
 mod store;
 

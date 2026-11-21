@@ -7,13 +7,17 @@ publish = false
 authors = ["Matters Contributors"]
 description = "The durable encrypted sync relay (#38, docs/SYNC_SERVICE_CONTRACT.md)"
 
+[features]
+# Crash points for the conformance runner (src/fault.rs). Tests only.
+fault-injection = []
+
 [dependencies]
 matters-sync = { path = "../matters-sync" }
 # ADR 0003 (approved 2026-11-20): PostgreSQL through sqlx 0.9, Tokio runtime.
 # No TLS feature yet: the relay talks to its database on the same host or a
 # private network; a TLS option comes with self-hosting (#44).
 sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros"] }
-tokio = { version = "1.54", features = ["sync", "rt-multi-thread", "net", "macros", "signal"] }
+tokio = { version = "1.54", features = ["sync", "rt-multi-thread", "net", "macros", "signal", "time"] }
 # ADR 0003: axum on hyper 1 over HTTP/1.1 and HTTP/2 (TLS terminates at a
 # proxy in front, #44); `ws` for commit hints.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
@@ -25,4 +29,7 @@ thiserror = "2.0"
 [dev-dependencies]
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros"] }
 tower = { version = "0.5", features = ["util"] }
+# The hints client in the tests; already in the graph through axum's ws.
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }

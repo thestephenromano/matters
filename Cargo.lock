@@ -3054,11 +3054,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
+ "futures-util",
  "matters-sync",
  "minicbor",
  "sqlx",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "uuid",
 ]
