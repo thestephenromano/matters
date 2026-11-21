@@ -48,6 +48,27 @@ pub fn sign_session(
     Ok(*signature.as_ref())
 }
 
+/// Sign a relay session challenge as the collection's root, with the keys
+/// the recovery words derive (#42). A device that lost every other device
+/// uses this session only to read the authority log and publish its root
+/// recovery. The relay grants nothing else to it.
+pub fn sign_root_session(
+    keys: &super::RecoveryKeys,
+    route: &Route,
+    challenge: &[u8; 32],
+    signing_randomness: [u8; 32],
+) -> Result<[u8; SIGNATURE_BYTES]> {
+    let bytes = session_bytes(route, &keys.root_id()?, challenge)?;
+    let signature = ml_dsa_65::sign(
+        &keys.signing_key().0,
+        &bytes,
+        SESSION_LABEL.as_bytes(),
+        signing_randomness,
+    )
+    .map_err(|_| Error::Crypto)?;
+    Ok(*signature.as_ref())
+}
+
 /// Verify a session signature with the signing key the route's roster
 /// lists for `device`; the caller takes that key from authenticated state.
 pub fn verify_session(

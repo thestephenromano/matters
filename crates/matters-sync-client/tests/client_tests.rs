@@ -365,3 +365,69 @@ async fn a_device_joins_through_the_relay_mailbox() {
     assert_eq!(a_client.fetch_enrollment(&[0; 16]).await.unwrap(), None);
     relayed.finish().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_collection_is_recovered_from_its_words_through_the_relay() {
+    let Some(relayed) = relay().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let a = Arc::new(Database::open(dir.path().join("a.db")).unwrap());
+    let words = a
+        .create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    a.add_task(&mut Task::new(id(1), "kept through recovery", 0.0))
+        .unwrap();
+    let genesis = a.sync_controls().unwrap().remove(0);
+    let Body::Genesis(g) = parse(&genesis).unwrap().message.body else {
+        unreachable!()
+    };
+    relayed
+        .relay
+        .provision(&route(), &g.root_key, &genesis)
+        .await
+        .unwrap();
+    let a_client = Client::new(&relayed.endpoint, a.clone()).unwrap();
+    a_client.sync_once().await.unwrap();
+    // Every device is lost. A new one has only the words and the route.
+    let r = Arc::new(Database::open(dir.path().join("r.db")).unwrap());
+    let recovering = Arc::new(matters_core::storage::Recovering {
+        db: r.clone(),
+        keys: MemoryKeyStore::default(),
+        words: words.to_string(),
+        route: route(),
+    });
+    // Wrong words sign in as no one the relay knows.
+    let wrong = Arc::new(matters_core::storage::Recovering {
+        db: Arc::new(Database::open(dir.path().join("w.db")).unwrap()),
+        keys: MemoryKeyStore::default(),
+        words: matters_sync::authority::RecoverySecret::new([9; 32])
+            .words()
+            .unwrap(),
+        route: route(),
+    });
+    assert!(
+        matters_sync_client::Recoverer::new(&relayed.endpoint, wrong)
+            .unwrap()
+            .recover()
+            .await
+            .is_err()
+    );
+    matters_sync_client::Recoverer::new(&relayed.endpoint, recovering)
+        .unwrap()
+        .recover()
+        .await
+        .unwrap();
+    // The recovered device is the new generation's admin and reads what A
+    // wrote before it was lost.
+    let r_client = Client::new(&relayed.endpoint, r.clone()).unwrap();
+    r_client.sync_once().await.unwrap();
+    assert_eq!(titles(&r), ["kept through recovery"]);
+    r.add_task(&mut Task::new(id(2), "after recovery", 1.0))
+        .unwrap();
+    r_client.sync_once().await.unwrap();
+    // The old device is no longer a member.
+    match a_client.sync_once().await {
+        Err(SyncError::Attention(Attention::NotAMember)) => {}
+        other => panic!("{other:?}"),
+    }
+    relayed.finish().await;
+}

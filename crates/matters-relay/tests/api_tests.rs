@@ -679,3 +679,88 @@ async fn the_enrollment_mailbox_holds_requests_for_the_admin_only() {
     assert_eq!(room.status, StatusCode::CREATED);
     db.finish().await;
 }
+
+#[tokio::test]
+async fn the_roots_session_reads_the_authority_log_and_publishes_only_a_recovery() {
+    let Some((db, c, app, _)) = setup().await else {
+        return;
+    };
+    let root = c.keys.root_id().unwrap();
+    let ch = call(
+        &app,
+        Method::POST,
+        "/v0/session/challenge",
+        None,
+        challenge_body(&route(), &root),
+    )
+    .await;
+    assert_eq!(ch.status, StatusCode::OK);
+    let challenge: [u8; 32] = ch.bytes("challenge").try_into().unwrap();
+    let signature =
+        matters_sync::authority::sign_root_session(&c.keys, &route(), &challenge, fresh()).unwrap();
+    let s = call(
+        &app,
+        Method::POST,
+        "/v0/session",
+        None,
+        session_body(&route(), &root, &challenge, &signature),
+    )
+    .await;
+    assert_eq!(s.status, StatusCode::OK);
+    let token: [u8; 32] = s.bytes("token").try_into().unwrap();
+    let r = route_hex(&route());
+    // It reads the authority log.
+    let log = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/authority"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(log.status, StatusCode::OK);
+    // Nothing else: no records or mailbox, and no other kind of authority
+    // object.
+    for path in [
+        format!("/v0/routes/{r}/records"),
+        format!("/v0/routes/{r}/enrollments/{}", hex(&[1; 16])),
+    ] {
+        let refused = call(&app, Method::GET, &path, Some(&token), vec![]).await;
+        assert_eq!(refused.code(), "not-a-member", "{path}");
+    }
+    let id = fresh();
+    let put = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/records/{}", hex(&id)),
+        Some(&token),
+        record(&c.admin, id, b"as the root", &route()),
+    )
+    .await;
+    assert_eq!(put.code(), "not-a-member");
+    let b = device();
+    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
+    let membership = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&add))),
+        Some(&token),
+        add,
+    )
+    .await;
+    assert_eq!(membership.code(), "not-a-member");
+    // A session signed with other words is refused.
+    let other = matters_sync::authority::RecoverySecret::new(fresh())
+        .keys(&route())
+        .unwrap();
+    let refused = call(
+        &app,
+        Method::POST,
+        "/v0/session/challenge",
+        None,
+        challenge_body(&route(), &other.root_id().unwrap()),
+    )
+    .await;
+    assert_eq!(refused.code(), "not-a-member");
+    db.finish().await;
+}

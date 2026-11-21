@@ -1,7 +1,9 @@
 //! Matters' database as a sync client's local store (#39).
 
 use matters_sync::authority::{self, Hash, Route};
-use matters_sync::store::{ControlOutcome, JoiningStore, LocalStore, Log, StoreResult};
+use matters_sync::store::{
+    ControlOutcome, JoiningStore, LocalStore, Log, RecoveringStore, StoreResult,
+};
 use matters_sync::wire::SIGNATURE_BYTES;
 use rusqlite::{params, OptionalExtension};
 
@@ -190,4 +192,73 @@ impl<K: super::membership::KeyStore + Send + Sync> JoiningStore for Enrolling<K>
 
 fn not_enrolling() -> MattersError {
     MattersError::Validation("this device is not joining a collection".into())
+}
+
+/// A database recovering a collection from its recovery words, as a sync
+/// client's recovering store (#42). The words are held only as long as this
+/// value lives.
+pub struct Recovering<K> {
+    pub db: std::sync::Arc<Database>,
+    pub keys: K,
+    pub words: String,
+    pub route: Route,
+}
+
+impl<K> Recovering<K> {
+    fn recovery_keys(&self) -> Result<authority::RecoveryKeys> {
+        Ok(authority::RecoverySecret::from_words(&self.words)?.keys(&self.route)?)
+    }
+}
+
+impl<K: super::membership::KeyStore + Send + Sync> RecoveringStore for Recovering<K> {
+    fn route(&self) -> StoreResult<Route> {
+        Ok(self.route.clone())
+    }
+
+    fn root(&self) -> StoreResult<Hash> {
+        Ok(self.recovery_keys()?.root_id()?)
+    }
+
+    fn sign_root_session(&self, challenge: &[u8; 32]) -> StoreResult<[u8; SIGNATURE_BYTES]> {
+        Ok(authority::sign_root_session(
+            &self.recovery_keys()?,
+            &self.route,
+            challenge,
+            random32(),
+        )?)
+    }
+
+    fn recover(&self, controls: &[Vec<u8>], envelopes: &[Vec<u8>]) -> StoreResult<()> {
+        // Only the envelopes addressed to the recovery key open with it.
+        let recipient = self.recovery_keys()?.recipient()?;
+        let recovery: Vec<Vec<u8>> = envelopes
+            .iter()
+            .filter(|e| {
+                matches!(authority::parse(e).map(|p| p.message.body),
+                    Ok(authority::Body::KeyEnvelope(k)) if k.recipient == recipient)
+            })
+            .cloned()
+            .collect();
+        self.db.recover_collection(
+            &self.keys,
+            &self.words,
+            self.route.clone(),
+            controls,
+            &recovery,
+        )?;
+        Ok(())
+    }
+
+    fn outgoing(&self) -> StoreResult<Vec<(i64, Vec<u8>)>> {
+        Ok(self
+            .db
+            .outgoing_controls()?
+            .into_iter()
+            .map(|o| (o.seq, o.bytes))
+            .collect())
+    }
+
+    fn acknowledge(&self, seq: i64) -> StoreResult<()> {
+        Ok(self.db.acknowledge_control(seq)?)
+    }
 }

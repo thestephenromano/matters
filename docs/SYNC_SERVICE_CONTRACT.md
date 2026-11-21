@@ -48,6 +48,8 @@ POST /v0/session             {"route": route, "device": device48, "challenge": b
 
 The signature covers `CBOR(["matters-sync/v0/relay-session", application, tenant, collection, device48, challenge])` with the device's signing key. The relay accepts it only if the device is in the roster of the route's latest accepted membership, verified from the stored genesis and transitions with the rules of the key-distribution contract. A challenge is single-use and expires after 60 seconds. A token lasts at most 15 minutes, is scoped to one route and one device, is sent as `Authorization: Bearer`, and is stored only as a hash. On `401 session-expired` the client starts a new session; its local work is untouched.
 
+**The root's session (#42).** A device recovering a collection after every device was lost is no member. It signs the same challenge as the collection's root, with the root key its recovery words derive, using the root's ID as `device`. The relay verifies it with the root key the route was provisioned with. That session may read the authority log, and publish only a `root_recovery` and `key_envelope`s. Every other request gets `403 not-a-member`. Once the relay accepts the recovery, the recovering device is the new generation's admin and signs in as itself.
+
 A removed device's sessions end when the relay accepts the transition that removes it. The relay enforces upload rights (current roster, signer equals the session's device) independently of the end-to-end checks every client performs; it does not replace them.
 
 ## Operations

@@ -79,3 +79,20 @@ pub trait JoiningStore: Send + Sync {
     /// transition is not there yet.
     fn finish(&self, controls: &[Vec<u8>], envelopes: &[Vec<u8>]) -> StoreResult<bool>;
 }
+
+/// What a sync client needs from a device recovering a collection from its
+/// recovery words after every device was lost (#42). It is no member, so it
+/// signs in as the collection's root, which may only read the authority log
+/// and publish the root recovery.
+pub trait RecoveringStore: Send + Sync {
+    fn route(&self) -> StoreResult<Route>;
+    /// The root's ID: the device a root session signs in as.
+    fn root(&self) -> StoreResult<Hash>;
+    fn sign_root_session(&self, challenge: &[u8; 32]) -> StoreResult<[u8; SIGNATURE_BYTES]>;
+    /// Recover from the relay's authority log: its controls in order, and
+    /// its key envelopes. Afterwards the recovery waits to be published.
+    fn recover(&self, controls: &[Vec<u8>], envelopes: &[Vec<u8>]) -> StoreResult<()>;
+    /// What the recovery signed for publishing, oldest first: `(seq, bytes)`.
+    fn outgoing(&self) -> StoreResult<Vec<(i64, Vec<u8>)>>;
+    fn acknowledge(&self, seq: i64) -> StoreResult<()>;
+}
