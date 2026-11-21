@@ -84,8 +84,14 @@ Item {
             for (const tag of parse(controller.tagsJson))
                 out.push(tag.name);
             const list = view.taskList;
-            for (let i = 0; i < list.count; ++i)
+            // Each row's own title too: a finished project in the Logbook
+            // is a row, not an open project.
+            for (let i = 0; i < list.count; ++i) {
                 out.push(list.model.titleAt(i));
+                const row = list.itemAtIndex(i);
+                if (row && row.title !== undefined)
+                    out.push(row.title);
+            }
             if (list.count > 0 && list.model.idAt(0) !== "") {
                 for (const d of parse(controller.moveDestinations(list.model.idAt(0))))
                     out.push(d.title);
