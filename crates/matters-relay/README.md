@@ -17,7 +17,25 @@ The durable encrypted sync relay (#38). It implements [the sync service contract
 
 The `matters-relay` binary serves it. Set `MATTERS_RELAY_DATABASE_URL` and optionally `MATTERS_RELAY_LISTEN` (default `127.0.0.1:8484`). TLS terminates at a proxy in front (#44).
 
-Commit hints, export and import, and the conformance runner follow in a later #38 pull request.
+**Operations:**
+- **Commit hints.** `GET /v0/routes/{route}/hints` is a WebSocket. An append's `pg_notify` is delivered only when its transaction commits, so a hint never precedes its record, and duplicates send none.
+- **Limits.** A per-device rate limit gives `429` with `retry-after-ms`. Operator quotas on bytes and on record count give `507`.
+- **Export and import.** Both move a route byte for byte, and import installs a new generation. The HTTP export needs the operator credential.
+
+**Operator commands:**
+
+```text
+matters-relay [serve]
+matters-relay provision <route-hex> <root-key-file> <genesis-file>
+matters-relay export <route-hex> <file>
+matters-relay import <file>
+matters-relay new-generation (<route-hex> | --all)    # --all: after restoring a backup
+matters-relay quota <route-hex> (bytes | records) (<n> | none)
+```
+
+`serve` reads `MATTERS_RELAY_RATE` (`<per-second>/<burst>`) and `MATTERS_RELAY_OPERATOR_TOKEN` (64 hex digits).
+
+The conformance runner follows in a later #38 pull request.
 
 ## Development
 

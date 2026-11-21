@@ -42,6 +42,8 @@ pub enum RelayError {
     GenerationChanged { generation: [u8; 16] },
     #[error("the route's storage quota is exhausted")]
     QuotaExhausted,
+    #[error("too many requests; retry after {retry_after_ms} ms")]
+    RateLimited { retry_after_ms: u64 },
     #[error("the authority object was refused: {0}")]
     Authority(authority::Error),
     #[error("the database is unavailable: {0}")]
@@ -65,13 +67,14 @@ impl RelayError {
             Self::TooLarge => "too-large",
             Self::GenerationChanged { .. } => "generation-changed",
             Self::QuotaExhausted => "quota-exhausted",
+            Self::RateLimited { .. } => "rate-limited",
             Self::Unavailable(_) => "unavailable",
         }
     }
 
     /// Whether the client may retry the same request unchanged.
     pub fn retry(&self) -> bool {
-        matches!(self, Self::Unavailable(_))
+        matches!(self, Self::Unavailable(_) | Self::RateLimited { .. })
     }
 }
 
@@ -180,7 +183,7 @@ pub(crate) struct RouteRow {
     pub(crate) generation: [u8; 16],
 }
 
-fn random16() -> [u8; 16] {
+pub(crate) fn random16() -> [u8; 16] {
     *uuid::Uuid::new_v4().as_bytes()
 }
 
@@ -190,7 +193,7 @@ fn root_key(bytes: &[u8]) -> Result<VerificationKey> {
     Ok(VerificationKey::from_bytes(fixed))
 }
 
-fn sequence(value: i64) -> u64 {
+pub(crate) fn sequence(value: i64) -> u64 {
     // Sequences are checked non-negative by the schema.
     value.max(0) as u64
 }
@@ -261,6 +264,50 @@ impl Relay {
             return Err(RelayError::UnknownRoute);
         }
         Ok(())
+    }
+
+    /// Set an operator quota on the number of records `route` stores;
+    /// `None` lifts it.
+    pub async fn set_record_quota(&self, route: &Route, records: Option<u64>) -> Result<()> {
+        let changed = sqlx::query(
+            "UPDATE routes SET quota_records = $4
+             WHERE application = $1 AND tenant = $2 AND collection = $3",
+        )
+        .bind(route.application.as_slice())
+        .bind(route.tenant.as_slice())
+        .bind(route.collection.as_slice())
+        .bind(records.map(|r| i64::try_from(r).unwrap_or(i64::MAX)))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if changed == 0 {
+            return Err(RelayError::UnknownRoute);
+        }
+        Ok(())
+    }
+
+    /// Install a new generation on every route: the last step of restoring
+    /// the whole database from a backup.
+    pub async fn new_generation_everywhere(&self) -> Result<u64> {
+        let routes: Vec<i64> = sqlx::query_scalar("SELECT id FROM routes")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut tx = self.pool.begin().await?;
+        for id in &routes {
+            sqlx::query("UPDATE routes SET generation = $2 WHERE id = $1")
+                .bind(id)
+                .bind(random16().as_slice())
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(routes.len() as u64)
+    }
+
+    /// The route's database ID, for matching hints.
+    pub(crate) async fn route_id(&self, route: &Route) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        Ok(route_row(&mut tx, route, false).await?.id)
     }
 
     /// Install a new random storage generation for `route`: the restore
@@ -345,6 +392,7 @@ impl Relay {
             "UPDATE routes SET record_high_water = record_high_water + 1,
                  used_bytes = used_bytes + $2
              WHERE id = $1 AND (quota_bytes IS NULL OR used_bytes + $2 <= quota_bytes)
+               AND (quota_records IS NULL OR record_high_water < quota_records)
              RETURNING record_high_water",
         )
         .bind(row.id)
@@ -363,7 +411,20 @@ impl Relay {
         .bind(bytes)
         .execute(&mut *tx)
         .await?;
+        // Delivered by PostgreSQL only when this transaction commits, so a
+        // hint never precedes its record.
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(crate::hints::CHANNEL)
+            .bind(crate::hints::payload(
+                row.id,
+                sequence(seq),
+                &row.generation,
+            ))
+            .execute(&mut *tx)
+            .await?;
+        crate::fault::crash_point("before-commit");
         tx.commit().await?;
+        crate::fault::crash_point("after-commit-before-response");
         Ok(Appended::Stored(Receipt {
             sequence: sequence(seq),
             generation: row.generation,
@@ -599,7 +660,7 @@ pub(crate) async fn route_authority(
     Ok(authority)
 }
 
-async fn insert_authority(
+pub(crate) async fn insert_authority(
     tx: &mut Transaction<'static, Postgres>,
     route: i64,
     digest: &Hash,

@@ -41,14 +41,42 @@ pub fn system_clock() -> Clock {
     })
 }
 
+/// A rate limit per route and device: `per_second` sustained, `burst`
+/// at once.
+#[derive(Debug, Clone, Copy)]
+pub struct RateLimit {
+    pub per_second: u32,
+    pub burst: u32,
+}
+
+/// The API's operator configuration.
+#[derive(Clone, Default)]
+pub struct Options {
+    /// Commit hints; without them the hints endpoint answers `unavailable`.
+    pub hints: Option<crate::hints::Hints>,
+    pub rate_limit: Option<RateLimit>,
+    /// The operator credential for export, compared as its SHA-384.
+    pub operator_token: Option<[u8; 32]>,
+}
+
+type Buckets = Arc<std::sync::Mutex<std::collections::HashMap<(Vec<u8>, Hash), (f64, u64)>>>;
+
 #[derive(Clone)]
 struct Api {
     relay: Relay,
     clock: Clock,
+    options: Options,
+    buckets: Buckets,
 }
 
-/// The v0 API over `relay`, telling time with `clock`.
+/// The v0 API over `relay`, telling time with `clock`, with no hints, rate
+/// limit or operator access.
 pub fn router(relay: Relay, clock: Clock) -> Router {
+    router_with(relay, clock, Options::default())
+}
+
+/// The v0 API with `options`.
+pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
     Router::new()
         .route("/v0/session/challenge", post(challenge))
         .route("/v0/session", post(session))
@@ -62,8 +90,15 @@ pub fn router(relay: Relay, clock: Clock) -> Router {
             "/v0/routes/{route}/authority",
             axum::routing::get(get_authority),
         )
+        .route("/v0/routes/{route}/hints", axum::routing::get(hints))
+        .route("/v0/routes/{route}/export", axum::routing::get(export))
         .fallback(unknown)
-        .with_state(Api { relay, clock })
+        .with_state(Api {
+            relay,
+            clock,
+            options,
+            buckets: Arc::default(),
+        })
 }
 
 /// An error response in the contract's shape.
@@ -88,6 +123,7 @@ pub fn status(error: &RelayError) -> StatusCode {
             StatusCode::UNPROCESSABLE_ENTITY
         }
         RelayError::QuotaExhausted => StatusCode::INSUFFICIENT_STORAGE,
+        RelayError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         RelayError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
@@ -100,6 +136,9 @@ fn error_body(code: &str, retry: bool, error: Option<&RelayError>) -> Vec<u8> {
         }
         Some(RelayError::GenerationChanged { generation }) => {
             fields.push(("generation", Value::Bytes(generation)))
+        }
+        Some(RelayError::RateLimited { retry_after_ms }) => {
+            fields.push(("retry-after-ms", Value::Uint(*retry_after_ms)))
         }
         _ => {}
     }
@@ -173,7 +212,41 @@ async fn authenticated(api: &Api, route: &Route, headers: &HeaderMap) -> Result<
         .and_then(|v| v.strip_prefix("Bearer "))
         .and_then(|t| hex::<32>(t).ok())
         .ok_or(ApiError(RelayError::Unauthenticated))?;
-    Ok(api.relay.authenticate(route, &token, (api.clock)()).await?)
+    let now = (api.clock)();
+    let device = api.relay.authenticate(route, &token, now).await?;
+    if let Some(limit) = api.options.rate_limit {
+        admit(&api.buckets, limit, route, &device, now)?;
+    }
+    Ok(device)
+}
+
+/// Take one request from the device's token bucket, or say when to retry.
+fn admit(
+    buckets: &Buckets,
+    limit: RateLimit,
+    route: &Route,
+    device: &Hash,
+    now: u64,
+) -> Result<()> {
+    let key = (
+        [route.application, route.tenant, route.collection].concat(),
+        *device,
+    );
+    let mut buckets = buckets.lock().unwrap_or_else(|e| e.into_inner());
+    let burst = f64::from(limit.burst.max(1));
+    let rate = f64::from(limit.per_second.max(1));
+    let (tokens, last) = buckets.entry(key).or_insert((burst, now));
+    let elapsed = now.saturating_sub(*last) as f64 / 1000.0;
+    *tokens = (*tokens + elapsed * rate).min(burst);
+    *last = now;
+    if *tokens >= 1.0 {
+        *tokens -= 1.0;
+        return Ok(());
+    }
+    let retry_after_ms = ((1.0 - *tokens) / rate * 1000.0).ceil() as u64;
+    Err(ApiError(RelayError::RateLimited {
+        retry_after_ms: retry_after_ms.max(1),
+    }))
 }
 
 async fn challenge(State(api): State<Api>, request: Request) -> Result<Response> {
@@ -336,4 +409,65 @@ async fn unknown(request: Request) -> Response {
         "unsupported-version"
     };
     cbor_response(StatusCode::NOT_FOUND, error_body(code, false, None))
+}
+
+/// `GET /v0/routes/{route}/hints`: a WebSocket on which the relay sends
+/// `{"sequence", "generation"}` for each committed record of the route.
+async fn hints(
+    State(api): State<Api>,
+    Path(route): Path<String>,
+    headers: HeaderMap,
+    upgrade: axum::extract::ws::WebSocketUpgrade,
+) -> Result<Response> {
+    let route = path_route(&route)?;
+    authenticated(&api, &route, &headers).await?;
+    let Some(hints) = api.options.hints.clone() else {
+        return Err(ApiError(RelayError::Unavailable(sqlx::Error::PoolClosed)));
+    };
+    let id = api.relay.route_id(&route).await?;
+    let mut receiver = hints.subscribe();
+    Ok(upgrade.on_upgrade(move |mut socket| async move {
+        use axum::extract::ws::Message;
+        loop {
+            match receiver.recv().await {
+                Ok(hint) if hint.route == id => {
+                    let body = cbor::map(vec![
+                        ("sequence", Value::Uint(hint.sequence)),
+                        ("generation", Value::Bytes(&hint.generation)),
+                    ]);
+                    if socket.send(Message::Binary(body.into())).await.is_err() {
+                        return;
+                    }
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    }))
+}
+
+/// `GET /v0/routes/{route}/export`, with the operator credential.
+async fn export(
+    State(api): State<Api>,
+    Path(route): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response> {
+    let route = path_route(&route)?;
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|t| hex::<32>(t).ok());
+    let authorized = match (api.options.operator_token, presented) {
+        (Some(expected), Some(presented)) => {
+            use matters_sync::record::record_hash;
+            record_hash(&expected) == record_hash(&presented)
+        }
+        _ => false,
+    };
+    if !authorized {
+        return Err(ApiError(RelayError::Unauthenticated));
+    }
+    let bytes = api.relay.export(&route).await?;
+    Ok(cbor_response(StatusCode::OK, bytes))
 }
