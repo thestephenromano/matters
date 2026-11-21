@@ -29,6 +29,11 @@ pub enum MattersError {
     #[error("This database needs a newer Matters (schema {found}; this version knows up to {supported})")]
     NewerSchema { found: i64, supported: i64 },
 
+    /// Leaving sync would leave this many edits on this device only: the
+    /// relay has not acknowledged them. Nothing changed (#42).
+    #[error("{0} edits have not reached the relay yet")]
+    UnsentWork(usize),
+
     /// A transition keeps this device a member, but its envelope of the
     /// new epoch's key was not supplied: nothing changed (#39).
     #[error("The new epoch's key envelope is missing")]
