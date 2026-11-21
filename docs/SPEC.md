@@ -47,6 +47,7 @@ Area (e.g. Work, Personal, Finances)
    * Completed or canceled from its menu, or with **Complete Project** once every task is done. If tasks are still open, a dialog asks whether to complete or cancel them with the project, or keep it open: no task is closed silently.
    * A finished project leaves the sidebar, and its tasks leave Today, Upcoming, Anytime and Someday. The Logbook lists it as one row, which opens it.
    * **Reopen Project** in its menu reopens it, along with the tasks finishing it closed. Tasks finished on their own stay finished.
+   * Can serve one goal from the Goals app (planned; see *Goals*).
 
 3. **Heading:**
    * A visual section divider inside a Project to group related tasks.
@@ -188,6 +189,26 @@ On a schedule, the dates are those on or after the start that match. A month wit
 * **Upcoming** previews the coming occurrences of each series on a schedule over its next 14 days, quieter than tasks, without creating them. Occurrences are ordinary tasks: done, they go to the Logbook like any other. A series waits while its newest occurrence is in the Trash or its project is finished, and stops when that occurrence is deleted.
 
 Matters checks for occurrences due when it starts and every minute. The rules are `matters_core::repeat` (checked against python-dateutil's RFC 5545 dates); the rows, `matters_core::storage::repeats`.
+
+### Goals (planned, #202)
+Goals live in a separate Goals app (#223), not in Matters. A Matters project or repeating task can say which goal it serves, and Matters shows that goal while the user works. [ADR 0004](decisions/0004-goal-references.md) has the design.
+
+* **One goal at most:**
+  * a project, or a repeating series, serves at most one goal;
+  * the series' goal is carried by its newest occurrence and passes to the next occurrence with the rule;
+  * a single task serves its project's goal;
+  * duplicating a project keeps its goal, and converting a task to a project starts with none.
+* **Linking:**
+  * a filtered popover like Move lists the Goals app's active goals, from the project's menu, the repeating task's menu or a keyboard shortcut;
+  * the same popover clears the link;
+  * both can be undone.
+* **Showing:**
+  * a project's page shows its goal's title and state (on track, at risk, late, achieved or abandoned), read from the Goals app, and opens it there;
+  * repeating rows that serve a goal show a goal mark.
+* **Matters stores no goal data:**
+  * it keeps only the goal's ID, plus a cache on this device of the last title and state it read;
+  * it never changes a link because of something done in the Goals app;
+  * without the Goals app, a linked project shows its goal as unavailable, and nothing else changes.
 
 ---
 
