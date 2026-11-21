@@ -3207,6 +3207,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "matters-sync-app"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "matters-core",
+ "matters-relay",
+ "matters-sync",
+ "matters-sync-client",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "matters-sync-baseline"
 version = "0.0.0"
 dependencies = [

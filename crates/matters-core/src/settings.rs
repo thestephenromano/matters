@@ -162,6 +162,15 @@ impl Default for AppearanceSettings {
     }
 }
 
+/// Where this device syncs (#42). Kept with the device's other settings;
+/// the collection itself and its keys live in the database and the keyring.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct SyncSettings {
+    /// The relay's URL, while this device syncs.
+    pub endpoint: Option<String>,
+}
+
 /// Everything this device remembers. Missing keys take their defaults and
 /// unknown ones are ignored, so files written by other versions still load.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +179,7 @@ pub struct Settings {
     pub logbook: LogbookSettings,
     pub calendar: CalendarSettings,
     pub appearance: AppearanceSettings,
+    pub sync: SyncSettings,
 }
 
 impl Settings {

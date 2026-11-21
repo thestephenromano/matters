@@ -1,0 +1,24 @@
+[package]
+name = "matters-sync-app"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+authors = ["Matters Contributors"]
+description = "The Matters app's sync session (#42): setup, joining, recovery and status for the Qt and GTK frontends"
+
+[dependencies]
+matters-core = { path = "../matters-core" }
+matters-sync = { path = "../matters-sync" }
+matters-sync-client = { path = "../matters-sync-client" }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "sync"] }
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+matters-core = { path = "../matters-core", features = ["test-support"] }
+matters-relay = { path = "../matters-relay" }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
+sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio"] }
+tempfile = "3.13"
