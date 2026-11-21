@@ -1,0 +1,23 @@
+[package]
+name = "matters-relay"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+authors = ["Matters Contributors"]
+description = "The durable encrypted sync relay (#38, docs/SYNC_SERVICE_CONTRACT.md)"
+
+[dependencies]
+matters-sync = { path = "../matters-sync" }
+# ADR 0003 (approved 2026-11-20): PostgreSQL through sqlx 0.9, Tokio runtime.
+# No TLS feature yet: the relay talks to its database on the same host or a
+# private network; a TLS option comes with self-hosting (#44).
+sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros"] }
+tokio = { version = "1.54", features = ["sync"] }
+minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2.0"
+
+[dev-dependencies]
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros"] }
+uuid = { version = "1", features = ["v4"] }
