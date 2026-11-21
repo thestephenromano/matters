@@ -163,7 +163,7 @@ That is the default. **Preferences** (`Ctrl + ,`) chooses when completed tasks m
 
 Until then the Logbook doesn't list them, and the badges count open tasks only. Choosing a policy logs what is finished so far, so nothing comes back into its list. A project's own list and an area's always show their finished tasks. The rule is `matters_core::Settings::logged_until`, applied by `QueryEngine::logged_until`.
 
-Preferences also choose which calendar events Today and Upcoming show (see *Calendar events*), and whether Matters follows the desktop's light or dark scheme (the default) or is always light or always dark. They are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
+Preferences also choose which calendar events Today and Upcoming show (see *Calendar events*), and whether Matters follows the desktop's light or dark scheme (the default) or is always light or always dark, and whether it uses the desktop's accent colour (the default, when the desktop has one). They are this device's own, in `$XDG_CONFIG_HOME/matters/settings.toml` (`matters_core::SettingsFile`). If that file can't be read, Matters uses the defaults and says so.
 
 ### Reminders
 A task can remind at a time of day on its start date (#60). The When popover's reminder field takes a typed time (`9`, `9:30`, `21:30`, `9am`, `2:30 pm`, `noon`, `midnight`); anything else is refused, never guessed. **Clear** removes the reminder. The open task's When pill says the time ("Today, 9:30 PM"), and closed rows show a bell and the time. A task with no date, or deferred to Someday, is scheduled for Today when given a reminder.
@@ -234,11 +234,15 @@ Matters can be used with a screen reader and with the keyboard alone (#74):
 * **The list cursor:** the task list keeps the keyboard focus and moves its own cursor with `Up` and `Down`. The row under the cursor tells the screen reader it is focused, so the reader follows it.
 * **Keyboard reach:** every control can be reached with the keyboard. List and menu items are reached through their list or menu, with the arrow keys.
 * **Contrast:** the palette is one set of tokens in `MainView.qml`. In light and in dark mode, every text colour meets WCAG 2.2 AA (4.5:1) on every surface it is drawn on, and the accent meets 3:1 against all of them as a focus ring, tick or selection mark.
+* **The desktop's choices (#76):** Matters reads the accent colour and the contrast preference from the XDG desktop portal (`org.freedesktop.appearance`, over D-Bus; `matters_ui::appearance`) and follows their changes while it runs.
+  * **The accent:** the desktop's accent replaces Matters' blue, made darker in light mode or lighter in dark mode only as far as the limits above need, and the selection is tinted with it.
+  * **Higher contrast:** text and the accent are held to 7:1 (WCAG AAA), the accent's marks to 4.5:1, and lines become visible (3:1).
+  * **Without a portal**, or with Preferences keeping Matters' own accent, the palette is unchanged.
 
 These are checked by tests:
 
 * `tst_accessibility.qml` walks Qt's accessibility tree, the one Orca reads over AT-SPI, in every view and with every dialog and popover open. It fails if a control has no name, if the keyboard can't reach one, or if something clickable is hidden from the screen reader. The tree is reported by the test-only `AccessibilityProbe`.
-* `tst_contrast.qml` computes the ratio of every pair in light and in dark.
+* `tst_contrast.qml` computes the ratio of every pair in light and in dark, with and without higher contrast, and with Matters' accent or eight desktop accents, from white to black, set through the test-only `FakeDesktop`.
 * `qml_lint` fails on a colour literal outside the palette.
 
 ---

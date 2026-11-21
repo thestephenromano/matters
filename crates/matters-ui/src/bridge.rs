@@ -126,6 +126,14 @@ pub mod qobject {
         /// Light or dark (#72), as a `ColorScheme` key; chosen with
         /// `choose_color_scheme`.
         #[qproperty(QString, color_scheme)]
+        /// The desktop's accent colour as `#rrggbb`, or empty when it has
+        /// none (#76); from `crate::appearance`, updated as it changes.
+        #[qproperty(QString, system_accent)]
+        /// Whether the desktop asks for higher contrast (#76).
+        #[qproperty(bool, high_contrast)]
+        /// Whether the desktop's accent replaces Matters' own (#76);
+        /// chosen with `choose_follow_accent`.
+        #[qproperty(bool, follow_accent)]
         type AppController = super::AppControllerRust;
 
         /// Choose when finished tasks move to the Logbook (a `LogPolicy`
@@ -153,6 +161,10 @@ pub mod qobject {
         /// key), and keep the choice (#72).
         #[qinvokable]
         fn choose_color_scheme(self: Pin<&mut AppController>, scheme: &QString);
+        /// Use the desktop's accent colour, when it has one, or Matters'
+        /// own, and keep the choice (#76).
+        #[qinvokable]
+        fn choose_follow_accent(self: Pin<&mut AppController>, follow: bool);
 
         #[qinvokable]
         fn select_view(self: Pin<&mut AppController>, view: &QString);
@@ -874,6 +886,9 @@ pub struct AppControllerRust {
     calendar_problem: QString,
     show_events: bool,
     color_scheme: QString,
+    system_accent: QString,
+    high_contrast: bool,
+    follow_accent: bool,
     visit: i32,
     reorderable: bool,
     accepts_new_tasks: bool,
@@ -900,13 +915,14 @@ impl Default for AppControllerRust {
         let view = View::Today;
         // One lock: a guard taken inside the struct expression would live
         // to its end, and a second `settings()` there would wait on it.
-        let (log_policy, show_events, hidden, scheme) = {
+        let (log_policy, show_events, hidden, scheme, follow_accent) = {
             let state = settings();
             (
                 state.settings.logbook.policy.key(),
                 state.settings.calendar.show_events,
                 to_json(&state.settings.calendar.hidden),
                 state.settings.appearance.scheme.key(),
+                state.settings.appearance.follow_accent,
             )
         };
         Self {
@@ -948,6 +964,9 @@ impl Default for AppControllerRust {
             calendar_problem: QString::default(),
             show_events,
             color_scheme: QString::from(scheme),
+            system_accent: QString::default(),
+            high_contrast: false,
+            follow_accent,
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -965,6 +984,14 @@ impl cxx_qt::Initialize for qobject::AppController {
         // Occurrences that came due while Matters was closed (#61).
         self.as_mut().advance_repeats();
         self.as_mut().changed();
+        // The desktop's accent and contrast (#76): as they are now, then
+        // each change, on this thread.
+        let thread = self.qt_thread();
+        crate::appearance::on_change(Box::new(move || {
+            // Gone only when the window is.
+            let _ = thread.queue(|controller| controller.appearance_changed());
+        }));
+        self.as_mut().appearance_changed();
         let problem = settings().problem.clone();
         if let Some(problem) = problem {
             self.report(problem);
@@ -1046,6 +1073,27 @@ impl qobject::AppController {
         if let Err(err) = saved {
             self.report(format!("Your settings couldn't be saved: {err}"));
         }
+    }
+
+    pub fn choose_follow_accent(mut self: Pin<&mut Self>, follow: bool) {
+        let saved = {
+            let mut state = settings();
+            state.settings.appearance.follow_accent = follow;
+            state.save()
+        };
+        self.as_mut().set_follow_accent(follow);
+        if let Err(err) = saved {
+            self.report(format!("Your settings couldn't be saved: {err}"));
+        }
+    }
+
+    /// Show the desktop's accent and contrast as they are now (#76).
+    fn appearance_changed(mut self: Pin<&mut Self>) {
+        let now = crate::appearance::current();
+        let accent = now.accent.map(|rgb| rgb.hex()).unwrap_or_default();
+        self.as_mut()
+            .set_system_accent(QString::from(accent.as_str()));
+        self.set_high_contrast(now.high_contrast);
     }
 
     /// Show what the calendars hold now, and reload the lists.
