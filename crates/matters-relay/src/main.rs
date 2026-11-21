@@ -7,6 +7,7 @@
 //! matters-relay import <file>
 //! matters-relay new-generation (<route-hex> | --all)
 //! matters-relay quota <route-hex> (bytes | records) (<n> | none)
+//! matters-relay probe [<host:port>]
 //! ```
 //!
 //! - `MATTERS_RELAY_DATABASE_URL`: the PostgreSQL connection (required).
@@ -19,7 +20,9 @@
 //!   private interface.
 //!
 //! `GET /healthz` answers while the process is up, and `GET /readyz` while
-//! its database answers too.
+//! its database answers too. `probe` asks a running relay's `/readyz` and
+//! exits 0 if it is ready (default 127.0.0.1:8484), for container health
+//! checks. It needs no database URL.
 //!
 //! A route is a 96-digit lowercase hex of application, tenant and
 //! collection. `new-generation --all` is the last step of restoring the
@@ -43,7 +46,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: matters-relay [serve] | provision <route> <root-key> <genesis> | \
          export <route> <file> | import <file> | new-generation (<route> | --all) | \
-         quota <route> (bytes | records) (<n> | none)"
+         quota <route> (bytes | records) (<n> | none) | probe [<host:port>]"
     );
     ExitCode::from(2)
 }
@@ -70,9 +73,32 @@ fn route(text: &str) -> Option<Route> {
     })
 }
 
+/// `probe [host:port]`: exit 0 if the relay there is ready. For container
+/// health checks, where there is no shell or HTTP client.
+async fn probe(addr: &str) -> ExitCode {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let attempt = async {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
+        stream
+            .write_all(b"GET /readyz HTTP/1.1\r\nHost: relay\r\nConnection: close\r\n\r\n")
+            .await
+            .ok()?;
+        let mut head = [0u8; 12];
+        stream.read_exact(&mut head).await.ok()?;
+        Some(&head == b"HTTP/1.1 200")
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(3), attempt).await {
+        Ok(Some(true)) => ExitCode::SUCCESS,
+        _ => fail(format!("{addr} is not ready")),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("probe") {
+        return probe(args.get(1).map_or("127.0.0.1:8484", String::as_str)).await;
+    }
     let Ok(url) = std::env::var("MATTERS_RELAY_DATABASE_URL") else {
         eprintln!("matters-relay: set MATTERS_RELAY_DATABASE_URL");
         return ExitCode::from(2);
