@@ -232,3 +232,28 @@ A device's membership survives restarts, and is never split between stores ([`ma
 - a recovery that revokes the device, keeping writes unsent, across a restart;
 - a fork that freezes sealing, keeping both successors, across a restart;
 - a crash before the collection commits.
+
+## Joining and administering
+
+[`matters_core::storage::enrollment`](../crates/matters-core/src/storage/enrollment.rs) (migration v14) runs the enrollment of [Enrollment](#enrollment) between two databases.
+
+**The admin** (`invite`, `admit`, `remove_member`, `rotate_epoch`) signs the next transition with a fresh content key. It wraps that key for every member and for the recovery key. When admitting, it also wraps every earlier epoch's key for the new member, taken from its own stored envelopes. The transition, its own envelope and everything for others commit in one transaction. Sealing then continues under the new epoch.
+
+**Publishing.** Everything signed for others waits in `sync_publish`, and `outgoing_controls` returns exactly the stored bytes until `acknowledge_control`. Signing a transition again would fork the collection, so a retry never re-signs. A crash before the commit publishes nothing, and the admission can simply be made again.
+
+**A new device** (`start_enrollment`) generates its keys and signs its request under the invitation. The request is kept, so asking again returns the same bytes, and an invitation into another collection is refused meanwhile. `finish_enrollment` then takes:
+- the collection's control records, ending with the admin's transition adding the device;
+- the envelopes the admin wrapped for it.
+
+It verifies all of them, requires an envelope for the current epoch, and turns sync on, stores everything and starts sealing in one transaction. Until then, nothing is half-joined.
+
+**One document.** Every device seals for the same document of the collection, so a joining device needs nothing more to find it.
+
+**Evidence:** `tests/enrollment_tests.rs` covers:
+- a second device joining through a scanned invitation, after which both seal under the new epoch with one key, and the new device reads what the admin wrote before it joined;
+- outgoing bytes kept until acknowledged;
+- a restart of the new device;
+- rotation and removal reaching the member, and only the admin making them;
+- finishing before the admission, or without a current envelope;
+- another collection's invitation while joining;
+- a crash before an admission commits.

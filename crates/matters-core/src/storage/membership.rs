@@ -32,9 +32,14 @@ use super::sealing::random32;
 use super::sealing::{Sealing, SealingIdentity, SyncKeys};
 use crate::error::{MattersError, Result};
 
+/// The one document a Matters collection holds: every device seals its
+/// records for it, so a joining device needs nothing more to find it.
+#[cfg(feature = "test-support")]
+pub(super) const HOME_DOCUMENT: [u8; 16] = *b"matters/home\0\0\0\0";
+
 /// Overwrite secret bytes before they are freed (best effort: the
 /// compiler is told the zeroes are observed).
-fn wipe(bytes: &mut [u8]) {
+pub(super) fn wipe(bytes: &mut [u8]) {
     bytes.fill(0);
     std::hint::black_box(bytes);
 }
@@ -51,7 +56,7 @@ impl DeviceSeeds {
     pub const BYTES: usize = 64;
 
     #[cfg(feature = "test-support")]
-    fn generate() -> Self {
+    pub(super) fn generate() -> Self {
         Self {
             signing: random32(),
             kem: random32(),
@@ -164,11 +169,11 @@ impl SyncStanding {
 
 /// A joined device's keys and authority, while loaded.
 pub(crate) struct Joined {
-    route: Route,
-    document: [u8; 16],
-    seeds: DeviceSeeds,
-    device: DeviceKeys,
-    authority: Authority,
+    pub(super) route: Route,
+    pub(super) document: [u8; 16],
+    pub(super) seeds: DeviceSeeds,
+    pub(super) device: DeviceKeys,
+    pub(super) authority: Authority,
 }
 
 impl Joined {
@@ -201,7 +206,7 @@ impl Joined {
         })
     }
 
-    fn standing(&self) -> SyncStanding {
+    pub(super) fn standing(&self) -> SyncStanding {
         if self.authority.is_forked() {
             SyncStanding::Frozen
         } else if self
@@ -231,7 +236,7 @@ fn controls(conn: &Connection) -> Result<Vec<Vec<u8>>> {
 
 /// Apply one stored or received control to `authority`. `Ok(true)`
 /// changed it, `Ok(false)` was a replay; `Err(Fork)` froze it.
-fn apply(authority: &mut Authority, bytes: &[u8]) -> authority::Result<bool> {
+pub(super) fn apply(authority: &mut Authority, bytes: &[u8]) -> authority::Result<bool> {
     let parsed = authority::parse(bytes)?;
     match parsed.message.body {
         Body::Membership(_) => authority.apply_membership(bytes),
@@ -267,7 +272,7 @@ fn set_standing(tx: &Transaction<'_>, standing: SyncStanding) -> Result<()> {
 
 impl SyncKeys {
     /// Seal (or stop sealing) for `joined`'s standing after a change.
-    fn settle(&mut self, conn: &Connection, joined: Joined) -> Result<SyncStanding> {
+    pub(super) fn settle(&mut self, conn: &Connection, joined: Joined) -> Result<SyncStanding> {
         let standing = joined.standing();
         if standing == SyncStanding::Active {
             let identity = joined.identity(conn)?;
@@ -304,8 +309,7 @@ impl Database {
         let genesis = authority::genesis(&route, &keys, &device, &content, random32())?;
         let authority = Authority::bootstrap(&genesis, route.clone(), keys.root_key())?;
         let envelope = authority.wrap_key(&device, device.id(), &content, random32())?;
-        let mut document = [0; 16];
-        document.copy_from_slice(&random32()[..16]);
+        let document = HOME_DOCUMENT;
         let key_name = format!("matters-sync/device/{}", uuid::Uuid::new_v4());
         store.store(&key_name, &seeds)?;
         self.with_sealing(|conn, engine, sync| {
