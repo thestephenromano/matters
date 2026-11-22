@@ -238,6 +238,7 @@ struct World {
     c: DeviceKeys,
     collection: Collection,
     records: BTreeMap<String, Named>,
+    controls: BTreeMap<String, Vec<u8>>,
     tokens: BTreeMap<String, [u8; 32]>,
     generations: BTreeMap<String, Vec<u8>>,
     cursors: BTreeMap<String, Vec<u8>>,
@@ -309,6 +310,7 @@ impl World {
             c,
             collection,
             records: BTreeMap::new(),
+            controls: BTreeMap::new(),
             tokens: BTreeMap::new(),
             generations: BTreeMap::from([("g0".to_owned(), g0.to_vec())]),
             cursors: BTreeMap::new(),
@@ -328,6 +330,61 @@ impl World {
             world.subscribe_hints().await;
         }
         Some(world)
+    }
+
+    /// A named control message, made once so that every step sends the
+    /// same bytes.
+    fn control(&mut self, name: &str) -> Vec<u8> {
+        if let Some(bytes) = self.controls.get(name) {
+            return bytes.clone();
+        }
+        let c = &self.collection;
+        let bytes = match name {
+            "membership-removing-B" => transition(c, vec![c.admin.member(true)]),
+            "membership-adding-C" => transition(
+                c,
+                vec![
+                    c.admin.member(true),
+                    self.b.member(false),
+                    self.c.member(false),
+                ],
+            ),
+            "writer-start-of-C" => matters_sync::authority::sign(
+                &matters_sync::authority::Message {
+                    route: route(),
+                    signer: self.c.id(),
+                    body: matters_sync::authority::Body::WriterStart(
+                        matters_sync::authority::WriterStart {
+                            manifest: c.authority.manifest(),
+                            document: [4; 16],
+                            device: self.c.id(),
+                            incarnation: fresh(),
+                            actor: 3,
+                            previous: None,
+                        },
+                    ),
+                },
+                self.c.signing_key(),
+                fresh(),
+            )
+            .unwrap(),
+            other => panic!("control {other}"),
+        };
+        self.controls.insert(name.to_owned(), bytes.clone());
+        bytes
+    }
+
+    /// A named invitation into the collection, and its lookup ID.
+    fn invitation(&self, name: &str) -> (matters_sync::authority::Invitation, [u8; 16]) {
+        let mut secret = [0; 16];
+        secret[..name.len()].copy_from_slice(name.as_bytes());
+        let invitation = self
+            .collection
+            .authority
+            .invite(matters_sync::authority::InvitationSecret::new(secret))
+            .unwrap();
+        let lookup = invitation.secret.lookup(&route()).unwrap();
+        (invitation, lookup)
     }
 
     fn device(&self, name: &str) -> &DeviceKeys {
@@ -586,8 +643,10 @@ impl World {
                     .await
                     .unwrap();
             }
-            // The restore procedure.
-            cli(&self.db.url(), &["new-generation", "--all"]);
+            // The restore procedure, unless the scenario skips its last step.
+            if step["keep_generation"] != true {
+                cli(&self.db.url(), &["new-generation", "--all"]);
+            }
             self.db.relay = matters_relay::Relay::connect(&self.db.url()).await.unwrap();
             self.relay = start(&self.db.url(), &pairs(&self.env));
             // Sessions opened after the backup are gone with it.
@@ -660,22 +719,62 @@ impl World {
             return;
         }
         if let Some(kind) = step["put_authority"].as_str() {
-            assert_eq!(kind, "membership-removing-B");
-            let remove = transition(&self.collection, vec![self.collection.admin.member(true)]);
-            let token = self.token(&device, &route(), false).await;
+            let bytes = self.control(kind);
+            let token = if step["anonymous"] == true {
+                None
+            } else {
+                Some(self.token(&device, &route(), false).await)
+            };
             let path = format!(
                 "/v0/routes/{}/authority/{}",
                 route_hex(&route()),
-                hex(&record_hash(&remove))
+                hex(&record_hash(&bytes))
             );
             let response = http(
                 &self.relay.addr.clone(),
                 "PUT",
                 &path,
-                Some(&token),
-                &remove,
+                token.as_ref(),
+                &bytes,
             )
             .await;
+            self.check(response.as_ref(), expect, context);
+            return;
+        }
+        if let Some(name) = step["register_invitation"].as_str() {
+            let lookup = self.invitation(name).1;
+            let token = self.token(&device, &route(), false).await;
+            let path = format!(
+                "/v0/routes/{}/invitations/{}",
+                route_hex(&route()),
+                hex(&lookup)
+            );
+            let response = http(&self.relay.addr.clone(), "PUT", &path, Some(&token), b"").await;
+            self.check(response.as_ref(), expect, context);
+            return;
+        }
+        if let Some(name) = step["enroll"].as_str() {
+            let (invitation, lookup) = self.invitation(name);
+            let key = format!("{name}-request{}", step["other_bytes"] == true);
+            let request = match self.controls.get(&key) {
+                Some(bytes) => bytes.clone(),
+                None => {
+                    let bytes = matters_sync::authority::request_enrollment(
+                        &invitation,
+                        self.device(&device),
+                        fresh(),
+                    )
+                    .unwrap();
+                    self.controls.insert(key, bytes.clone());
+                    bytes
+                }
+            };
+            let path = format!(
+                "/v0/routes/{}/enrollments/{}",
+                route_hex(&route()),
+                hex(&lookup)
+            );
+            let response = http(&self.relay.addr.clone(), "PUT", &path, None, &request).await;
             self.check(response.as_ref(), expect, context);
             return;
         }
@@ -844,6 +943,24 @@ fn scenarios() -> Vec<Value> {
     fixture["scenarios"].as_array().unwrap().clone()
 }
 
+/// The fixture's resource limits are the relay's.
+#[test]
+fn the_fixtures_limits_are_the_relays() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../docs/protocol/sync-relay-v0-conformance.json"
+    ))
+    .unwrap();
+    let limits = &fixture["limits"];
+    assert_eq!(
+        limits["page_entries"].as_u64(),
+        Some(u64::from(matters_relay::MAX_PAGE))
+    );
+    assert_eq!(
+        limits["page_entry_bytes"].as_i64(),
+        Some(matters_relay::MAX_PAGE_BYTES)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn every_conformance_scenario_passes_against_the_real_binary() {
     if std::env::var_os("MATTERS_RELAY_TEST_DATABASE_URL").is_none() {
@@ -852,7 +969,7 @@ async fn every_conformance_scenario_passes_against_the_real_binary() {
         return;
     }
     let all = scenarios();
-    assert_eq!(all.len(), 12, "every scenario of the fixture");
+    assert_eq!(all.len(), 15, "every scenario of the fixture");
     for scenario in all {
         let name = scenario["name"].as_str().unwrap().to_owned();
         let wants_hints = scenario["steps"]
@@ -931,4 +1048,43 @@ async fn a_database_outage_answers_unavailable_and_acknowledges_nothing() {
         .unwrap();
     world.inspect().await;
     world.finish().await;
+}
+
+/// The database password can come from a secret file instead of the URL
+/// (packaging/relay/compose.yaml), and a wrong one keeps the relay down.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_database_password_is_read_from_a_secret_file() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let url = db.url();
+    let (scheme, rest) = url.split_once("://").unwrap();
+    let (credentials, host) = rest.split_once('@').unwrap();
+    let (user, password) = credentials.split_once(':').unwrap();
+    let bare = format!("{scheme}://{user}@{host}");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("postgres_password");
+    std::fs::write(&file, format!("{password}\n")).unwrap();
+    let mut relay = start(
+        &bare,
+        &[(
+            "MATTERS_RELAY_DATABASE_PASSWORD_FILE",
+            file.to_str().unwrap(),
+        )],
+    );
+    let ready = http(&relay.addr, "GET", "/readyz", None, b"")
+        .await
+        .unwrap();
+    assert_eq!(ready.status, 200);
+    relay.kill();
+    std::fs::write(&file, "not-the-password").unwrap();
+    let status = Command::new(BIN)
+        .env("MATTERS_RELAY_DATABASE_URL", &bare)
+        .env("MATTERS_RELAY_DATABASE_PASSWORD_FILE", &file)
+        .env("MATTERS_RELAY_LISTEN", "127.0.0.1:0")
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(!status.success(), "a wrong password keeps it down");
+    db.finish().await;
 }

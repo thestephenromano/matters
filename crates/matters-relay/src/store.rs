@@ -1,12 +1,20 @@
 use matters_sync::authority::{self, Authority, Body, Hash, Route};
+use matters_sync::control_signature::verify_signature;
 use matters_sync::record::record_hash;
 use matters_sync::{wire, VerificationKey};
 use minicbor::{Decoder, Encoder};
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// The most records or authority objects one page returns.
 pub const MAX_PAGE: u32 = 256;
+/// The most entry bytes one page returns (records, authority objects or
+/// snapshots), beyond its first entry, which is always returned so that a
+/// page always makes progress. With records of up to about 1 MiB, a count
+/// alone would let one page hold 256 MiB, twice over in memory.
+pub const MAX_PAGE_BYTES: i64 = 16 * 1024 * 1024;
 /// The largest authority object accepted (the control budget).
 const MAX_AUTHORITY_BYTES: usize = authority::MAX_CONTROL_BYTES;
 
@@ -42,12 +50,16 @@ pub enum RelayError {
     GenerationChanged { generation: [u8; 16] },
     #[error("the route's storage quota is exhausted")]
     QuotaExhausted,
+    #[error("no registered, unexpired invitation has this lookup")]
+    UnknownInvitation,
     #[error("too many requests; retry after {retry_after_ms} ms")]
     RateLimited { retry_after_ms: u64 },
     #[error("the authority object was refused: {0}")]
     Authority(authority::Error),
     #[error("the database is unavailable: {0}")]
     Unavailable(#[from] sqlx::Error),
+    #[error("the system's random source failed")]
+    Entropy,
 }
 
 impl RelayError {
@@ -67,14 +79,18 @@ impl RelayError {
             Self::TooLarge => "too-large",
             Self::GenerationChanged { .. } => "generation-changed",
             Self::QuotaExhausted => "quota-exhausted",
+            Self::UnknownInvitation => "unknown-invitation",
             Self::RateLimited { .. } => "rate-limited",
-            Self::Unavailable(_) => "unavailable",
+            Self::Unavailable(_) | Self::Entropy => "unavailable",
         }
     }
 
     /// Whether the client may retry the same request unchanged.
     pub fn retry(&self) -> bool {
-        matches!(self, Self::Unavailable(_) | Self::RateLimited { .. })
+        matches!(
+            self,
+            Self::Unavailable(_) | Self::Entropy | Self::RateLimited { .. }
+        )
     }
 }
 
@@ -170,10 +186,10 @@ pub struct Page {
     pub complete: bool,
 }
 
-/// Unexpired enrollment requests a route keeps at once.
+/// Unexpired invitations, and enrollment requests, a route keeps at once.
 pub const MAX_ENROLLMENTS: i64 = 16;
-/// How long an enrollment request is kept: an invitation is used within
-/// minutes.
+/// How long a registered invitation, and an enrollment request, is kept:
+/// an invitation is used within minutes.
 pub const ENROLLMENT_TTL_SECONDS: u64 = 3600;
 
 /// The route's newest snapshot records, newest first.
@@ -187,6 +203,7 @@ pub struct Snapshots {
 #[derive(Clone)]
 pub struct Relay {
     pool: PgPool,
+    authorities: Arc<Mutex<AuthorityCache>>,
 }
 
 /// A provisioned route's row.
@@ -194,6 +211,106 @@ pub(crate) struct RouteRow {
     pub(crate) id: i64,
     root_key: Vec<u8>,
     pub(crate) generation: [u8; 16],
+    /// The authority log's length and the digest at its end: with the row
+    /// and the generation, what names one replay of the log.
+    authority_high_water: i64,
+    authority_head: Option<Vec<u8>>,
+}
+
+/// The route's authority, replayed from its stored log, with what the
+/// relay needs to check the objects it stores without admitting them.
+pub(crate) struct Replayed {
+    pub(crate) authority: Authority,
+    /// Every accepted manifest: its epoch, and its admin with the admin's
+    /// roster key. [`Authority`] keeps these to itself.
+    manifests: HashMap<Hash, Manifest>,
+    /// How many `root_recovery` objects are stored for each generation they
+    /// would start.
+    recoveries: HashMap<u64, usize>,
+}
+
+struct Manifest {
+    epoch: u64,
+    admin: Hash,
+    admin_key: VerificationKey,
+}
+
+impl Manifest {
+    fn of(epoch: u64, admin: Hash, roster: &[authority::Member]) -> Option<Self> {
+        let key = roster.iter().find(|m| m.id == admin)?.signing_key.clone();
+        Some(Self {
+            epoch,
+            admin,
+            admin_key: key,
+        })
+    }
+}
+
+/// The most writer claims and key envelopes a route stores: beyond what
+/// 16 transitions of a 16-member roster need (an envelope per member and
+/// epoch, history and recovery envelopes, writer claims), but a bound on
+/// a member that uploads without end. Bytes count toward the route's
+/// quota as well.
+pub const MAX_AUTHORITY_OBJECTS: i64 = 4096;
+/// The most `root_recovery` objects stored per generation they start: the
+/// accepted one, and one competing recovery kept as fork evidence.
+pub const MAX_RECOVERIES_PER_GENERATION: usize = 2;
+
+/// Routes whose replayed authority the relay keeps in memory.
+const CACHED_AUTHORITIES: usize = 4096;
+
+/// What names one replay: the route's row, its generation, and the log's
+/// length and last digest. Authority rows are append-only, so a key names
+/// exactly one stored log. A restore keeps sequences but not the process:
+/// the restore procedure restarts the relay, and installs a new
+/// generation besides.
+type CacheKey = (i64, [u8; 16], i64, Option<Vec<u8>>);
+
+/// The newest replay of each route's authority (#45): a session challenge,
+/// a session and every authenticated request would otherwise replay the
+/// whole log, an ML-DSA verification per transition, each time. A route
+/// keeps only its newest entry, so a new authority object replaces it.
+pub(crate) struct AuthorityCache<V = Arc<Replayed>> {
+    entries: HashMap<i64, (CacheKey, u64, V)>,
+    tick: u64,
+}
+
+impl<V> Default for AuthorityCache<V> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            tick: 0,
+        }
+    }
+}
+
+impl<V: Clone> AuthorityCache<V> {
+    fn get(&mut self, key: &CacheKey) -> Option<V> {
+        self.tick += 1;
+        let tick = self.tick;
+        let (stored, used, replayed) = self.entries.get_mut(&key.0)?;
+        if stored != key {
+            return None;
+        }
+        *used = tick;
+        Some(replayed.clone())
+    }
+
+    fn put(&mut self, key: CacheKey, replayed: V) {
+        self.tick += 1;
+        if self.entries.len() >= CACHED_AUTHORITIES && !self.entries.contains_key(&key.0) {
+            // The least recently used route makes room.
+            if let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, used, _))| *used)
+                .map(|(id, _)| *id)
+            {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(key.0, (key, self.tick, replayed));
+    }
 }
 
 pub(crate) fn random16() -> [u8; 16] {
@@ -214,18 +331,26 @@ pub(crate) fn sequence(value: i64) -> u64 {
 impl Relay {
     /// Connect to `url` and bring the schema up to date.
     pub async fn connect(url: &str) -> Result<Self> {
+        Self::connect_with(url.parse::<PgConnectOptions>()?).await
+    }
+
+    /// Connect with `options` and bring the schema up to date.
+    pub async fn connect_with(options: PgConnectOptions) -> Result<Self> {
         // A request waits at most 5 s for a connection, then answers
         // `unavailable`, which clients retry with backoff.
         let pool = PgPoolOptions::new()
             .max_connections(16)
             .acquire_timeout(std::time::Duration::from_secs(5))
-            .connect(url)
+            .connect_with(options)
             .await?;
         MIGRATOR
             .run(&pool)
             .await
             .map_err(|e| RelayError::Unavailable(e.into()))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            authorities: Arc::default(),
+        })
     }
 
     /// Whether the relay can serve: its database answers within a second.
@@ -282,7 +407,15 @@ impl Relay {
         .fetch_optional(&mut *tx)
         .await?;
         let id = id.ok_or(RelayError::RouteExists)?;
-        insert_authority(&mut tx, id, &record_hash(genesis), "genesis", genesis).await?;
+        insert_authority(
+            &mut tx,
+            id,
+            &record_hash(genesis),
+            "genesis",
+            genesis,
+            false,
+        )
+        .await?;
         tx.commit().await?;
         Ok(generation)
     }
@@ -376,15 +509,15 @@ impl Relay {
     pub async fn is_member(&self, route: &Route, device: &Hash) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let row = route_row(&mut tx, route, false).await?;
-        let authority = route_authority(&mut tx, route, &row).await?;
-        Ok(member(&authority, device))
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        Ok(member(&replayed.authority, device))
     }
 
     /// The route's authority as the relay has accepted it.
     pub async fn authority(&self, route: &Route) -> Result<Authority> {
         let mut tx = self.pool.begin().await?;
         let row = route_row(&mut tx, route, false).await?;
-        route_authority(&mut tx, route, &row).await
+        Ok(self.replayed(&mut tx, route, &row).await?.authority.clone())
     }
 
     /// Append a content record uploaded by `device` (the session's device)
@@ -423,8 +556,8 @@ impl Relay {
                 digest,
             }));
         }
-        let authority = route_authority(&mut tx, route, &row).await?;
-        if !member(&authority, device) {
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        if !member(&replayed.authority, device) {
             return Err(RelayError::NotAMember);
         }
         let size = i64::try_from(bytes.len()).map_err(|_| RelayError::TooLarge)?;
@@ -473,14 +606,34 @@ impl Relay {
         }))
     }
 
-    /// Store an authority object under its SHA-384 `digest`. Membership
-    /// transitions and root recoveries must be accepted by the route's
-    /// authority first (a fork's competing record is kept as evidence);
-    /// other kinds are checked structurally. Identical bytes again return
-    /// the original receipt.
-    pub async fn put_authority(
+    /// Store an authority object under its SHA-384 `digest`, uploaded with
+    /// `session`'s device (`None`: no session). Identical bytes again return
+    /// the original receipt. Every check below runs in the transaction that
+    /// stores the object, under the route's lock, against the authority as
+    /// stored then.
+    ///
+    /// - `membership` and `root_recovery` must be accepted by the route's
+    ///   authority. A second valid successor of a manifest is kept as fork
+    ///   evidence, which freezes membership: further transitions are refused.
+    ///   At most [`MAX_RECOVERIES_PER_GENERATION`] recoveries are kept per
+    ///   generation. These need no session: their signatures say who may
+    ///   publish them.
+    /// - `writer_start` and `writer_handoff` must be signed by the session's
+    ///   device, a current member, with its roster key.
+    /// - `key_envelope` needs a member's or the root's session, and must be
+    ///   signed by the admin of the manifest it names, or the current admin,
+    ///   with that admin's roster key.
+    /// - `genesis` (provisioned by the operator) and `enrollment_request`
+    ///   (left in the mailbox) do not belong in the log.
+    ///
+    /// Bytes count toward the route's quota, and writer claims and
+    /// envelopes toward [`MAX_AUTHORITY_OBJECTS`]; transitions are exempt
+    /// from both refusals, so a full route can still remove a device, and are
+    /// bounded by the authority's own transition limit.
+    pub async fn put_authority_as(
         &self,
         route: &Route,
+        session: Option<&Hash>,
         digest: &Hash,
         bytes: &[u8],
     ) -> Result<Appended> {
@@ -510,22 +663,111 @@ impl Relay {
                 digest: *digest,
             }));
         }
-        match parsed.message.body {
-            Body::Membership(_) | Body::RootRecovery(_) => {
-                let mut authority = route_authority(&mut tx, route, &row).await?;
-                let applied = match parsed.message.body {
-                    Body::Membership(_) => authority.apply_membership(bytes),
-                    _ => authority.apply_recovery(bytes),
-                };
-                match applied {
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let transition = match &parsed.message.body {
+            Body::Membership(_) => {
+                // A frozen authority answers every transition with `Fork`
+                // before checking its signature: only the first competing
+                // successor, verified, is evidence.
+                if replayed.authority.is_forked() {
+                    return Err(RelayError::Authority(authority::Error::Fork));
+                }
+                let mut authority = replayed.authority.clone();
+                match authority.apply_membership(bytes) {
                     Ok(_) | Err(authority::Error::Fork) => {}
                     Err(error) => return Err(RelayError::Authority(error)),
                 }
+                true
             }
-            Body::Genesis(_) => return Err(RelayError::Authority(authority::Error::Unsupported)),
-            _ => {}
+            Body::RootRecovery(m) => {
+                let mut authority = replayed.authority.clone();
+                match authority.apply_recovery(bytes) {
+                    Ok(_) => {}
+                    Err(authority::Error::Fork) => {
+                        let stored = replayed.recoveries.get(&m.generation).copied();
+                        if stored.unwrap_or(0) >= MAX_RECOVERIES_PER_GENERATION {
+                            return Err(RelayError::QuotaExhausted);
+                        }
+                    }
+                    Err(error) => return Err(RelayError::Authority(error)),
+                }
+                true
+            }
+            Body::WriterStart(_) | Body::WriterHandoff(_) => {
+                let device = session.ok_or(RelayError::Unauthenticated)?;
+                if *device == replayed.authority.root() {
+                    return Err(RelayError::NotAMember);
+                }
+                let claim = parsed.message.body.writer_claim();
+                if parsed.message.signer != *device {
+                    return Err(RelayError::ContextMismatch);
+                }
+                if claim.map(|c| c.device) != Some(*device) {
+                    return Err(RelayError::Authority(authority::Error::Identity));
+                }
+                let member = replayed
+                    .authority
+                    .members()
+                    .ok()
+                    .and_then(|m| m.into_iter().find(|m| m.id == *device))
+                    .ok_or(RelayError::NotAMember)?;
+                verify_signature(&parsed, &member.signing_key).map_err(RelayError::Authority)?;
+                false
+            }
+            Body::KeyEnvelope(k) => {
+                let device = session.ok_or(RelayError::Unauthenticated)?;
+                if *device != replayed.authority.root() && !member(&replayed.authority, device) {
+                    return Err(RelayError::NotAMember);
+                }
+                let signer = parsed.message.signer;
+                let named = replayed
+                    .manifests
+                    .get(&k.manifest)
+                    .ok_or(RelayError::Authority(authority::Error::Stale))?;
+                if k.epoch != named.epoch {
+                    return Err(RelayError::Authority(authority::Error::Stale));
+                }
+                if k.authority != signer {
+                    return Err(RelayError::Authority(authority::Error::Unauthorized));
+                }
+                // The named epoch's admin (its own and recovery envelopes),
+                // or the current admin (history envelopes for a new member).
+                let key = if signer == named.admin {
+                    named.admin_key.clone()
+                } else if replayed.authority.admin().ok() == Some(signer) {
+                    replayed
+                        .authority
+                        .members()
+                        .ok()
+                        .and_then(|m| m.into_iter().find(|m| m.id == signer))
+                        .map(|m| m.signing_key)
+                        .ok_or(RelayError::Authority(authority::Error::Unauthorized))?
+                } else {
+                    return Err(RelayError::Authority(authority::Error::Unauthorized));
+                };
+                verify_signature(&parsed, &key).map_err(RelayError::Authority)?;
+                false
+            }
+            // Stored only by provisioning (its bytes again are answered
+            // above, as a client re-publishing its controls sends them), and
+            // never: requests go to the mailbox.
+            Body::Genesis(_) | Body::EnrollmentRequest(_) => {
+                return Err(RelayError::Authority(authority::Error::Unsupported))
+            }
+        };
+        if !transition {
+            let stored: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM authority
+                 WHERE route = $1 AND kind NOT IN ('genesis', 'membership', 'root_recovery')",
+            )
+            .bind(row.id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if stored >= MAX_AUTHORITY_OBJECTS {
+                return Err(RelayError::QuotaExhausted);
+            }
         }
-        let seq = insert_authority(&mut tx, row.id, digest, kind, bytes).await?;
+        let seq = insert_authority(&mut tx, row.id, digest, kind, bytes, !transition).await?;
         tx.commit().await?;
         Ok(Appended::Stored(Receipt {
             sequence: seq,
@@ -534,10 +776,74 @@ impl Relay {
         }))
     }
 
+    /// As [`Self::put_authority_as`] with no session: only transitions
+    /// and recoveries.
+    pub async fn put_authority(
+        &self,
+        route: &Route,
+        digest: &Hash,
+        bytes: &[u8],
+    ) -> Result<Appended> {
+        self.put_authority_as(route, None, digest, bytes).await
+    }
+
+    /// Register an invitation's `lookup` for `device`, which must be the
+    /// route's current admin (#45): the mailbox then takes one enrollment
+    /// request under it, for [`ENROLLMENT_TTL_SECONDS`] from now. A route
+    /// keeps at most [`MAX_ENROLLMENTS`] unexpired invitations. The same
+    /// lookup again returns `false` and keeps its first expiry.
+    pub async fn register_invitation(
+        &self,
+        route: &Route,
+        device: &Hash,
+        lookup: &[u8; 16],
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let row = route_row(&mut tx, route, true).await?;
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        if replayed.authority.admin().ok() != Some(*device) {
+            return Err(RelayError::NotAMember);
+        }
+        sqlx::query(
+            "DELETE FROM invitations WHERE route = $1
+             AND registered_at < now() - ($2::BIGINT * interval '1 second')",
+        )
+        .bind(row.id)
+        .bind(ENROLLMENT_TTL_SECONDS as i64)
+        .execute(&mut *tx)
+        .await?;
+        let known: Option<i32> =
+            sqlx::query_scalar("SELECT 1 FROM invitations WHERE route = $1 AND lookup = $2")
+                .bind(row.id)
+                .bind(lookup.as_slice())
+                .fetch_optional(&mut *tx)
+                .await?;
+        if known.is_some() {
+            tx.commit().await?;
+            return Ok(false);
+        }
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invitations WHERE route = $1")
+            .bind(row.id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if pending >= MAX_ENROLLMENTS {
+            return Err(RelayError::QuotaExhausted);
+        }
+        sqlx::query("INSERT INTO invitations (route, lookup) VALUES ($1, $2)")
+            .bind(row.id)
+            .bind(lookup.as_slice())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     /// Leave a joining device's enrollment request under `lookup` (#42).
-    /// No session is needed: the device is not a member yet. The relay checks
-    /// that the bytes are an enrollment request for this route, and keeps at
-    /// most [`MAX_ENROLLMENTS`] unexpired ones per route, each for
+    /// No session is needed: the device is not a member yet. The lookup
+    /// must be a registered, unexpired invitation's
+    /// ([`Self::register_invitation`]), which takes one request. The relay
+    /// checks that the bytes are an enrollment request for this route, and
+    /// keeps at most [`MAX_ENROLLMENTS`] unexpired ones per route, each for
     /// [`ENROLLMENT_TTL_SECONDS`].
     ///
     /// The same bytes again return `false`. Other bytes under the same
@@ -557,6 +863,18 @@ impl Relay {
         }
         let mut tx = self.pool.begin().await?;
         let row = route_row(&mut tx, route, true).await?;
+        let invited: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM invitations WHERE route = $1 AND lookup = $2
+             AND registered_at >= now() - ($3::BIGINT * interval '1 second')",
+        )
+        .bind(row.id)
+        .bind(lookup.as_slice())
+        .bind(ENROLLMENT_TTL_SECONDS as i64)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if invited.is_none() {
+            return Err(RelayError::UnknownInvitation);
+        }
         sqlx::query(
             "DELETE FROM enrollments WHERE route = $1
              AND received_at < now() - ($2::BIGINT * interval '1 second')",
@@ -625,7 +943,8 @@ impl Relay {
     }
 
     /// A page of the route's records after `after` (from sequence 1 when
-    /// `None`), at most `limit` (1 to [`MAX_PAGE`]).
+    /// `None`), at most `limit` (1 to [`MAX_PAGE`]) and [`MAX_PAGE_BYTES`]
+    /// of entry bytes after the first.
     pub async fn records(&self, route: &Route, after: Option<&Cursor>, limit: u32) -> Result<Page> {
         self.page(route, after, limit, Log::Records).await
     }
@@ -651,11 +970,18 @@ impl Relay {
         let id: i64 = row.get("id");
         let generation = generation_of(row.get("generation"))?;
         let rows = sqlx::query(
-            "SELECT sequence, bytes FROM records WHERE route = $1 AND snapshot
-             ORDER BY sequence DESC LIMIT $2",
+            "SELECT sequence, bytes FROM (
+                 SELECT sequence, bytes,
+                        row_number() OVER (ORDER BY sequence DESC) AS n,
+                        SUM(octet_length(bytes)) OVER (ORDER BY sequence DESC) AS running
+                 FROM records WHERE route = $1 AND snapshot
+                 ORDER BY sequence DESC LIMIT $2
+             ) page WHERE n = 1 OR running <= $3
+             ORDER BY sequence DESC",
         )
         .bind(id)
         .bind(i64::from(limit))
+        .bind(MAX_PAGE_BYTES)
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -708,29 +1034,49 @@ impl Relay {
         let id: i64 = row.get("id");
         let generation = generation_of(row.get("generation"))?;
         let high_water = sequence(row.get("high_water"));
+        // A cursor of another generation, or one past the high-water mark
+        // (history shrank under the same generation: a restore that skipped
+        // `new-generation`), is not continuity. Answering it with an empty,
+        // complete page would silently skip whatever is appended next.
         let last = match after {
-            Some(cursor) if cursor.generation != generation => {
+            Some(cursor) if cursor.generation != generation || cursor.last > high_water => {
                 return Err(RelayError::GenerationChanged { generation });
             }
             Some(cursor) => cursor.last,
             None => 0,
         };
+        // Up to `limit` entries, cut where their bytes pass the page's
+        // budget, but never below one entry. Sizes come from the column
+        // headers, so entries past the cut are never read out.
         let rows = sqlx::query(match log {
             Log::Records => {
-                "SELECT sequence, bytes FROM records
-                 WHERE route = $1 AND sequence > $2 AND sequence <= $3
-                 ORDER BY sequence LIMIT $4"
+                "SELECT sequence, bytes FROM (
+                     SELECT sequence, bytes,
+                            row_number() OVER (ORDER BY sequence) AS n,
+                            SUM(octet_length(bytes)) OVER (ORDER BY sequence) AS running
+                     FROM records
+                     WHERE route = $1 AND sequence > $2 AND sequence <= $3
+                     ORDER BY sequence LIMIT $4
+                 ) page WHERE n = 1 OR running <= $5
+                 ORDER BY sequence"
             }
             Log::Authority => {
-                "SELECT sequence, bytes FROM authority
-                 WHERE route = $1 AND sequence > $2 AND sequence <= $3
-                 ORDER BY sequence LIMIT $4"
+                "SELECT sequence, bytes FROM (
+                     SELECT sequence, bytes,
+                            row_number() OVER (ORDER BY sequence) AS n,
+                            SUM(octet_length(bytes)) OVER (ORDER BY sequence) AS running
+                     FROM authority
+                     WHERE route = $1 AND sequence > $2 AND sequence <= $3
+                     ORDER BY sequence LIMIT $4
+                 ) page WHERE n = 1 OR running <= $5
+                 ORDER BY sequence"
             }
         })
         .bind(id)
         .bind(i64::try_from(last).map_err(|_| RelayError::Malformed)?)
         .bind(i64::try_from(high_water).map_err(|_| RelayError::Malformed)?)
         .bind(i64::from(limit))
+        .bind(MAX_PAGE_BYTES)
         .fetch_all(&mut *tx)
         .await?;
         let entries: Vec<(u64, Vec<u8>)> = rows
@@ -774,10 +1120,18 @@ pub(crate) async fn route_row(
     lock: bool,
 ) -> Result<RouteRow> {
     let sql = if lock {
-        "SELECT id, root_key, generation FROM routes
+        "SELECT id, root_key, generation, authority_high_water,
+                (SELECT digest FROM authority a
+                 WHERE a.route = routes.id AND a.sequence = routes.authority_high_water)
+                AS authority_head
+         FROM routes
          WHERE application = $1 AND tenant = $2 AND collection = $3 FOR UPDATE"
     } else {
-        "SELECT id, root_key, generation FROM routes
+        "SELECT id, root_key, generation, authority_high_water,
+                (SELECT digest FROM authority a
+                 WHERE a.route = routes.id AND a.sequence = routes.authority_high_water)
+                AS authority_head
+         FROM routes
          WHERE application = $1 AND tenant = $2 AND collection = $3"
     };
     let row = sqlx::query(sql)
@@ -791,28 +1145,77 @@ pub(crate) async fn route_row(
         id: row.get("id"),
         root_key: row.get("root_key"),
         generation: generation_of(row.get("generation"))?,
+        authority_high_water: row.get("authority_high_water"),
+        authority_head: row.get("authority_head"),
     })
+}
+
+impl Relay {
+    /// The route's authority as of `row`, read in `tx`: from the cache when
+    /// the log is unchanged since it was last replayed, else replayed.
+    pub(crate) async fn replayed(
+        &self,
+        tx: &mut Transaction<'static, Postgres>,
+        route: &Route,
+        row: &RouteRow,
+    ) -> Result<Arc<Replayed>> {
+        let key: CacheKey = (
+            row.id,
+            row.generation,
+            row.authority_high_water,
+            row.authority_head.clone(),
+        );
+        let cached = self
+            .authorities
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key);
+        if let Some(replayed) = cached {
+            return Ok(replayed);
+        }
+        let replayed = Arc::new(replay(tx, route, row).await?);
+        self.authorities
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put(key, replayed.clone());
+        Ok(replayed)
+    }
 }
 
 /// Replay the route's genesis, transitions and recoveries, in acceptance
 /// order, against its pinned root.
-pub(crate) async fn route_authority(
+async fn replay(
     tx: &mut Transaction<'static, Postgres>,
     route: &Route,
     row: &RouteRow,
-) -> Result<Authority> {
+) -> Result<Replayed> {
+    // Up to the high-water mark the row was read at, so that the replay is
+    // exactly the one its cache key names, even under READ COMMITTED.
     let rows = sqlx::query(
         "SELECT kind, bytes FROM authority
-         WHERE route = $1 AND kind IN ('genesis', 'membership', 'root_recovery')
+         WHERE route = $1 AND sequence <= $2
+           AND kind IN ('genesis', 'membership', 'root_recovery')
          ORDER BY sequence",
     )
     .bind(row.id)
+    .bind(row.authority_high_water)
     .fetch_all(&mut **tx)
     .await?;
     let mut rows = rows.into_iter();
     let genesis: Vec<u8> = rows.next().ok_or(RelayError::UnknownRoute)?.get("bytes");
     let mut authority = Authority::bootstrap(&genesis, route.clone(), &root_key(&row.root_key)?)
         .map_err(RelayError::Authority)?;
+    let mut manifests = HashMap::new();
+    if let Body::Genesis(g) = authority::parse(&genesis)
+        .map_err(RelayError::Authority)?
+        .message
+        .body
+    {
+        if let Some(m) = Manifest::of(g.epoch, g.admin, &g.roster) {
+            manifests.insert(record_hash(&genesis), m);
+        }
+    }
+    let mut recoveries: HashMap<u64, usize> = HashMap::new();
     for r in rows {
         let kind: String = r.get("kind");
         let bytes: Vec<u8> = r.get("bytes");
@@ -821,28 +1224,57 @@ pub(crate) async fn route_authority(
         } else {
             authority.apply_recovery(&bytes)
         };
+        let body = authority::parse(&bytes)
+            .map_err(RelayError::Authority)?
+            .message
+            .body;
+        let (Body::Membership(m) | Body::RootRecovery(m)) = &body else {
+            return Err(RelayError::Malformed);
+        };
+        if matches!(body, Body::RootRecovery(_)) {
+            *recoveries.entry(m.generation).or_default() += 1;
+        }
         match applied {
-            Ok(_) | Err(authority::Error::Fork) => {}
+            Ok(true) => {
+                if let Some(manifest) = Manifest::of(m.epoch, m.admin, &m.roster) {
+                    manifests.insert(record_hash(&bytes), manifest);
+                }
+            }
+            Ok(false) | Err(authority::Error::Fork) => {}
             Err(error) => return Err(RelayError::Authority(error)),
         }
     }
-    Ok(authority)
+    Ok(Replayed {
+        authority,
+        manifests,
+        recoveries,
+    })
 }
 
+/// Append `bytes` to the route's authority log, counting them toward its
+/// stored bytes. With `quota`, refuse with [`RelayError::QuotaExhausted`]
+/// before storing anything if they would pass the route's byte quota.
 pub(crate) async fn insert_authority(
     tx: &mut Transaction<'static, Postgres>,
     route: i64,
     digest: &Hash,
     kind: &str,
     bytes: &[u8],
+    quota: bool,
 ) -> Result<u64> {
-    let seq: i64 = sqlx::query_scalar(
-        "UPDATE routes SET authority_high_water = authority_high_water + 1
-         WHERE id = $1 RETURNING authority_high_water",
+    let size = i64::try_from(bytes.len()).map_err(|_| RelayError::TooLarge)?;
+    let seq: Option<i64> = sqlx::query_scalar(
+        "UPDATE routes SET authority_high_water = authority_high_water + 1,
+             used_bytes = used_bytes + $2
+         WHERE id = $1 AND (NOT $3 OR quota_bytes IS NULL OR used_bytes + $2 <= quota_bytes)
+         RETURNING authority_high_water",
     )
     .bind(route)
-    .fetch_one(&mut **tx)
+    .bind(size)
+    .bind(quota)
+    .fetch_optional(&mut **tx)
     .await?;
+    let seq = seq.ok_or(RelayError::QuotaExhausted)?;
     sqlx::query(
         "INSERT INTO authority (route, sequence, digest, kind, bytes) VALUES ($1, $2, $3, $4, $5)",
     )
@@ -854,4 +1286,34 @@ pub(crate) async fn insert_authority(
     .execute(&mut **tx)
     .await?;
     Ok(sequence(seq))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AuthorityCache, CACHED_AUTHORITIES};
+
+    #[test]
+    fn the_authority_cache_keeps_each_routes_newest_replay_and_is_bounded() {
+        let mut cache = AuthorityCache::<u32>::default();
+        let key =
+            |id: i64, high_water: i64| (id, [1; 16], high_water, Some(vec![high_water as u8]));
+        cache.put(key(1, 1), 10);
+        assert_eq!(cache.get(&key(1, 1)), Some(10));
+        // A longer log, another generation or another head is another replay.
+        assert_eq!(cache.get(&key(1, 2)), None);
+        assert_eq!(cache.get(&(1, [2; 16], 1, Some(vec![1]))), None);
+        assert_eq!(cache.get(&(1, [1; 16], 1, Some(vec![9]))), None);
+        cache.put(key(1, 2), 11);
+        assert_eq!(cache.get(&key(1, 1)), None, "replaced, not kept beside");
+        assert_eq!(cache.get(&key(1, 2)), Some(11));
+        // Full: the least recently used route makes room.
+        for id in 2..=CACHED_AUTHORITIES as i64 {
+            cache.put(key(id, 1), 0);
+        }
+        assert_eq!(cache.get(&key(1, 2)), Some(11));
+        cache.put(key(0, 1), 1);
+        assert_eq!(cache.entries.len(), CACHED_AUTHORITIES);
+        assert_eq!(cache.get(&key(2, 1)), None, "evicted");
+        assert_eq!(cache.get(&key(1, 2)), Some(11), "recently used, kept");
+    }
 }

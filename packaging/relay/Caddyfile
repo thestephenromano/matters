@@ -5,6 +5,12 @@
 {$MATTERS_RELAY_DOMAIN} {
 	tls {$MATTERS_RELAY_TLS}
 	# Only the v0 API and health are public. Metrics stay on the private network.
+	# Export is operator-only: on the relay's private listener or with
+	# `matters-relay export`, never through the public name.
+	@export path /v0/routes/*/export /v0/routes/*/export/*
+	handle @export {
+		respond 404
+	}
 	@api path /v0/* /healthz /readyz
 	handle @api {
 		reverse_proxy relay:8484

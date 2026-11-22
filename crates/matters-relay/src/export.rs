@@ -38,28 +38,11 @@ impl Relay {
         .bind(row.id)
         .fetch_all(&mut *tx)
         .await?;
-        let mut e = Encoder::new(Vec::new());
-        let encoded = (|| {
-            e.array(6)?.str(LABEL)?.u8(0)?;
-            e.array(3)?
-                .bytes(&route.application)?
-                .bytes(&route.tenant)?
-                .bytes(&route.collection)?;
-            e.bytes(&row.generation)?;
-            e.array(authority.len() as u64)?;
-            for bytes in &authority {
-                e.bytes(bytes)?;
-            }
-            e.array(records.len() as u64)?;
-            for (seq, bytes) in &records {
-                e.array(2)?
-                    .u64(crate::store::sequence(*seq))?
-                    .bytes(bytes)?;
-            }
-            Ok::<_, minicbor::encode::Error<std::convert::Infallible>>(())
-        })();
-        encoded.map_err(|_| RelayError::Malformed)?;
-        Ok(e.into_writer())
+        let records: Vec<(u64, Vec<u8>)> = records
+            .into_iter()
+            .map(|(seq, bytes)| (crate::store::sequence(seq), bytes))
+            .collect();
+        Ok(encode(route, &row.generation, &authority, &records))
     }
 
     /// Import an export into this relay as a new route with a new
@@ -119,7 +102,7 @@ impl Relay {
                 .message
                 .body
                 .kind();
-            insert_authority(&mut tx, id, &record_hash(bytes), kind, bytes).await?;
+            insert_authority(&mut tx, id, &record_hash(bytes), kind, bytes, false).await?;
         }
         let mut used: i64 = 0;
         for (n, bytes) in parsed.records.iter().enumerate() {
@@ -140,25 +123,58 @@ impl Relay {
             .await?;
             used += i64::try_from(bytes.len()).map_err(|_| RelayError::TooLarge)?;
         }
-        sqlx::query("UPDATE routes SET record_high_water = $2, used_bytes = $3 WHERE id = $1")
-            .bind(id)
-            .bind(i64::try_from(parsed.records.len()).map_err(|_| RelayError::TooLarge)?)
-            .bind(used)
-            .execute(&mut *tx)
-            .await?;
+        // Authority bytes were counted as they were inserted.
+        sqlx::query(
+            "UPDATE routes SET record_high_water = $2, used_bytes = used_bytes + $3 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(i64::try_from(parsed.records.len()).map_err(|_| RelayError::TooLarge)?)
+        .bind(used)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok((route, generation))
     }
 }
 
-struct Parsed {
-    route: Route,
-    authority: Vec<Vec<u8>>,
-    records: Vec<Vec<u8>>,
+/// The contract's export bytes.
+pub(crate) fn encode(
+    route: &Route,
+    generation: &[u8; 16],
+    authority: &[Vec<u8>],
+    records: &[(u64, Vec<u8>)],
+) -> Vec<u8> {
+    let mut e = Encoder::new(Vec::new());
+    // Writing to a Vec cannot fail.
+    let _ = (|| {
+        e.array(6)?.str(LABEL)?.u8(0)?;
+        e.array(3)?
+            .bytes(&route.application)?
+            .bytes(&route.tenant)?
+            .bytes(&route.collection)?;
+        e.bytes(generation)?;
+        e.array(authority.len() as u64)?;
+        for bytes in authority {
+            e.bytes(bytes)?;
+        }
+        e.array(records.len() as u64)?;
+        for (seq, bytes) in records {
+            e.array(2)?.u64(*seq)?.bytes(bytes)?;
+        }
+        Ok::<_, minicbor::encode::Error<std::convert::Infallible>>(())
+    })();
+    e.into_writer()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Parsed {
+    pub(crate) route: Route,
+    pub(crate) authority: Vec<Vec<u8>>,
+    pub(crate) records: Vec<Vec<u8>>,
 }
 
 /// Parse an export: its exact shape, sequences strictly increasing.
-fn parse(bytes: &[u8]) -> Option<Parsed> {
+pub(crate) fn parse(bytes: &[u8]) -> Option<Parsed> {
     let mut d = Decoder::new(bytes);
     if d.array().ok()? != Some(6) || d.str().ok()? != LABEL || d.u8().ok()? != 0 {
         return None;

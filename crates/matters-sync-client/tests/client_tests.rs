@@ -336,6 +336,7 @@ async fn a_device_joins_through_the_relay_mailbox() {
     // A shows an invitation; B, holding it, signs a request and leaves it.
     let invitation = a.invite().unwrap();
     let lookup = invitation.secret.lookup(&invitation.route).unwrap();
+    a_client.register_invitation(&lookup).await.unwrap();
     let b = Arc::new(Database::open(dir.path().join("b.db")).unwrap());
     let b_keys = Arc::new(MemoryKeyStore::default());
     let request = b.start_enrollment(b_keys.as_ref(), &invitation).unwrap();

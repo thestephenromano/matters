@@ -25,12 +25,14 @@ pub(crate) fn payload(route: i64, sequence: u64, generation: &[u8; 16]) -> Strin
     format!("{route}:{sequence}:{generation}")
 }
 
-fn parse(payload: &str) -> Option<Hint> {
+pub(crate) fn parse(payload: &str) -> Option<Hint> {
     let mut parts = payload.split(':');
     let route = parts.next()?.parse().ok()?;
     let sequence = parts.next()?.parse().ok()?;
     let hex = parts.next()?;
-    if parts.next().is_some() || hex.len() != 32 {
+    // ASCII hex only: the length is in bytes, and slicing a multibyte
+    // character would panic the listener task.
+    if parts.next().is_some() || hex.len() != 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let mut generation = [0; 16];
@@ -97,6 +99,10 @@ mod tests {
             "7:42:ab",
             "x:42:abababababababababababababababab",
             "7:42:abababababababababababababababab:1",
+            // 32 bytes, but not 32 ASCII digits: never sliced mid-character.
+            "7:42:éééééééééééééééé",
+            "7:42:abababababababababababababababé",
+            "7:42:+bababababababababababababababab",
         ] {
             assert!(super::parse(bad).is_none(), "{bad}");
         }

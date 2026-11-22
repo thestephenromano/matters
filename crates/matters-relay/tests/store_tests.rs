@@ -14,7 +14,7 @@ mod common;
 
 use common::*;
 use matters_relay::{Appended, Cursor, RelayError};
-use matters_sync::authority::{self, sign, Hash, Message, RecoverySecret};
+use matters_sync::authority::{self, sign, DeviceKeys, Hash, Message, RecoverySecret};
 use matters_sync::record::record_hash;
 use matters_sync::ContentKey;
 
@@ -265,6 +265,28 @@ async fn pages_resume_by_cursor_stop_at_their_high_water_and_refuse_old_generati
             "malformed"
         );
     }
+    // A cursor past the high-water mark under the same generation is a
+    // restore that kept the generation: refused as a change, not answered
+    // with an empty, complete page.
+    let beyond = Cursor {
+        last: second.high_water + 1,
+        ..second.next
+    };
+    for log in [true, false] {
+        let page = if log {
+            db.relay.records(&route(), Some(&beyond), 10).await
+        } else {
+            db.relay
+                .authority_objects(&route(), Some(&beyond), 10)
+                .await
+        };
+        match page {
+            Err(RelayError::GenerationChanged { generation: g }) => {
+                assert_eq!(g, second.generation)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
     // After a restore installs a new generation, old cursors are refused
     // and name the new generation.
     let generation = db.relay.new_generation(&route()).await.unwrap();
@@ -373,7 +395,12 @@ async fn membership_transitions_authorize_uploads_and_are_verified_first() {
         .wrap_key(&c.admin, c.admin.id(), &ContentKey::new([8; 32]), fresh())
         .unwrap();
     db.relay
-        .put_authority(&route(), &record_hash(&envelope), &envelope)
+        .put_authority_as(
+            &route(),
+            Some(&c.admin.id()),
+            &record_hash(&envelope),
+            &envelope,
+        )
         .await
         .unwrap();
     let page = db
@@ -468,5 +495,282 @@ async fn an_older_relay_refuses_a_database_a_newer_one_migrated() {
         Err(error) => assert!(error.to_string().contains("migrat"), "{error}"),
         Ok(_) => panic!("an older relay served a newer schema"),
     }
+    db.finish().await;
+}
+
+#[tokio::test]
+async fn pages_hold_a_bounded_number_of_bytes_and_always_one_entry() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    // Seventeen checkpoint parts of about a megabyte each: more than one
+    // page's byte budget, far fewer than its entry limit.
+    let plaintext = vec![0x5a; 1_000_000];
+    for _ in 0..17 {
+        let id = fresh();
+        let bytes = snapshot_record(&c.admin, id, &plaintext, &route());
+        db.relay
+            .append(&route(), &c.admin.id(), &id, &bytes)
+            .await
+            .unwrap();
+    }
+    let size = |entries: &[(u64, Vec<u8>)]| entries.iter().map(|(_, b)| b.len()).sum::<usize>();
+    let budget = usize::try_from(matters_relay::MAX_PAGE_BYTES).unwrap();
+    let first = db.relay.records(&route(), None, 256).await.unwrap();
+    assert!(first.entries.len() < 17 && !first.entries.is_empty());
+    assert!(size(&first.entries) <= budget);
+    assert!(!first.complete, "the rest is on the next page");
+    let rest = db
+        .relay
+        .records(&route(), Some(&first.next), 256)
+        .await
+        .unwrap();
+    assert!(rest.complete);
+    assert_eq!(first.entries.len() + rest.entries.len(), 17);
+    let snapshots = db.relay.snapshots(&route(), 256).await.unwrap();
+    assert!(snapshots.entries.len() < 17 && !snapshots.entries.is_empty());
+    assert!(size(&snapshots.entries) <= budget);
+    assert_eq!(snapshots.entries[0].0, 17, "newest first");
+    db.finish().await;
+}
+
+/// A writer start for `device`'s own lineage under the current manifest,
+/// signed with `key`.
+fn writer_start(c: &Collection, device: &DeviceKeys, key: &DeviceKeys) -> Vec<u8> {
+    sign(
+        &Message {
+            route: route(),
+            signer: device.id(),
+            body: authority::Body::WriterStart(authority::WriterStart {
+                manifest: c.authority.manifest(),
+                document: [4; 16],
+                device: device.id(),
+                incarnation: fresh(),
+                actor: u64::from_le_bytes(fresh()[..8].try_into().unwrap()),
+                previous: None,
+            }),
+        },
+        key.signing_key(),
+        fresh(),
+    )
+    .unwrap()
+}
+
+async fn used_bytes(db: &TestDb) -> i64 {
+    sqlx::query_scalar("SELECT used_bytes FROM routes WHERE collection = $1")
+        .bind(route().collection.as_slice())
+        .fetch_one(db.relay.pool())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_authority_log_stores_only_what_its_signers_may_publish() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let mut c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    let (a, b, outsider) = (c.admin.id(), device(), device());
+    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
+    db.relay
+        .put_authority(&route(), &record_hash(&add), &add)
+        .await
+        .unwrap();
+    c.authority.apply_membership(&add).unwrap();
+    let put = |session: Option<Hash>, bytes: Vec<u8>| {
+        let relay = db.relay.clone();
+        async move {
+            relay
+                .put_authority_as(&route(), session.as_ref(), &record_hash(&bytes), &bytes)
+                .await
+        }
+    };
+    let code = |r: Result<Appended, RelayError>| r.map(|_| "stored").unwrap_or_else(|e| e.code());
+    // Writer claims: the session's own, signed with its roster key.
+    let own = writer_start(&c, &c.admin, &c.admin);
+    assert_eq!(code(put(Some(a), own.clone()).await), "stored");
+    assert_eq!(code(put(Some(b.id()), own).await), "stored", "a replay");
+    let a_claim = writer_start(&c, &c.admin, &c.admin);
+    assert_eq!(
+        code(put(Some(b.id()), a_claim.clone()).await),
+        "context-mismatch"
+    );
+    assert_eq!(code(put(None, a_claim).await), "unauthenticated");
+    let forged = writer_start(&c, &c.admin, &b);
+    assert!(matches!(
+        put(Some(a), forged).await,
+        Err(RelayError::Authority(authority::Error::Signature))
+    ));
+    let theirs = writer_start(&c, &outsider, &outsider);
+    assert_eq!(code(put(Some(outsider.id()), theirs).await), "not-a-member");
+    let root = c.keys.root_id().unwrap();
+    let as_root = writer_start(&c, &c.admin, &c.admin);
+    assert_eq!(code(put(Some(root), as_root).await), "not-a-member");
+    // Envelopes: signed by the admin of the manifest they name.
+    let envelope = c
+        .authority
+        .wrap_key(&c.admin, b.id(), &ContentKey::new([8; 32]), fresh())
+        .unwrap();
+    assert_eq!(code(put(Some(b.id()), envelope.clone()).await), "stored");
+    let mut forged = parse_message(&envelope);
+    let parsed = authority::parse(&envelope).unwrap();
+    let signed_by_b = sign(&forged, b.signing_key(), fresh()).unwrap();
+    assert!(matches!(
+        put(Some(a), signed_by_b).await,
+        Err(RelayError::Authority(authority::Error::Signature))
+    ));
+    forged.signer = b.id();
+    if let authority::Body::KeyEnvelope(k) = &mut forged.body {
+        k.authority = b.id();
+    }
+    let by_a_member = sign(&forged, b.signing_key(), fresh()).unwrap();
+    assert!(matches!(
+        put(Some(b.id()), by_a_member).await,
+        Err(RelayError::Authority(authority::Error::Unauthorized))
+    ));
+    let mut elsewhere = parsed.message.clone();
+    if let authority::Body::KeyEnvelope(k) = &mut elsewhere.body {
+        k.manifest = [7; 48];
+    }
+    let unknown_manifest = sign(&elsewhere, c.admin.signing_key(), fresh()).unwrap();
+    assert!(matches!(
+        put(Some(a), unknown_manifest).await,
+        Err(RelayError::Authority(authority::Error::Stale))
+    ));
+    // Enrollment requests and new genesis objects do not belong in the log;
+    // the stored genesis again is a replay.
+    let invitation = c
+        .authority
+        .invite(authority::InvitationSecret::new([1; 16]))
+        .unwrap();
+    let request = authority::request_enrollment(&invitation, &outsider, fresh()).unwrap();
+    assert!(matches!(
+        put(Some(a), request).await,
+        Err(RelayError::Authority(authority::Error::Unsupported))
+    ));
+    assert!(matches!(
+        put(None, c.genesis.clone()).await,
+        Ok(Appended::Existing(_))
+    ));
+    // Every stored byte counts toward the quota, refused before storing; a
+    // transition is still stored, so a full route can remove a device.
+    let used = used_bytes(&db).await;
+    let stored: i64 = sqlx::query_scalar("SELECT SUM(octet_length(bytes))::BIGINT FROM authority")
+        .fetch_one(db.relay.pool())
+        .await
+        .unwrap();
+    assert_eq!(used, stored);
+    db.relay
+        .set_quota(&route(), Some(used as u64))
+        .await
+        .unwrap();
+    let full = writer_start(&c, &b, &b);
+    assert_eq!(code(put(Some(b.id()), full).await), "quota-exhausted");
+    assert_eq!(used_bytes(&db).await, used, "nothing stored");
+    let remove = transition(&c, vec![c.admin.member(true)]);
+    assert_eq!(code(put(None, remove.clone()).await), "stored");
+    c.authority.apply_membership(&remove).unwrap();
+    db.finish().await;
+}
+
+#[tokio::test]
+async fn forks_are_kept_as_evidence_once_and_never_unverified() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    let put = |bytes: Vec<u8>| {
+        let relay = db.relay.clone();
+        async move {
+            relay
+                .put_authority(&route(), &record_hash(&bytes), &bytes)
+                .await
+        }
+    };
+    let log = || {
+        let relay = db.relay.clone();
+        async move {
+            relay
+                .authority_objects(&route(), None, 256)
+                .await
+                .unwrap()
+                .high_water
+        }
+    };
+    // Two valid successors of the genesis: the second is fork evidence.
+    let first = transition(&c, vec![c.admin.member(true), device().member(false)]);
+    let second = transition(&c, vec![c.admin.member(true), device().member(false)]);
+    put(first).await.unwrap();
+    put(second).await.unwrap();
+    assert!(db.relay.authority(&route()).await.unwrap().is_forked());
+    // Frozen, the authority no longer checks a transition's signature, so
+    // the relay takes no more of them, valid or forged.
+    let stored = log().await;
+    let third = transition(&c, vec![c.admin.member(true), device().member(false)]);
+    let mut forged = authority::parse(&third).unwrap().message;
+    forged.signer = [9; 48];
+    let forged = sign(&forged, device().signing_key(), fresh()).unwrap();
+    for bytes in [third, forged] {
+        assert!(matches!(
+            put(bytes).await,
+            Err(RelayError::Authority(authority::Error::Fork))
+        ));
+    }
+    assert_eq!(log().await, stored);
+    // The root recovers. A competing recovery of the same generation is
+    // kept as evidence, and no further one.
+    let recovery = |d: &DeviceKeys| {
+        c.authority
+            .recover(&c.keys, d, &ContentKey::new([6; 32]), fresh())
+            .unwrap()
+    };
+    let new_admin = device();
+    let recovered = recovery(&new_admin);
+    assert!(matches!(
+        put(recovered.clone()).await,
+        Ok(Appended::Stored(_))
+    ));
+    assert!(matches!(
+        put(recovery(&device())).await,
+        Ok(Appended::Stored(_))
+    ));
+    let stored = log().await;
+    assert_eq!(
+        put(recovery(&device())).await.unwrap_err().code(),
+        "quota-exhausted"
+    );
+    assert_eq!(log().await, stored);
+    // The root's session publishes the new admin's envelopes for the
+    // generation the recovery started.
+    let mut fresh_state = c.authority.clone();
+    fresh_state.apply_recovery(&recovered).unwrap();
+    let envelope = fresh_state
+        .wrap_key(
+            &new_admin,
+            new_admin.id(),
+            &ContentKey::new([6; 32]),
+            fresh(),
+        )
+        .unwrap();
+    let root = c.keys.root_id().unwrap();
+    assert!(matches!(
+        db.relay
+            .put_authority_as(&route(), Some(&root), &record_hash(&envelope), &envelope)
+            .await,
+        Ok(Appended::Stored(_))
+    ));
     db.finish().await;
 }

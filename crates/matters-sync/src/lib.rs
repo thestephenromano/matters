@@ -10,6 +10,7 @@
 
 pub mod authority;
 pub mod checkpoint;
+pub mod control_signature;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzzing;

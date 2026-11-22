@@ -1386,6 +1386,26 @@ impl<J: JoiningStore + 'static> Joiner<J> {
 }
 
 impl<S: LocalStore + 'static> Client<S> {
+    /// For the collection's admin: register an invitation's `lookup` with
+    /// the relay before showing the invitation, so that its mailbox takes a
+    /// joining device's request under it (#45). Registering it again is
+    /// harmless.
+    pub async fn register_invitation(&self, lookup: &[u8; 16]) -> Result<()> {
+        let route = self.on_store(|s| s.route()).await?;
+        let path = format!(
+            "/v0/routes/{}/invitations/{}",
+            route_hex(&route),
+            hex(lookup)
+        );
+        let (status, body) = self
+            .call(reqwest::Method::PUT, &path, None, "application/cbor")
+            .await?;
+        match status {
+            200 | 201 => Ok(()),
+            _ => Err(refusal(status, &body).into_error()),
+        }
+    }
+
     /// For the collection's admin: collect the enrollment request a joining
     /// device left under `lookup`, if there is one.
     pub async fn fetch_enrollment(&self, lookup: &[u8; 16]) -> Result<Option<Vec<u8>>> {

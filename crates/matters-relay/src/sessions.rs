@@ -8,7 +8,7 @@ use matters_sync::authority::{self, Hash, Route};
 use matters_sync::record::record_hash;
 use matters_sync::wire::SIGNATURE_BYTES;
 
-use crate::store::{route_authority, route_row, Relay, RelayError};
+use crate::store::{route_row, Relay, RelayError};
 
 /// How long a challenge may be answered.
 pub const CHALLENGE_MS: u64 = 60_000;
@@ -25,11 +25,12 @@ pub struct Session {
     pub generation: [u8; 16],
 }
 
-fn random32() -> [u8; 32] {
+/// 256 bits from the operating system's random source, for challenges and
+/// tokens. (Two UUIDv4s carry only 244.)
+fn random32() -> Result<[u8; 32]> {
     let mut out = [0; 32];
-    out[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-    out[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-    out
+    getrandom::fill(&mut out).map_err(|_| RelayError::Entropy)?;
+    Ok(out)
 }
 
 fn ms(value: u64) -> i64 {
@@ -47,8 +48,9 @@ impl Relay {
     ) -> Result<([u8; 32], u64)> {
         let mut tx = self.pool().begin().await?;
         let row = route_row(&mut tx, route, false).await?;
-        let authority = route_authority(&mut tx, route, &row).await?;
-        if !crate::store::member(&authority, device) && *device != authority.root() {
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let authority = &replayed.authority;
+        if !crate::store::member(authority, device) && *device != authority.root() {
             return Err(RelayError::NotAMember);
         }
         sqlx::query("DELETE FROM challenges WHERE route = $1 AND expires_at < $2")
@@ -61,7 +63,7 @@ impl Relay {
             .bind(ms(now))
             .execute(&mut *tx)
             .await?;
-        let challenge = random32();
+        let challenge = random32()?;
         let expires = now + CHALLENGE_MS;
         sqlx::query(
             "INSERT INTO challenges (challenge, route, device, expires_at) VALUES ($1, $2, $3, $4)",
@@ -100,7 +102,8 @@ impl Relay {
         .await?;
         // Using up the challenge commits even when the answer is refused.
         let fresh = used.is_some_and(|expires| expires >= ms(now));
-        let authority = route_authority(&mut tx, route, &row).await?;
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let authority = &replayed.authority;
         // A member's enrolled key, or for the root's ID the root key: a
         // recovering device's session (#42).
         let key = authority
@@ -123,7 +126,7 @@ impl Relay {
                 RelayError::Unauthenticated
             });
         }
-        let token = random32();
+        let token = random32()?;
         let expires = now + SESSION_MS;
         sqlx::query(
             "INSERT INTO sessions (token_hash, route, device, expires_at) VALUES ($1, $2, $3, $4)",
@@ -149,7 +152,7 @@ impl Relay {
     }
 
     /// As [`Self::authenticate`], also accepting the route's root, whose
-    /// sessions only read the authority log and publish a root recovery.
+    /// sessions only read the logs and publish a root recovery and envelopes.
     pub async fn authenticate_as(
         &self,
         route: &Route,
@@ -157,6 +160,17 @@ impl Relay {
         now: u64,
         root_allowed: bool,
     ) -> Result<Hash> {
+        Ok(self.session_of(route, token, now, root_allowed).await?.0)
+    }
+
+    /// As [`Self::authenticate_as`], with the session's expiry (Unix ms).
+    pub async fn session_of(
+        &self,
+        route: &Route,
+        token: &[u8],
+        now: u64,
+        root_allowed: bool,
+    ) -> Result<(Hash, u64)> {
         let mut tx = self.pool().begin().await?;
         let row = route_row(&mut tx, route, false).await?;
         let session = sqlx::query_as::<_, (i64, Vec<u8>, i64)>(
@@ -175,14 +189,15 @@ impl Relay {
             return Err(RelayError::SessionExpired);
         }
         let device: Hash = device.try_into().map_err(|_| RelayError::Malformed)?;
-        let authority = route_authority(&mut tx, route, &row).await?;
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let authority = &replayed.authority;
         let root = device == authority.root();
         if root && !root_allowed {
             return Err(RelayError::NotAMember);
         }
-        if !root && !crate::store::member(&authority, &device) {
+        if !root && !crate::store::member(authority, &device) {
             return Err(RelayError::Revoked);
         }
-        Ok(device)
+        Ok((device, u64::try_from(expires).unwrap_or(0)))
     }
 }

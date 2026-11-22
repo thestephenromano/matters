@@ -2,9 +2,10 @@
 //!
 //! Bodies are deterministic CBOR (`application/cbor`) except record and
 //! authority bytes, which travel exactly as signed. Every error is a CBOR
-//! `{"code", "retry", ...}` with the contract's status. Bodies are read
-//! up to the operation's limit, and a larger one is `too-large` before
-//! anything else happens.
+//! `{"code", "retry", ...}` with the contract's status. A request that
+//! needs a session is authenticated from its headers before its body is
+//! read. Bodies are read up to the operation's limit, and a larger one is
+//! `too-large` before anything else happens to it.
 
 use std::sync::Arc;
 
@@ -54,14 +55,88 @@ pub struct RateLimit {
 pub struct Options {
     /// Commit hints; without them the hints endpoint answers `unavailable`.
     pub hints: Option<crate::hints::Hints>,
+    /// Authenticated requests, per route and device.
     pub rate_limit: Option<RateLimit>,
+    /// Requests without a session, per route: session challenges and
+    /// answers, mailbox uploads and session-free transitions. They are
+    /// limited by route because nothing else identifies them: behind a
+    /// proxy every peer address is the proxy's, and the relay trusts no
+    /// forwarded header.
+    pub public_rate_limit: Option<RateLimit>,
+    /// Session challenges, per route and claimed device, beside the route's
+    /// own limit.
+    pub challenge_rate_limit: Option<RateLimit>,
     /// The operator credential for export, compared as its SHA-384.
     pub operator_token: Option<[u8; 32]>,
     /// Where requests are counted, when metrics are served.
     pub metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
-type Buckets = Arc<std::sync::Mutex<std::collections::HashMap<(Vec<u8>, Hash), (f64, u64)>>>;
+/// Token buckets by key: what is limited (a tag, the route, maybe a
+/// device), with each bucket's tokens, last refill and limit.
+type Buckets = Arc<std::sync::Mutex<std::collections::HashMap<Vec<u8>, Bucket>>>;
+
+#[derive(Clone, Copy)]
+struct Bucket {
+    tokens: f64,
+    last: u64,
+    limit: RateLimit,
+}
+
+impl Bucket {
+    fn refill(&mut self, now: u64) {
+        let burst = f64::from(self.limit.burst.max(1));
+        let rate = f64::from(self.limit.per_second.max(1));
+        let elapsed = now.saturating_sub(self.last) as f64 / 1000.0;
+        self.tokens = (self.tokens + elapsed * rate).min(burst);
+        self.last = now;
+    }
+
+    fn full(&self) -> bool {
+        self.tokens >= f64::from(self.limit.burst.max(1))
+    }
+}
+
+/// The most buckets kept at once. Keys without a session name any route,
+/// provisioned or not, so idle buckets (refilled to their burst, the same
+/// as no bucket) are dropped when the map is full, and while it stays full
+/// of active ones, new keys wait.
+const MAX_BUCKETS: usize = 65_536;
+
+/// What a bucket limits.
+#[derive(Clone, Copy)]
+enum Limited {
+    Session,
+    Public,
+    Challenge,
+}
+
+fn bucket_key(what: Limited, route: &Route, device: Option<&Hash>) -> Vec<u8> {
+    let tag = match what {
+        Limited::Session => 0,
+        Limited::Public => 1,
+        Limited::Challenge => 2,
+    };
+    let mut key = Vec::with_capacity(1 + 48 + 48);
+    key.push(tag);
+    key.extend_from_slice(&route.application);
+    key.extend_from_slice(&route.tenant);
+    key.extend_from_slice(&route.collection);
+    if let Some(device) = device {
+        key.extend_from_slice(device);
+    }
+    key
+}
+
+/// Open hint sockets by route row and device.
+type Sockets = Arc<std::sync::Mutex<std::collections::HashMap<(i64, Hash), usize>>>;
+
+/// The most hint sockets one device keeps open on one route. A client
+/// needs one; the rest allow for reconnects the relay has not yet seen
+/// close.
+pub const MAX_HINT_SOCKETS: usize = 4;
+/// How often an idle hint socket checks its session and pings its client.
+const HINT_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone)]
 struct Api {
@@ -69,6 +144,40 @@ struct Api {
     clock: Clock,
     options: Options,
     buckets: Buckets,
+    sockets: Sockets,
+}
+
+/// A device's place among a route's hint sockets, given back on drop.
+struct SocketSlot {
+    sockets: Sockets,
+    key: (i64, Hash),
+}
+
+impl SocketSlot {
+    fn take(sockets: &Sockets, key: (i64, Hash)) -> Option<Self> {
+        let mut open = sockets.lock().unwrap_or_else(|e| e.into_inner());
+        let count = open.entry(key).or_insert(0);
+        if *count >= MAX_HINT_SOCKETS {
+            return None;
+        }
+        *count += 1;
+        Some(Self {
+            sockets: sockets.clone(),
+            key,
+        })
+    }
+}
+
+impl Drop for SocketSlot {
+    fn drop(&mut self) {
+        let mut open = self.sockets.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = open.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                open.remove(&self.key);
+            }
+        }
+    }
 }
 
 /// The v0 API over `relay`, telling time with `clock`, with no hints, rate
@@ -98,6 +207,10 @@ pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
             put(put_enrollment).get(get_enrollment),
         )
         .route(
+            "/v0/routes/{route}/invitations/{lookup}",
+            put(put_invitation),
+        )
+        .route(
             "/v0/routes/{route}/snapshots",
             axum::routing::get(get_snapshots),
         )
@@ -111,6 +224,7 @@ pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
             clock,
             options,
             buckets: Arc::default(),
+            sockets: Arc::default(),
         });
     match metrics {
         Some(metrics) => router.layer(axum::middleware::from_fn_with_state(
@@ -149,7 +263,7 @@ pub fn status(error: &RelayError) -> StatusCode {
         RelayError::Malformed | RelayError::Authority(_) => StatusCode::BAD_REQUEST,
         RelayError::Unauthenticated | RelayError::SessionExpired => StatusCode::UNAUTHORIZED,
         RelayError::NotAMember | RelayError::Revoked => StatusCode::FORBIDDEN,
-        RelayError::UnknownRoute => StatusCode::NOT_FOUND,
+        RelayError::UnknownRoute | RelayError::UnknownInvitation => StatusCode::NOT_FOUND,
         RelayError::RecordConflict { .. } | RelayError::RouteExists => StatusCode::CONFLICT,
         RelayError::GenerationChanged { .. } => StatusCode::GONE,
         RelayError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -158,7 +272,7 @@ pub fn status(error: &RelayError) -> StatusCode {
         }
         RelayError::QuotaExhausted => StatusCode::INSUFFICIENT_STORAGE,
         RelayError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
-        RelayError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        RelayError::Unavailable(_) | RelayError::Entropy => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -243,6 +357,16 @@ async fn authenticated(api: &Api, route: &Route, headers: &HeaderMap) -> Result<
     authenticated_as(api, route, headers, false).await
 }
 
+/// The bearer token of a request.
+fn bearer(headers: &HeaderMap) -> Result<[u8; 32]> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|t| hex::<32>(t).ok())
+        .ok_or(ApiError(RelayError::Unauthenticated))
+}
+
 /// As [`authenticated`], also accepting a recovering device's root session.
 async fn authenticated_as(
     api: &Api,
@@ -250,47 +374,74 @@ async fn authenticated_as(
     headers: &HeaderMap,
     root_allowed: bool,
 ) -> Result<Hash> {
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .and_then(|t| hex::<32>(t).ok())
-        .ok_or(ApiError(RelayError::Unauthenticated))?;
+    let token = bearer(headers)?;
     let now = (api.clock)();
     let device = api
         .relay
         .authenticate_as(route, &token, now, root_allowed)
         .await?;
     if let Some(limit) = api.options.rate_limit {
-        admit(&api.buckets, limit, route, &device, now)?;
+        admit(
+            &api.buckets,
+            limit,
+            bucket_key(Limited::Session, route, Some(&device)),
+            now,
+        )?;
     }
     Ok(device)
 }
 
-/// Take one request from the device's token bucket, or say when to retry.
-fn admit(
-    buckets: &Buckets,
-    limit: RateLimit,
-    route: &Route,
-    device: &Hash,
-    now: u64,
-) -> Result<()> {
-    let key = (
-        [route.application, route.tenant, route.collection].concat(),
-        *device,
-    );
+/// Take one request without a session for `route` (and, for a challenge,
+/// for the device it names) from its buckets, or say when to retry.
+fn admit_public(api: &Api, route: &Route, challenged: Option<&Hash>) -> Result<()> {
+    let now = (api.clock)();
+    if let Some(limit) = api.options.public_rate_limit {
+        admit(
+            &api.buckets,
+            limit,
+            bucket_key(Limited::Public, route, None),
+            now,
+        )?;
+    }
+    if let (Some(limit), Some(device)) = (api.options.challenge_rate_limit, challenged) {
+        admit(
+            &api.buckets,
+            limit,
+            bucket_key(Limited::Challenge, route, Some(device)),
+            now,
+        )?;
+    }
+    Ok(())
+}
+
+/// Take one request from the token bucket under `key`, or say when to
+/// retry.
+fn admit(buckets: &Buckets, limit: RateLimit, key: Vec<u8>, now: u64) -> Result<()> {
     let mut buckets = buckets.lock().unwrap_or_else(|e| e.into_inner());
-    let burst = f64::from(limit.burst.max(1));
-    let rate = f64::from(limit.per_second.max(1));
-    let (tokens, last) = buckets.entry(key).or_insert((burst, now));
-    let elapsed = now.saturating_sub(*last) as f64 / 1000.0;
-    *tokens = (*tokens + elapsed * rate).min(burst);
-    *last = now;
-    if *tokens >= 1.0 {
-        *tokens -= 1.0;
+    if buckets.len() >= MAX_BUCKETS && !buckets.contains_key(&key) {
+        buckets.retain(|_, b| {
+            b.refill(now);
+            !b.full()
+        });
+        if buckets.len() >= MAX_BUCKETS {
+            return Err(ApiError(RelayError::RateLimited {
+                retry_after_ms: 1000,
+            }));
+        }
+    }
+    let bucket = buckets.entry(key).or_insert(Bucket {
+        tokens: f64::from(limit.burst.max(1)),
+        last: now,
+        limit,
+    });
+    bucket.limit = limit;
+    bucket.refill(now);
+    if bucket.tokens >= 1.0 {
+        bucket.tokens -= 1.0;
         return Ok(());
     }
-    let retry_after_ms = ((1.0 - *tokens) / rate * 1000.0).ceil() as u64;
+    let rate = f64::from(limit.per_second.max(1));
+    let retry_after_ms = ((1.0 - bucket.tokens) / rate * 1000.0).ceil() as u64;
     Err(ApiError(RelayError::RateLimited {
         retry_after_ms: retry_after_ms.max(1),
     }))
@@ -301,6 +452,7 @@ async fn challenge(State(api): State<Api>, request: Request) -> Result<Response>
     let req = cbor::request(&body, &["route", "device"]).ok_or_else(malformed)?;
     let route = body_route(req.route("route").ok_or_else(malformed)?);
     let device: Hash = req.bytes("device").ok_or_else(malformed)?;
+    admit_public(&api, &route, Some(&device))?;
     let (challenge, expires) = api.relay.challenge(&route, &device, (api.clock)()).await?;
     Ok(cbor_response(
         StatusCode::OK,
@@ -319,6 +471,7 @@ async fn session(State(api): State<Api>, request: Request) -> Result<Response> {
     let device: Hash = req.bytes("device").ok_or_else(malformed)?;
     let challenge: [u8; 32] = req.bytes("challenge").ok_or_else(malformed)?;
     let signature: [u8; SIGNATURE_BYTES] = req.bytes("signature").ok_or_else(malformed)?;
+    admit_public(&api, &route, None)?;
     let s = api
         .relay
         .open_session(&route, &device, &challenge, &signature, (api.clock)())
@@ -356,8 +509,9 @@ async fn put_record(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let record: [u8; 32] = hex(&record)?;
-    let body = read(request.into_body(), MAX_WIRE_BYTES).await?;
+    // The session first: nobody without one makes the relay read a body.
     let device = authenticated(&api, &route, &headers).await?;
+    let body = read(request.into_body(), MAX_WIRE_BYTES).await?;
     Ok(receipt(
         api.relay.append(&route, &device, &record, &body).await?,
     ))
@@ -371,25 +525,52 @@ async fn put_authority(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let digest: Hash = hex(&digest)?;
+    // With a session, it is checked before the body is read. Without one,
+    // only membership transitions and root recoveries are taken: their
+    // signatures say who may publish them, and a device a restored relay no
+    // longer knows re-publishes the transition that admitted it (#45).
+    let device = if headers.contains_key(header::AUTHORIZATION) {
+        Some(authenticated_as(&api, &route, &headers, true).await?)
+    } else {
+        admit_public(&api, &route, None)?;
+        None
+    };
     let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
-    let device = authenticated_as(&api, &route, &headers, true).await?;
-    // The root's session publishes only what a recovery signs: the root
-    // recovery and its recovery envelope.
-    if !api.relay.is_member(&route, &device).await? {
-        let kind = matters_sync::authority::parse(&body)
-            .map(|p| p.message.body.kind())
-            .map_err(|_| malformed())?;
-        if !matches!(kind, "root_recovery" | "key_envelope") {
-            return Err(ApiError(RelayError::NotAMember));
-        }
-    }
+    // Who may publish what is checked with the object, in the transaction
+    // that stores it (Relay::put_authority_as).
     Ok(receipt(
-        api.relay.put_authority(&route, &digest, &body).await?,
+        api.relay
+            .put_authority_as(&route, device.as_ref(), &digest, &body)
+            .await?,
     ))
 }
 
+/// `PUT /v0/routes/{route}/invitations/{lookup}`: the route's admin
+/// registers an invitation before showing it (#45), so the mailbox takes a
+/// request under its lookup. No body.
+async fn put_invitation(
+    State(api): State<Api>,
+    Path((route, lookup)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response> {
+    let route = path_route(&route)?;
+    let lookup: [u8; 16] = hex(&lookup)?;
+    let device = authenticated(&api, &route, &headers).await?;
+    let created = api
+        .relay
+        .register_invitation(&route, &device, &lookup)
+        .await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok(status.into_response())
+}
+
 /// `PUT /v0/routes/{route}/enrollments/{lookup}`: a joining device leaves
-/// its enrollment request (#42). No session: it is not a member yet.
+/// its enrollment request (#42). No session: it is not a member yet, but
+/// the lookup must be a registered invitation's.
 async fn put_enrollment(
     State(api): State<Api>,
     Path((route, lookup)): Path<(String, String)>,
@@ -397,6 +578,7 @@ async fn put_enrollment(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let lookup: [u8; 16] = hex(&lookup)?;
+    admit_public(&api, &route, None)?;
     let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
     let created = api.relay.put_enrollment(&route, &lookup, &body).await?;
     let status = if created {
@@ -483,7 +665,10 @@ async fn get_records(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let (after, limit) = page_query(query)?;
-    authenticated(&api, &route, &headers).await?;
+    // The root's session reads records too: a recovery closes earlier
+    // generations' writers at what the recovering device holds. Whoever
+    // holds it has the recovery words, and so every key anyway.
+    authenticated_as(&api, &route, &headers, true).await?;
     Ok(page_response(
         api.relay.records(&route, after.as_ref(), limit).await?,
     ))
@@ -528,7 +713,8 @@ async fn get_snapshots(
             _ => return Err(malformed()),
         }
     }
-    authenticated(&api, &route, &headers).await?;
+    // As for records, the root's session may read them.
+    authenticated_as(&api, &route, &headers, true).await?;
     let found = api
         .relay
         .snapshots(&route, limit.unwrap_or(MAX_PAGE))
@@ -553,6 +739,13 @@ async fn unknown(request: Request) -> Response {
 
 /// `GET /v0/routes/{route}/hints`: a WebSocket on which the relay sends
 /// `{"sequence", "generation"}` for each committed record of the route.
+///
+/// The socket lasts as long as its session: before each hint, every
+/// [`HINT_CHECK`] while idle, and when the session expires, the session is
+/// checked again (still unexpired, the device still a member), and the
+/// socket closes with a policy close once it fails. Hints already waiting
+/// are coalesced into the newest, so a burst costs one check. A device
+/// keeps at most [`MAX_HINT_SOCKETS`] open on a route.
 async fn hints(
     State(api): State<Api>,
     Path(route): Path<String>,
@@ -560,28 +753,94 @@ async fn hints(
     upgrade: axum::extract::ws::WebSocketUpgrade,
 ) -> Result<Response> {
     let route = path_route(&route)?;
+    let token = bearer(&headers)?;
     authenticated(&api, &route, &headers).await?;
+    let (device, expires) = api
+        .relay
+        .session_of(&route, &token, (api.clock)(), false)
+        .await?;
     let Some(hints) = api.options.hints.clone() else {
         return Err(ApiError(RelayError::Unavailable(sqlx::Error::PoolClosed)));
     };
     let id = api.relay.route_id(&route).await?;
+    let slot =
+        SocketSlot::take(&api.sockets, (id, device)).ok_or(ApiError(RelayError::RateLimited {
+            retry_after_ms: HINT_CHECK.as_millis() as u64,
+        }))?;
     let mut receiver = hints.subscribe();
     Ok(upgrade.on_upgrade(move |mut socket| async move {
-        use axum::extract::ws::Message;
-        loop {
-            match receiver.recv().await {
-                Ok(hint) if hint.route == id => {
+        use axum::extract::ws::{close_code, CloseFrame, Message};
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        let _slot = slot;
+        // Whether the session still holds; the reason to close if not.
+        let check = || async {
+            api.relay
+                .session_of(&route, &token, (api.clock)(), false)
+                .await
+                .err()
+        };
+        let until = |expires: u64| {
+            let left = expires.saturating_sub((api.clock)()).max(1000);
+            tokio::time::Instant::now() + std::time::Duration::from_millis(left)
+        };
+        let mut expiry = until(expires);
+        let mut idle = tokio::time::interval(HINT_CHECK);
+        idle.tick().await;
+        let refused = loop {
+            tokio::select! {
+                received = receiver.recv() => {
+                    let mut newest = match received {
+                        Ok(hint) if hint.route == id => hint,
+                        Ok(_) | Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break None,
+                    };
+                    loop {
+                        match receiver.try_recv() {
+                            Ok(hint) if hint.route == id => newest = hint,
+                            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    if let Some(error) = check().await {
+                        break Some(error);
+                    }
                     let body = cbor::map(vec![
-                        ("sequence", Value::Uint(hint.sequence)),
-                        ("generation", Value::Bytes(&hint.generation)),
+                        ("sequence", Value::Uint(newest.sequence)),
+                        ("generation", Value::Bytes(&newest.generation)),
                     ]);
                     if socket.send(Message::Binary(body.into())).await.is_err() {
                         return;
                     }
                 }
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                incoming = socket.recv() => match incoming {
+                    // The client speaks only to close; pings are answered
+                    // by the socket itself.
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                    Some(Ok(_)) => {}
+                },
+                _ = idle.tick() => {
+                    if let Some(error) = check().await {
+                        break Some(error);
+                    }
+                    if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        return;
+                    }
+                }
+                _ = tokio::time::sleep_until(expiry) => {
+                    if let Some(error) = check().await {
+                        break Some(error);
+                    }
+                    expiry = until(expires);
+                }
             }
+        };
+        if let Some(error) = refused {
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: close_code::POLICY,
+                    reason: error.code().into(),
+                })))
+                .await;
         }
     }))
 }
@@ -610,4 +869,28 @@ async fn export(
     }
     let bytes = api.relay.export(&route).await?;
     Ok(cbor_response(StatusCode::OK, bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{admit, Buckets, RateLimit, MAX_BUCKETS};
+
+    #[test]
+    fn buckets_are_bounded_and_idle_ones_make_room() {
+        let buckets = Buckets::default();
+        let limit = RateLimit {
+            per_second: 1,
+            burst: 1,
+        };
+        let key = |n: usize| n.to_le_bytes().to_vec();
+        for n in 0..MAX_BUCKETS {
+            assert!(admit(&buckets, limit, key(n), 0).is_ok());
+        }
+        // Full of buckets in use: a new key waits.
+        assert!(admit(&buckets, limit, key(MAX_BUCKETS), 0).is_err());
+        assert!(admit(&buckets, limit, key(0), 0).is_err(), "still limited");
+        // A second later they have refilled, the same as no bucket.
+        assert!(admit(&buckets, limit, key(MAX_BUCKETS), 1000).is_ok());
+        assert_eq!(buckets.lock().unwrap().len(), 1);
+    }
 }

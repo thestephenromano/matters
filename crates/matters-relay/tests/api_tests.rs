@@ -454,6 +454,60 @@ async fn errors_carry_the_contracts_codes_and_statuses() {
         );
         assert_eq!(response.keys()[..2], ["code", "retry"]);
     }
+    // Without a session the body is never read: an oversized one is
+    // refused as unauthenticated, not as too large.
+    for uri in [
+        format!("/v0/routes/{r}/records/{}", hex(&id)),
+        format!("/v0/routes/{r}/authority/{}", hex(&[0; 48])),
+    ] {
+        let mut request = Request::builder().method(Method::PUT).uri(&uri);
+        if uri.contains("/authority/") {
+            request = request.header("authorization", "Bearer 00");
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                request
+                    .body(Body::from(vec![0; matters_sync::wire::MAX_WIRE_BYTES + 1]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+    }
+    // A transition needs no session; an envelope does.
+    let b = device();
+    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
+    let anonymous = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&add))),
+        None,
+        add,
+    )
+    .await;
+    assert_eq!(anonymous.status, StatusCode::CREATED);
+    let envelope = c
+        .authority
+        .wrap_key(
+            &c.admin,
+            c.admin.id(),
+            &matters_sync::ContentKey::new([4; 32]),
+            fresh(),
+        )
+        .unwrap();
+    let anonymous = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&envelope))),
+        None,
+        envelope,
+    )
+    .await;
+    assert_eq!(
+        (anonymous.status, anonymous.code().as_str()),
+        (StatusCode::UNAUTHORIZED, "unauthenticated")
+    );
     // A cursor from before a restore names the new generation.
     let page = call(
         &app,
@@ -486,6 +540,28 @@ async fn errors_carry_the_contracts_codes_and_statuses() {
         &format!("/v0/routes/{r}/records/{}", hex(&id)),
         Some(&token),
         bytes,
+    )
+    .await;
+    assert_eq!(
+        (full.status, full.code().as_str()),
+        (StatusCode::INSUFFICIENT_STORAGE, "quota-exhausted")
+    );
+    // Authority objects count toward it too.
+    let envelope = c
+        .authority
+        .wrap_key(
+            &c.admin,
+            c.admin.id(),
+            &matters_sync::ContentKey::new([4; 32]),
+            fresh(),
+        )
+        .unwrap();
+    let full = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&envelope))),
+        Some(&token),
+        envelope,
     )
     .await;
     assert_eq!(
@@ -597,14 +673,54 @@ async fn the_enrollment_mailbox_holds_requests_for_the_admin_only() {
             .unwrap();
         matters_sync::authority::request_enrollment(&invitation, &device(), fresh()).unwrap()
     };
-    let request = request_for(&route());
-    let lookup = hex(&[3; 16]);
-    let uri = format!("/v0/routes/{r}/enrollments/{lookup}");
-    // Left without a session; again with the same bytes; never replaced.
+    let token = login(&app, &c.admin).await;
+    let mailbox = |lookup: [u8; 16]| format!("/v0/routes/{r}/enrollments/{}", hex(&lookup));
+    let invitation = |lookup: [u8; 16]| format!("/v0/routes/{r}/invitations/{}", hex(&lookup));
     let put = |bytes: Vec<u8>, uri: String| {
         let app = app.clone();
         async move { call(&app, Method::PUT, &uri, None, bytes).await }
     };
+    let register = |lookup: [u8; 16]| {
+        let app = app.clone();
+        async move {
+            call(&app, Method::PUT, &invitation(lookup), Some(&token), vec![])
+                .await
+                .status
+        }
+    };
+    let request = request_for(&route());
+    // Nothing is taken under a lookup the admin did not register.
+    let unknown = put(request.clone(), mailbox([3; 16])).await;
+    assert_eq!(
+        (unknown.status, unknown.code().as_str()),
+        (StatusCode::NOT_FOUND, "unknown-invitation")
+    );
+    // Only the admin registers one, with a session.
+    let anonymous = call(&app, Method::PUT, &invitation([3; 16]), None, vec![]).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    let b = device();
+    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
+    db.relay
+        .put_authority(&route(), &record_hash(&add), &add)
+        .await
+        .unwrap();
+    let b_token = login(&app, &b).await;
+    let by_b = call(
+        &app,
+        Method::PUT,
+        &invitation([3; 16]),
+        Some(&b_token),
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        (by_b.status, by_b.code().as_str()),
+        (StatusCode::FORBIDDEN, "not-a-member")
+    );
+    assert_eq!(register([3; 16]).await, StatusCode::CREATED);
+    assert_eq!(register([3; 16]).await, StatusCode::OK);
+    // Left without a session; again with the same bytes; never replaced.
+    let uri = mailbox([3; 16]);
     assert_eq!(
         put(request.clone(), uri.clone()).await.status,
         StatusCode::CREATED
@@ -616,24 +732,15 @@ async fn the_enrollment_mailbox_holds_requests_for_the_admin_only() {
     let other = request_for(&route());
     assert_eq!(put(other, uri.clone()).await.status, StatusCode::CONFLICT);
     // Only enrollment requests, and only for this route.
-    let malformed = put(
-        c.genesis.clone(),
-        format!("/v0/routes/{r}/enrollments/{}", hex(&[4; 16])),
-    )
-    .await;
+    let malformed = put(c.genesis.clone(), mailbox([4; 16])).await;
     assert_eq!(malformed.code(), "malformed");
     let elsewhere = Route {
         collection: [7; 16],
         ..route()
     };
-    let foreign = put(
-        request_for(&elsewhere),
-        format!("/v0/routes/{r}/enrollments/{}", hex(&[5; 16])),
-    )
-    .await;
+    let foreign = put(request_for(&elsewhere), mailbox([5; 16])).await;
     assert_eq!(foreign.code(), "context-mismatch");
     // The admin collects it; anyone without a session cannot.
-    let token = login(&app, &c.admin).await;
     let got = call(&app, Method::GET, &uri, Some(&token), vec![]).await;
     assert_eq!(
         (got.status, got.body.clone()),
@@ -641,41 +748,27 @@ async fn the_enrollment_mailbox_holds_requests_for_the_admin_only() {
     );
     let anonymous = call(&app, Method::GET, &uri, None, vec![]).await;
     assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
-    let absent = call(
-        &app,
-        Method::GET,
-        &format!("/v0/routes/{r}/enrollments/{}", hex(&[9; 16])),
-        Some(&token),
-        vec![],
-    )
-    .await;
+    let absent = call(&app, Method::GET, &mailbox([9; 16]), Some(&token), vec![]).await;
     assert_eq!(absent.status, StatusCode::NOT_FOUND);
-    // A route keeps a bounded number at once.
+    // A route keeps a bounded number of invitations at once.
     for n in 0..(matters_relay::MAX_ENROLLMENTS - 1) {
-        let uri = format!("/v0/routes/{r}/enrollments/{}", hex(&[10 + n as u8; 16]));
-        assert_eq!(
-            put(request_for(&route()), uri).await.status,
-            StatusCode::CREATED
-        );
+        assert_eq!(register([10 + n as u8; 16]).await, StatusCode::CREATED);
     }
-    let full = put(
-        request_for(&route()),
-        format!("/v0/routes/{r}/enrollments/{}", hex(&[200; 16])),
-    )
-    .await;
-    assert_eq!(full.code(), "quota-exhausted");
-    // An expired request is gone, and makes room.
-    sqlx::query("UPDATE enrollments SET received_at = now() - interval '2 hours'")
-        .execute(db.relay.pool())
-        .await
-        .unwrap();
+    assert_eq!(register([200; 16]).await, StatusCode::INSUFFICIENT_STORAGE);
+    // An expired invitation takes nothing, and makes room; an expired
+    // request is gone.
+    for sql in [
+        "UPDATE invitations SET registered_at = now() - interval '2 hours'",
+        "UPDATE enrollments SET received_at = now() - interval '2 hours'",
+    ] {
+        sqlx::query(sql).execute(db.relay.pool()).await.unwrap();
+    }
     let expired = call(&app, Method::GET, &uri, Some(&token), vec![]).await;
     assert_eq!(expired.status, StatusCode::NOT_FOUND);
-    let room = put(
-        request_for(&route()),
-        format!("/v0/routes/{r}/enrollments/{}", hex(&[201; 16])),
-    )
-    .await;
+    let late = put(request_for(&route()), mailbox([10; 16])).await;
+    assert_eq!(late.code(), "unknown-invitation");
+    assert_eq!(register([201; 16]).await, StatusCode::CREATED);
+    let room = put(request_for(&route()), mailbox([201; 16])).await;
     assert_eq!(room.status, StatusCode::CREATED);
     db.finish().await;
 }
@@ -719,15 +812,45 @@ async fn the_roots_session_reads_the_authority_log_and_publishes_only_a_recovery
     )
     .await;
     assert_eq!(log.status, StatusCode::OK);
-    // Nothing else: no records or mailbox, and no other kind of authority
-    // object.
+    // It reads the records and checkpoint parts too: a recovery closes
+    // earlier writers at what the recovering device holds.
+    let id = fresh();
+    db.relay
+        .append(
+            &route(),
+            &c.admin.id(),
+            &id,
+            &record(&c.admin, id, b"before the loss", &route()),
+        )
+        .await
+        .unwrap();
     for path in [
         format!("/v0/routes/{r}/records"),
-        format!("/v0/routes/{r}/enrollments/{}", hex(&[1; 16])),
+        format!("/v0/routes/{r}/snapshots"),
     ] {
-        let refused = call(&app, Method::GET, &path, Some(&token), vec![]).await;
-        assert_eq!(refused.code(), "not-a-member", "{path}");
+        let read = call(&app, Method::GET, &path, Some(&token), vec![]).await;
+        assert_eq!(read.status, StatusCode::OK, "{path}");
     }
+    let records = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/records"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(records.uint("high-water"), 1);
+    // Nothing else: no mailbox, no uploads of records, and no other kind of
+    // authority object.
+    let refused = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/enrollments/{}", hex(&[1; 16])),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(refused.code(), "not-a-member");
     let id = fresh();
     let put = call(
         &app,
@@ -738,17 +861,34 @@ async fn the_roots_session_reads_the_authority_log_and_publishes_only_a_recovery
     )
     .await;
     assert_eq!(put.code(), "not-a-member");
-    let b = device();
-    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
-    let membership = call(
+    let claim = matters_sync::authority::sign(
+        &matters_sync::authority::Message {
+            route: route(),
+            signer: c.admin.id(),
+            body: matters_sync::authority::Body::WriterStart(
+                matters_sync::authority::WriterStart {
+                    manifest: c.authority.manifest(),
+                    document: [4; 16],
+                    device: c.admin.id(),
+                    incarnation: fresh(),
+                    actor: 1,
+                    previous: None,
+                },
+            ),
+        },
+        c.admin.signing_key(),
+        fresh(),
+    )
+    .unwrap();
+    let writer = call(
         &app,
         Method::PUT,
-        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&add))),
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&claim))),
         Some(&token),
-        add,
+        claim,
     )
     .await;
-    assert_eq!(membership.code(), "not-a-member");
+    assert_eq!(writer.code(), "not-a-member");
     // A session signed with other words is refused.
     let other = matters_sync::authority::RecoverySecret::new(fresh())
         .keys(&route())

@@ -11,9 +11,23 @@
 //! ```
 //!
 //! - `MATTERS_RELAY_DATABASE_URL`: the PostgreSQL connection (required).
+//!   TLS is on rustls with the system's roots: a database on another host
+//!   must use `sslmode=verify-full` (with `sslrootcert=` for a private CA).
+//! - `MATTERS_RELAY_DATABASE_PASSWORD_FILE`: a file holding the database
+//!   password, which then overrides any in the URL (a container secret).
 //! - `MATTERS_RELAY_LISTEN`: where `serve` listens (default 127.0.0.1:8484).
 //!   It speaks HTTP/1.1 and cleartext HTTP/2; TLS terminates at a proxy.
-//! - `MATTERS_RELAY_RATE`: `<per-second>/<burst>` per route and device.
+//! - `MATTERS_RELAY_RATE`: `<per-second>/<burst>` per route and device,
+//!   for authenticated requests; off when unset.
+//! - `MATTERS_RELAY_PUBLIC_RATE`: the same per route, for requests without
+//!   a session (default `10/60`; `off` turns it off).
+//! - `MATTERS_RELAY_CHALLENGE_RATE`: session challenges per route and
+//!   device (default `1/10`; `off`).
+//! - `MATTERS_RELAY_HEADER_TIMEOUT`, `MATTERS_RELAY_REQUEST_TIMEOUT`:
+//!   seconds a connection may take to send a request's headers (default
+//!   10), and a request to be answered (default 60).
+//! - `MATTERS_RELAY_MAX_REQUESTS`: requests handled at once (default 256);
+//!   past it a request gets `503 unavailable` at once.
 //! - `MATTERS_RELAY_OPERATOR_TOKEN`: 64 hex digits, the export credential.
 //! - `MATTERS_RELAY_METRICS_LISTEN`: where to serve `GET /metrics`
 //!   (OpenMetrics text), on its own listener; off when unset. Keep it on a
@@ -32,6 +46,7 @@ use std::process::ExitCode;
 
 use matters_relay::api::{self, Options, RateLimit};
 use matters_relay::hints::Hints;
+use matters_relay::server::Limits;
 use matters_relay::Relay;
 use matters_sync::authority::Route;
 use matters_sync::record::VERIFICATION_KEY_BYTES;
@@ -103,7 +118,18 @@ async fn main() -> ExitCode {
         eprintln!("matters-relay: set MATTERS_RELAY_DATABASE_URL");
         return ExitCode::from(2);
     };
-    let relay = match Relay::connect(&url).await {
+    let mut options = match url.parse::<sqlx::postgres::PgConnectOptions>() {
+        Ok(options) => options,
+        Err(_) => return fail("MATTERS_RELAY_DATABASE_URL is not a PostgreSQL URL"),
+    };
+    // The password from a secret file, so it is in no environment.
+    if let Ok(file) = std::env::var("MATTERS_RELAY_DATABASE_PASSWORD_FILE") {
+        match std::fs::read_to_string(&file) {
+            Ok(password) => options = options.password(password.trim_end_matches(['\r', '\n'])),
+            Err(error) => return fail(format!("cannot read {file}: {error}")),
+        }
+    }
+    let relay = match Relay::connect_with(options).await {
         Ok(relay) => relay,
         Err(error) => return fail(error),
     };
@@ -182,22 +208,57 @@ async fn main() -> ExitCode {
     }
 }
 
+/// A rate limit from `var`: `<per-second>/<burst>`, or `off`; `default`
+/// when unset.
+fn rate_from_env(var: &str, default: Option<RateLimit>) -> Result<Option<RateLimit>, ExitCode> {
+    let Ok(text) = std::env::var(var) else {
+        return Ok(default);
+    };
+    if text == "off" {
+        return Ok(None);
+    }
+    let parsed = text.split_once('/').and_then(|(rate, burst)| {
+        Some(RateLimit {
+            per_second: rate.parse().ok()?,
+            burst: burst.parse().ok()?,
+        })
+    });
+    match parsed {
+        Some(limit) => Ok(Some(limit)),
+        None => Err(fail(format!("{var} must be <per-second>/<burst> or off"))),
+    }
+}
+
 async fn serve(relay: Relay) -> ExitCode {
     let listen = std::env::var("MATTERS_RELAY_LISTEN").unwrap_or_else(|_| "127.0.0.1:8484".into());
-    let rate_limit = match std::env::var("MATTERS_RELAY_RATE") {
-        Err(_) => None,
-        Ok(text) => {
-            let parsed = text.split_once('/').and_then(|(rate, burst)| {
-                Some(RateLimit {
-                    per_second: rate.parse().ok()?,
-                    burst: burst.parse().ok()?,
-                })
-            });
-            match parsed {
-                Some(limit) => Some(limit),
-                None => return fail("MATTERS_RELAY_RATE must be <per-second>/<burst>"),
-            }
-        }
+    let rate_limit = match rate_from_env("MATTERS_RELAY_RATE", None) {
+        Ok(limit) => limit,
+        Err(code) => return code,
+    };
+    // Requests without a session are on by default: anyone can send them.
+    let public_rate_limit = match rate_from_env(
+        "MATTERS_RELAY_PUBLIC_RATE",
+        Some(RateLimit {
+            per_second: 10,
+            burst: 60,
+        }),
+    ) {
+        Ok(limit) => limit,
+        Err(code) => return code,
+    };
+    let challenge_rate_limit = match rate_from_env(
+        "MATTERS_RELAY_CHALLENGE_RATE",
+        Some(RateLimit {
+            per_second: 1,
+            burst: 10,
+        }),
+    ) {
+        Ok(limit) => limit,
+        Err(code) => return code,
+    };
+    let limits = match limits() {
+        Ok(limits) => limits,
+        Err(code) => return code,
     };
     let operator_token = match std::env::var("MATTERS_RELAY_OPERATOR_TOKEN") {
         Err(_) => None,
@@ -229,7 +290,12 @@ async fn serve(relay: Relay) -> ExitCode {
             };
             eprintln!("matters-relay: metrics on {address}");
             let app = matters_relay::metrics::router(relay.clone(), metrics.clone());
-            tokio::spawn(async move { axum::serve(listener, app).await });
+            tokio::spawn(matters_relay::server::serve(
+                listener,
+                app,
+                Limits::default(),
+                std::future::pending(),
+            ));
             Some(metrics)
         }
     };
@@ -239,6 +305,8 @@ async fn serve(relay: Relay) -> ExitCode {
         Options {
             hints: Some(hints),
             rate_limit,
+            public_rate_limit,
+            challenge_rate_limit,
             operator_token,
             metrics,
         },
@@ -246,11 +314,32 @@ async fn serve(relay: Relay) -> ExitCode {
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    match axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await
-    {
+    match matters_relay::server::serve(listener, app, limits, shutdown).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => fail(error),
     }
+}
+
+/// The server's limits from the environment, defaults where unset.
+fn limits() -> Result<Limits, ExitCode> {
+    let mut limits = Limits::default();
+    let number = |var: &str| -> Result<Option<u64>, ExitCode> {
+        match std::env::var(var) {
+            Err(_) => Ok(None),
+            Ok(text) => match text.parse::<u64>() {
+                Ok(n) if n > 0 => Ok(Some(n)),
+                _ => Err(fail(format!("{var} must be a positive whole number"))),
+            },
+        }
+    };
+    if let Some(s) = number("MATTERS_RELAY_HEADER_TIMEOUT")? {
+        limits.header_timeout = std::time::Duration::from_secs(s);
+    }
+    if let Some(s) = number("MATTERS_RELAY_REQUEST_TIMEOUT")? {
+        limits.request_timeout = std::time::Duration::from_secs(s);
+    }
+    if let Some(n) = number("MATTERS_RELAY_MAX_REQUESTS")? {
+        limits.max_requests = usize::try_from(n).unwrap_or(usize::MAX);
+    }
+    Ok(limits)
 }

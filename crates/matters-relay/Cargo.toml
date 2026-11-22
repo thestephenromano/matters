@@ -10,20 +10,31 @@ description = "The durable encrypted sync relay (#38, docs/SYNC_SERVICE_CONTRACT
 [features]
 # Crash points for the conformance runner (src/fault.rs). Tests only.
 fault-injection = []
+# The fuzz targets' bodies (fuzz/, src/fuzzing.rs), for cargo-fuzz and the
+# replay test.
+fuzzing = []
 
 [dependencies]
 matters-sync = { path = "../matters-sync" }
 # ADR 0003 (approved 2026-11-20): PostgreSQL through sqlx 0.9, Tokio runtime.
-# No TLS feature yet: the relay talks to its database on the same host or a
-# private network; a TLS option comes with self-hosting (#44).
-sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros"] }
+# TLS to the database (#45) on rustls with ring, the provider the sync
+# client uses (#39), trusting the operating system's roots
+# (rustls-native-certs, already in the graph), so that sslmode=require and
+# verify-full work; without a TLS feature they silently could not.
+sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros", "tls-rustls-ring-native-roots"] }
 tokio = { version = "1.54", features = ["sync", "rt-multi-thread", "net", "macros", "signal", "time"] }
 # ADR 0003: axum on hyper 1 over HTTP/1.1 and HTTP/2 (TLS terminates at a
 # proxy in front, #44); `ws` for commit hints.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "tokio", "ws", "matched-path"] }
+# The server under axum's router, with the header timeout axum::serve does
+# not set (src/server.rs). Already in the graph through axum.
+hyper-util = { version = "0.1.21", default-features = false, features = ["server-auto", "tokio", "service", "http1", "http2"] }
 base64 = "0.22"
 minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
+# Session challenges and tokens: 256 bits from the OS. Already in the graph
+# through uuid. MIT OR Apache-2.0.
+getrandom = "0.4.3"
 thiserror = "2.0"
 # Redacted operational metrics (#44, decided 2026-11-21): the Prometheus
 # project's own client, OpenMetrics text exposition, Apache-2.0.
@@ -38,5 +49,5 @@ futures-util = "0.3"
 serde_json = "1"
 tempfile = "3.13"
 # The conformance runner needs the crash points.
-matters-relay = { path = ".", features = ["fault-injection"] }
+matters-relay = { path = ".", features = ["fault-injection", "fuzzing"] }
 uuid = { version = "1", features = ["v4"] }

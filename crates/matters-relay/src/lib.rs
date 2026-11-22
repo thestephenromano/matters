@@ -15,8 +15,10 @@
 //! - **Authority objects** are addressed by their SHA-384. Membership
 //!   transitions and root recoveries are verified against the route's
 //!   authority before they are stored, because uploads are authorized by
-//!   the newest accepted roster; other kinds are checked structurally and
-//!   left for clients to verify.
+//!   the newest accepted roster. Writer claims and key envelopes are not
+//!   admitted by the relay (clients do that), but their signers and
+//!   signatures are checked against the stored roster, so the log holds no
+//!   forgeries; they count toward the route's quota.
 //! - Pages are read up to the high-water mark captured at their start,
 //!   under the route's generation; a cursor from another generation is
 //!   refused, so a restore can never be mistaken for continuity.
@@ -25,13 +27,18 @@ pub mod api;
 mod cbor;
 mod export;
 mod fault;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 pub mod hints;
 pub mod metrics;
+pub mod server;
 mod sessions;
 mod store;
 
 pub use sessions::{Session, CHALLENGE_MS, SESSION_MS};
 pub use store::{
     Appended, Cursor, Page, Receipt, Relay, RelayError, Snapshots, ENROLLMENT_TTL_SECONDS,
-    MAX_ENROLLMENTS, MAX_PAGE,
+    MAX_AUTHORITY_OBJECTS, MAX_ENROLLMENTS, MAX_PAGE, MAX_PAGE_BYTES,
+    MAX_RECOVERIES_PER_GENERATION,
 };

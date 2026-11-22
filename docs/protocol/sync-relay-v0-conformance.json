@@ -1,7 +1,11 @@
 {
   "contract": "docs/SYNC_SERVICE_CONTRACT.md",
   "version": 0,
-  "notation": "Each scenario runs against a fresh route with devices A and B in its roster and C not in it. Records are named; r1' has r1's record ID and different bytes. Sequences and generations are compared by name: g0 is the route's generation at provisioning, g1 a new one. 'any' accepts any value. A 'restart' step kills the relay process; 'restore' restores the database from a backup taken at the named step and runs the restore procedure.",
+  "notation": "Each scenario runs against a fresh route with devices A and B in its roster and C not in it. Records are named; r1' has r1's record ID and different bytes. Sequences and generations are compared by name: g0 is the route's generation at provisioning, g1 a new one. 'any' accepts any value. A 'restart' step kills the relay process; 'restore' restores the database from a backup taken at the named step and runs the restore procedure; with 'keep_generation' it skips the procedure's new generation, as a careless operator might.",
+  "limits": {
+    "page_entries": 256,
+    "page_entry_bytes": 16777216
+  },
   "scenarios": [
     {
       "name": "duplicate-upload-returns-original-receipt",
@@ -82,6 +86,19 @@
       "note": "r2 was acknowledged and lost by the restore; A re-uploads it after the generation change."
     },
     {
+      "name": "a-cursor-past-the-high-water-mark-is-a-generation-change",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201, "sequence": 1, "generation": "g0"}},
+        {"backup": "b1"},
+        {"as": "A", "append": "r2", "expect": {"status": 201, "sequence": 2}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1", "r2"], "save_cursor": "c2"}},
+        {"restore": "b1", "keep_generation": true},
+        {"as": "B", "fetch": {"after": "c2"}, "expect": {"status": 410, "code": "generation-changed", "generation": "g0"}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1"], "generation": "g0"}}
+      ],
+      "note": "A restore that skipped the new generation leaves the old one in place, but c2 now points past the high-water mark. The relay answers that as a generation change, so B resynchronizes instead of waiting past sequence 2 for records that were lost and will be renumbered."
+    },
+    {
       "name": "sessions-are-device-and-roster-bound",
       "steps": [
         {"as": "C", "session": true, "expect": {"status": 403, "code": "not-a-member"}},
@@ -99,6 +116,33 @@
         {"as": "B", "append": "rB", "expect": {"status": 403, "code": "revoked"}},
         {"as": "B", "session": true, "expect": {"status": 403, "code": "not-a-member"}}
       ]
+    },
+    {
+      "name": "a-restored-relay-takes-back-the-transition-it-lost",
+      "steps": [
+        {"backup": "b1"},
+        {"as": "A", "put_authority": "membership-adding-C", "expect": {"status": 201}},
+        {"as": "C", "session": true, "expect": {"status": 200}},
+        {"restore": "b1"},
+        {"as": "C", "session": true, "expect": {"status": 403, "code": "not-a-member"}},
+        {"as": "C", "put_authority": "membership-adding-C", "anonymous": true, "expect": {"status": 201}},
+        {"as": "C", "session": true, "expect": {"status": 200}},
+        {"as": "C", "put_authority": "writer-start-of-C", "anonymous": true, "expect": {"status": 401, "code": "unauthenticated"}}
+      ],
+      "note": "C was admitted after the backup. It holds the signed transition that admitted it and re-publishes it without a session, which the relay verifies against the authority it has; writer claims and envelopes still need one."
+    },
+    {
+      "name": "the-mailbox-takes-requests-only-under-registered-invitations",
+      "steps": [
+        {"as": "C", "enroll": "i1", "expect": {"status": 404, "code": "unknown-invitation"}},
+        {"as": "B", "register_invitation": "i1", "expect": {"status": 403, "code": "not-a-member"}},
+        {"as": "A", "register_invitation": "i1", "expect": {"status": 201}},
+        {"as": "A", "register_invitation": "i1", "expect": {"status": 200}},
+        {"as": "C", "enroll": "i1", "expect": {"status": 201}},
+        {"as": "C", "enroll": "i1", "expect": {"status": 200}},
+        {"as": "C", "enroll": "i1", "other_bytes": true, "expect": {"status": 409, "code": "record-conflict"}}
+      ],
+      "note": "Only the admin (A) registers an invitation's lookup, with its session; the joining device (C) leaves one request under it without a session."
     },
     {
       "name": "quota-and-rate-limits-are-distinct",

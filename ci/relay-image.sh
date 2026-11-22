@@ -3,7 +3,8 @@
 # (packaging/relay, #44) as an operator would. The checks:
 # - PostgreSQL, the relay and Caddy come up, the relay healthy by its own probe;
 # - the relay answers ready over TLS through Caddy, on HTTP/2;
-# - metrics are served on the private network and not through Caddy.
+# - metrics are served on the private network and not through Caddy;
+# - export is not reachable through Caddy.
 # Usage:
 #   ci/relay-image.sh [--all]
 #
@@ -37,16 +38,19 @@ port="${MATTERS_IMAGE_HTTPS_PORT:-58443}"
 cleanup() {
     docker compose -f "$dir/compose.yaml" -p "$project" logs --no-color > target/relay-image.log 2>&1 || true
     docker compose -f "$dir/compose.yaml" -p "$project" down -v > /dev/null 2>&1 || true
-    rm -f "$dir/relay.env" "$dir/postgres_password"
+    rm -f "$dir/relay.env" "$dir/caddy.env" "$dir/postgres_password"
 }
 trap cleanup EXIT
 mkdir -p target
-password="$(openssl rand -hex 16)"
-printf '%s' "$password" > "$dir/postgres_password"
+# The relay's unprivileged user reads the password as a secret file.
+openssl rand -hex 16 > "$dir/postgres_password"
+chmod 0644 "$dir/postgres_password"
 cat > "$dir/relay.env" <<ENV
+MATTERS_RELAY_DATABASE_URL=postgres://relay@postgres:5432/relay
+ENV
+cat > "$dir/caddy.env" <<ENV
 MATTERS_RELAY_DOMAIN=localhost
 MATTERS_RELAY_TLS=internal
-MATTERS_RELAY_DATABASE_URL=postgres://relay:$password@postgres:5432/relay
 ENV
 
 group "build the image and start the stack"
@@ -67,8 +71,15 @@ version="$(curl -sk --http2 -o /dev/null -w '%{http_version}' "https://localhost
 [ "$version" = 2 ] || refuse "Caddy did not serve HTTP/2 (got $version)"
 public="$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:$port/metrics")"
 [ "$public" = 404 ] || refuse "metrics are reachable through Caddy (status $public)"
+# Caddy answers 404 itself; the relay would answer 401 without the token.
+route="$(printf '0%.0s' $(seq 1 96))"
+export_status="$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:$port/v0/routes/$route/export")"
+[ "$export_status" = 404 ] || refuse "export is reachable through Caddy (status $export_status)"
 docker compose -f "$dir/compose.yaml" -p "$project" exec -T caddy \
     wget -qO- http://relay:9484/metrics | grep -q '^matters_relay_routes ' \
     || refuse "metrics are not served on the private network"
+docker compose -f "$dir/compose.yaml" -p "$project" exec -T caddy env \
+    | grep -q -e MATTERS_RELAY_DATABASE -e MATTERS_RELAY_OPERATOR_TOKEN \
+    && refuse "Caddy's environment holds a relay credential"
 endgroup
 echo "The self-hosted stack came up and answered as configured."

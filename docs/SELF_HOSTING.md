@@ -14,7 +14,7 @@ The relay stores only what clients have already encrypted and signed: records, a
 | --- | --- | --- |
 | `postgres` | `postgres:18.7` | The relay's store: every acknowledgement is a committed transaction (ADR 0003). Data in the `postgres` volume. |
 | `relay` | built from `packaging/relay/Containerfile` | The relay, distroless and unprivileged, on the private network only. API on 8484, metrics on 9484. |
-| `caddy` | `caddy:2.11` | TLS in front, with certificates from a public CA, or its own CA with `internal`. It publishes 443 and 80, and forwards only `/v0/*`, `/healthz` and `/readyz`. |
+| `caddy` | `caddy:2.11` | TLS in front, with certificates from a public CA, or its own CA with `internal`. It publishes 443 and 80, and forwards only `/v0/*`, `/healthz` and `/readyz`, except export (`/v0/routes/*/export`), which it answers `404`. |
 
 The image build is reproducible from source:
 - base images are pinned by digest;
@@ -24,7 +24,8 @@ The image build is reproducible from source:
 
 CI's `self-hosted relay image` job (`ci/relay-image.sh`) runs whenever the relay, matters-sync or the packaging changes. It builds the image and brings the stack up, then checks that:
 - the relay is ready over TLS through Caddy, on HTTP/2;
-- metrics are not public, and are served on the private network.
+- metrics are not public, and are served on the private network;
+- export is not reachable through Caddy.
 
 ## Setting up
 
@@ -32,18 +33,24 @@ From the repository root:
 
 ```sh
 cp packaging/relay/relay.env.example packaging/relay/relay.env
-openssl rand -hex 32 > packaging/relay/postgres_password   # and put it in relay.env's URL
-chmod 600 packaging/relay/relay.env packaging/relay/postgres_password
+cp packaging/relay/caddy.env.example packaging/relay/caddy.env
+openssl rand -hex 32 > packaging/relay/postgres_password
+chmod 600 packaging/relay/relay.env
+# The relay runs as the image's unprivileged user (uid and gid 65532) and
+# reads the password as a secret file, so that group may read it.
+chgrp 65532 packaging/relay/postgres_password
+chmod 640 packaging/relay/postgres_password
 docker compose -f packaging/relay/compose.yaml up -d --build
 ```
 
-`relay.env` sets:
-- the public name (`MATTERS_RELAY_DOMAIN`);
-- the ACME contact address (`MATTERS_RELAY_TLS`);
-- the database URL;
-- optionally the rate limit (`MATTERS_RELAY_RATE`) and the export credential (`MATTERS_RELAY_OPERATOR_TOKEN`).
+Each service gets only what it needs:
+- `caddy.env`, Caddy's only configuration: the public name (`MATTERS_RELAY_DOMAIN`) and the ACME contact address (`MATTERS_RELAY_TLS`).
+- `relay.env`, the relay's only: the database URL, without a password, and optionally the limits (*Limits* below) and the export credential (`MATTERS_RELAY_OPERATOR_TOKEN`).
+- `postgres_password`, a compose secret mounted into PostgreSQL (which is initialized from it) and the relay (`MATTERS_RELAY_DATABASE_PASSWORD_FILE`), so the password is in no environment and in no file but this one.
 
-Neither secrets file is committed (`packaging/relay/.gitignore`). `MATTERS_RELAY_HTTPS_PORT` and `MATTERS_RELAY_HTTP_PORT` change the published ports.
+With rootless Docker or Podman, give the file to the uid that 65532 maps to on the host instead. None of these files is committed (`packaging/relay/.gitignore`), and none, nor any `*.dump`, is sent to an image build (`.dockerignore`). `MATTERS_RELAY_HTTPS_PORT` and `MATTERS_RELAY_HTTP_PORT` change the published ports.
+
+**A database elsewhere.** The stack's PostgreSQL is on the stack's private network, so its URL needs no TLS. A database on any other host must be reached with `sslmode=verify-full`, which encrypts the connection and checks the server's certificate and name: `postgres://relay@db.example.org:5432/relay?sslmode=verify-full`. The relay trusts the operating system's roots; for a private CA, add `&sslrootcert=/path/to/ca.pem` and mount that file. `sslmode=require` encrypts without checking who answers, and `prefer` (the default) silently falls back to cleartext, so use neither across a network.
 
 Provision each collection with the root key and genesis its admin device exports:
 
@@ -77,6 +84,8 @@ docker compose -f packaging/relay/compose.yaml exec -T postgres \
   pg_dump -U relay -Fc relay > relay-$(date -u +%Y%m%dT%H%M%SZ).dump
 ```
 
+A dump holds every stored byte. Keep it with the same care as the database, outside the repository checkout if you can; inside it, `*.dump` is ignored by git and by image builds.
+
 `pg_dump` reads one consistent snapshot. Records acknowledged after the snapshot are not in it. Restoring an older backup therefore **loses acknowledged records**. This is not zero data loss: clients re-upload what they still hold, and the relay deduplicates by record ID.
 
 To restore:
@@ -99,6 +108,8 @@ The drill shows what the recovery point means in practice. An edit acknowledged 
 
 `matters-relay export` and `import` move one route between deployments with every byte unchanged, under a new generation (SYNC_SERVICE_CONTRACT.md).
 
+Export is operator-only. Run `matters-relay export` in the relay's container, or call `GET /v0/routes/{route}/export` with `MATTERS_RELAY_OPERATOR_TOKEN` on the relay's own listener (port 8484 on the stack's private network). Caddy refuses the path on the public name, so a leaked token alone cannot read a route from outside.
+
 ## Upgrades
 
 - **Schema.** The relay's schema migrations run forward at start. An older relay refuses a database a newer one migrated (`an_older_relay_refuses_a_database_a_newer_one_migrated`), so it never serves tables it does not know.
@@ -108,7 +119,7 @@ The drill shows what the recovery point means in practice. An edit acknowledged 
 
 | | Relay at the same `/v0` | Relay rolled back to an older build |
 | --- | --- | --- |
-| **Client, same `/v0`** | Works. Additive endpoints, such as `/snapshots` and `/enrollments`, are used where present | The older relay refuses the newer database (above). Restore the backup taken before the upgrade, with a new generation |
+| **Client, same `/v0`** | Works. Additive endpoints, such as `/snapshots`, `/enrollments` and `/invitations`, are used where present. A client from before `/invitations` cannot add devices through a relay that requires them (`404 unknown-invitation`) | The older relay refuses the newer database (above). Restore the backup taken before the upgrade, with a new generation |
 | **Client too old for the relay's `/v0` additions** | Works without them. A device that can't start from a checkpoint reads the whole log | Works |
 | **A future `/v1`** | Unknown paths answer `unsupported-version`, and the client asks for attention | — |
 
@@ -118,10 +129,32 @@ On the device, Matters refuses a database written by a newer Matters (`MattersEr
 
 | Credential | How to rotate it | Effect |
 | --- | --- | --- |
-| Database password | `ALTER ROLE relay PASSWORD …`, then update `postgres_password` and `relay.env`, then restart the relay | Clients see a brief unavailability and retry. |
+| Database password | `ALTER ROLE relay PASSWORD …`, then update `postgres_password`, then restart the relay | Clients see a brief unavailability and retry. |
 | Operator export token | Replace `MATTERS_RELAY_OPERATOR_TOKEN` and restart | The old token stops working at once. |
 | Device sessions | Last 15 minutes and are bound to current membership | A removed device loses access at its next request. |
 | TLS certificates | Renewed by Caddy | — |
+
+## Limits
+
+Requests without a session can come from anyone, so they are limited by default. Behind Caddy every peer address is Caddy's, and the relay trusts no forwarded header, so these limits are per route:
+
+| Setting | Default | Limits |
+| --- | --- | --- |
+| `MATTERS_RELAY_PUBLIC_RATE` | `10/60` | Requests without a session per route: challenges, session answers, mailbox uploads, session-free transitions |
+| `MATTERS_RELAY_CHALLENGE_RATE` | `1/10` | Session challenges per route and device |
+| `MATTERS_RELAY_RATE` | off | Authenticated requests per route and device |
+
+Each is `<per-second>/<burst>`, or `off`. A client over a limit gets `429 rate-limited` and retries after the time it is given.
+
+The server bounds slow and long requests and how many run at once:
+
+| Setting | Default | Bounds |
+| --- | --- | --- |
+| `MATTERS_RELAY_HEADER_TIMEOUT` | `10` (seconds) | How long a connection may take to send its first bytes and each request's headers; then it is closed |
+| `MATTERS_RELAY_REQUEST_TIMEOUT` | `60` (seconds) | How long a request may take to be answered, its body included; then `503 unavailable` |
+| `MATTERS_RELAY_MAX_REQUESTS` | `256` | Requests handled at once; past it a request is shed at once with `503 unavailable`, never queued. `/healthz` and `/readyz` are exempt |
+
+Clients retry `503` with backoff, and an upload cut off this way is "not known to be stored", as after any failure. Caddy has its own timeouts in front; these hold for anything that reaches the relay directly.
 
 ## Quotas
 
@@ -129,7 +162,7 @@ On the device, Matters refuses a database written by a newer Matters (`MattersEr
 matters-relay quota <route-hex> bytes <n>     # or records <n>, or none
 ```
 
-At its quota, a route refuses new records with `quota-exhausted`. Nothing stored is deleted, and clients keep the refused work locally.
+The byte quota counts records and authority objects. At its quota, a route refuses new records, writer claims and key envelopes with `quota-exhausted`. Membership transitions are still stored, so the admin can remove a device from a full route. Nothing stored is deleted, and clients keep the refused work locally.
 
 ## Ownership and retention
 

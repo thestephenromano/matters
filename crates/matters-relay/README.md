@@ -33,7 +33,7 @@ Labels come only from the API's path templates and HTTP statuses. No route, tena
 
 **Operations:**
 - **Commit hints.** `GET /v0/routes/{route}/hints` is a WebSocket. An append's `pg_notify` is delivered only when its transaction commits, so a hint never precedes its record, and duplicates send none.
-- **Limits.** A per-device rate limit gives `429` with `retry-after-ms`. Operator quotas on bytes and on record count give `507`.
+- **Limits.** Rate limits per route (requests without a session) and per route and device (challenges, and authenticated requests) give `429` with `retry-after-ms`. Operator quotas on bytes and on record count give `507`. The server (`server::serve`) bounds header reads, request time and requests at once; docs/SELF_HOSTING.md lists the settings.
 - **Export and import.** Both move a route byte for byte, and import installs a new generation. The HTTP export needs the operator credential.
 
 **Operator commands:**
@@ -47,7 +47,7 @@ matters-relay new-generation (<route-hex> | --all)    # --all: after restoring a
 matters-relay quota <route-hex> (bytes | records) (<n> | none)
 ```
 
-`serve` reads `MATTERS_RELAY_RATE` (`<per-second>/<burst>`) and `MATTERS_RELAY_OPERATOR_TOKEN` (64 hex digits).
+`serve` reads the rate limits (`MATTERS_RELAY_RATE`, `MATTERS_RELAY_PUBLIC_RATE`, `MATTERS_RELAY_CHALLENGE_RATE`: `<per-second>/<burst>` or `off`), the server limits (`MATTERS_RELAY_HEADER_TIMEOUT`, `MATTERS_RELAY_REQUEST_TIMEOUT`, `MATTERS_RELAY_MAX_REQUESTS`) and `MATTERS_RELAY_OPERATOR_TOKEN` (64 hex digits).
 
 **Conformance.** `tests/conformance.rs` runs every scenario of [the contract's fixtures](../../docs/protocol/sync-relay-v0-conformance.json) against the real binary, as a child process:
 - restarts kill the process;
