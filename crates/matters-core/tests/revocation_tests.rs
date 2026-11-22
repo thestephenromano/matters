@@ -463,3 +463,114 @@ fn an_older_handle_is_fenced_once_a_newer_open_takes_over_the_writer() {
     let stale = second.add_task(&mut Task::new(id(5), "stale", 4.0));
     assert!(matches!(stale, Err(MattersError::Superseded)), "{stale:?}");
 }
+
+/// The last control of `kind` that `db` signed.
+fn last_signed(db: &Database, kind: fn(&Body) -> bool) -> Vec<u8> {
+    db.outgoing_controls()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|o| kind(&parse(&o.bytes).unwrap().message.body))
+        .expect("a control of that kind")
+        .bytes
+}
+
+/// A copy of the closed database `name`, as `copy`, opened.
+fn copy_of(dir: &std::path::Path, name: &str, copy: &str) -> Database {
+    for suffix in ["", "-wal", "-shm"] {
+        let from = dir.join(format!("{name}{suffix}"));
+        if from.exists() {
+            std::fs::copy(&from, dir.join(format!("{copy}{suffix}"))).unwrap();
+        }
+    }
+    Database::open(dir.join(copy)).unwrap()
+}
+
+#[test]
+fn a_removal_closes_a_removed_writer_that_wrote_nothing_at_null() {
+    let t = three();
+    let (a_id, b_id) = (device_id(&t.a_keys), device_id(&t.b_keys));
+    // B never wrote: A holds nothing of its writer, and still closes it.
+    t.a.remove_member(&b_id).unwrap();
+    let removal = last_signed(&t.a, |b| matches!(b, Body::Membership(_)));
+    let Body::Membership(m) = parse(&removal).unwrap().message.body else {
+        unreachable!()
+    };
+    assert!(!m.frontier.is_empty(), "the removed writer is closed");
+    for closing in &m.frontier {
+        assert_eq!(closing.device, b_id, "only the leaving device's writers");
+        assert_eq!(closing.head, None, "closed at null: nothing of it held");
+    }
+    assert!(m.frontier.iter().all(|c| c.device != a_id));
+}
+
+#[test]
+fn a_competing_claim_past_a_frozen_lineage_is_not_kept() {
+    let t = three();
+    // B's database, copied twice while closed: each copy's open hands off
+    // from the same writer, so the claims compete.
+    drop(t.b);
+    let copies: Vec<Database> = ["b1.db", "b2.db", "b3.db"]
+        .iter()
+        .map(|c| copy_of(t.dir.path(), "b.db", c))
+        .collect();
+    let claims: Vec<Vec<u8>> = copies
+        .iter()
+        .map(|db| {
+            db.resume_sync(&t.b_keys).unwrap();
+            last_signed(db, |b| matches!(b, Body::WriterHandoff(_)))
+        })
+        .collect();
+    let kept = |db: &Database| db.sync_controls().unwrap().len();
+    t.a.apply_control(&claims[0], None).unwrap();
+    let before_fork = kept(&t.a);
+    // The second freezes B's lineage, and is kept as evidence.
+    assert!(t.a.apply_control(&claims[1], None).is_err());
+    assert_eq!(kept(&t.a), before_fork + 1);
+    // A third adds no evidence: nothing more is kept.
+    let _ = t.a.apply_control(&claims[2], None);
+    assert_eq!(kept(&t.a), before_fork + 1);
+}
+
+#[test]
+fn a_claim_reaching_an_authority_a_membership_fork_froze_stops_it() {
+    let t = three();
+    let (b_id, c_id) = (device_id(&t.b_keys), device_id(&t.c_keys));
+    // Two competing transitions from A's one manifest: a removal on A, a
+    // rotation on a copy of A.
+    drop(t.a);
+    let a1 = copy_of(t.dir.path(), "a.db", "a1.db");
+    let a2 = copy_of(t.dir.path(), "a.db", "a2.db");
+    a1.resume_sync(&t.a_keys).unwrap();
+    a2.resume_sync(&t.a_keys).unwrap();
+    a1.remove_member(&b_id).unwrap();
+    a2.rotate_epoch().unwrap();
+    let removal = last_signed(&a1, |b| matches!(b, Body::Membership(_)));
+    let rotation = last_signed(&a2, |b| matches!(b, Body::Membership(_)));
+    let envelope = |admin: &Database, transition: &[u8]| {
+        envelopes_for(admin, &c_id)
+            .into_iter()
+            .find(|e| match parse(e).unwrap().message.body {
+                Body::KeyEnvelope(k) => k.manifest == record_hash(transition),
+                _ => false,
+            })
+            .expect("C's envelope of the new epoch")
+    };
+    t.c.apply_control(&removal, Some(&envelope(&a1, &removal)))
+        .unwrap();
+    assert!(matches!(
+        t.c.apply_control(&rotation, Some(&envelope(&a2, &rotation))),
+        Err(MattersError::Authority(
+            matters_sync::authority::Error::Fork
+        ))
+    ));
+    // C's authority is frozen; a writer claim reaching it now is a fork,
+    // not a change that went nowhere: sync stops.
+    let claim = last_signed(&a1, |b| matches!(b, Body::WriterHandoff(_)));
+    assert!(matches!(
+        t.c.apply_control(&claim, None),
+        Err(MattersError::Authority(
+            matters_sync::authority::Error::Fork
+        ))
+    ));
+}

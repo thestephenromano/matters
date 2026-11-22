@@ -269,7 +269,13 @@ pub(super) fn closing_frontier(
             });
         }
     }
-    // Leaving devices first, so a budget overflow defers only older ones.
+    within_budget(frontier, leaving)
+}
+
+/// At most `MAX_FRONTIER` closings, the leaving devices' first, so an
+/// overflow defers only writers a recovery left open, to the next
+/// transition. More leaving writers than the budget refuse the transition.
+fn within_budget(mut frontier: Vec<Closing>, leaving: &[Hash]) -> Result<Vec<Closing>> {
     frontier.sort_by_key(|c| !leaving.contains(&c.device));
     if frontier
         .iter()
@@ -850,5 +856,44 @@ mod joining {
                 )
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn closing(device: u8, n: u8) -> Closing {
+        Closing {
+            device: [device; 48],
+            document: HOME_DOCUMENT,
+            incarnation: [n; 32],
+            head: None,
+        }
+    }
+
+    /// The budget keeps every leaving device's closing, deferring only
+    /// writers a recovery left open, and refuses one leaving writer more
+    /// than it holds.
+    #[test]
+    fn the_frontier_budget_keeps_leaving_writers_first() {
+        let leaving = [[1; 48]];
+        let mut frontier: Vec<Closing> = (0..60).map(|n| closing(1, n)).collect();
+        frontier.extend((0..10).map(|n| closing(2, n)));
+        let kept = within_budget(frontier, &leaving).unwrap();
+        assert_eq!(kept.len(), MAX_FRONTIER);
+        assert_eq!(kept.iter().filter(|c| c.device == [1; 48]).count(), 60);
+        assert!(kept.windows(2).all(|w| w[0] <= w[1]), "sorted");
+
+        let exactly: Vec<Closing> = (0..MAX_FRONTIER as u8).map(|n| closing(1, n)).collect();
+        assert_eq!(
+            within_budget(exactly, &leaving).unwrap().len(),
+            MAX_FRONTIER
+        );
+        let over: Vec<Closing> = (0..=MAX_FRONTIER as u8).map(|n| closing(1, n)).collect();
+        assert!(matches!(
+            within_budget(over, &leaving),
+            Err(MattersError::Validation(_))
+        ));
     }
 }
