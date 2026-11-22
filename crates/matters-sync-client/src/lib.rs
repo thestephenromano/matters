@@ -521,11 +521,12 @@ impl<S: LocalStore + 'static> Client<S> {
         // Pull records, saving each page's cursor once it is received.
         loop {
             let page = self.fetch(&r, "records", cursor.as_deref()).await?;
-            for record in page.entries {
-                match self.on_store(move |s| s.receive_record(&record)).await {
+            // The whole page at once: the store applies it in one go (#241).
+            let records = page.entries;
+            for outcome in self.on_store(move |s| s.receive_records(&records)).await? {
+                match outcome {
                     Ok(()) => report.received_records += 1,
-                    Err(SyncError::Store(_)) => report.refused_records += 1,
-                    Err(other) => return Err(other),
+                    Err(_) => report.refused_records += 1,
                 }
             }
             let next = page.next.clone();

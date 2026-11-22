@@ -338,6 +338,9 @@ pub struct Document {
     /// nor reusable here.
     foreign: BTreeSet<String>,
     tags: BTreeMap<String, TreeID>,
+    /// The index lags the engine: updates were imported without
+    /// reindexing, and `apply` reindexes first (#241).
+    stale: bool,
 }
 
 impl Document {
@@ -350,6 +353,7 @@ impl Document {
             entities: BTreeMap::new(),
             foreign: BTreeSet::new(),
             tags: BTreeMap::new(),
+            stale: false,
         })
     }
 
@@ -382,7 +386,19 @@ impl Document {
         self.reindex()
     }
 
+    /// Import updates or a snapshot without rebuilding the index: for a
+    /// page of received records, whose index is rebuilt once, when a local
+    /// command next needs it. Rebuilding it after every record made
+    /// receiving quadratic in the collection's size (#241). Projection,
+    /// versions and snapshots read the engine, never the index.
+    pub fn merge_unindexed(&mut self, bytes: &[u8]) -> Result<()> {
+        self.doc.import(bytes).map_err(engine)?;
+        self.stale = true;
+        Ok(())
+    }
+
     fn reindex(&mut self) -> Result<()> {
+        self.stale = false;
         self.entities.clear();
         let tree = self.doc.get_tree(HOME);
         let mut raw = Vec::new();
@@ -502,6 +518,9 @@ impl Document {
     /// the batch applied but uncommitted, so callers discard the document on
     /// error and reload it from storage.
     pub fn apply(&mut self, commands: &[Command], at: i64) -> Result<()> {
+        if self.stale {
+            self.reindex()?;
+        }
         for command in commands {
             self.apply_one(command, at)?;
         }

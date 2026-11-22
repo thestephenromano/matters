@@ -127,8 +127,12 @@ fn run(dir: &std::path::Path, tasks: usize) -> serde_json::Value {
     // A new device from every record.
     let d = join(&a, &dir.join(format!("checkpoint-{tasks}-d.db")));
     let started = Instant::now();
-    for r in &records {
-        d.receive_record(r).unwrap();
+    // In pages of 256, as the sync client hands them over (#241).
+    for page in records.chunks(256) {
+        let page: Vec<&[u8]> = page.iter().map(Vec::as_slice).collect();
+        for outcome in d.receive_records(&page).unwrap() {
+            outcome.unwrap();
+        }
     }
     let replay_ms = ms(started);
     for (n, id) in ids.iter().enumerate().step_by(97) {

@@ -79,8 +79,9 @@ Measurements name their host and workload, and live in `docs/evidence/`:
 | --- | --- |
 | `sync-engine-cost-2026-11-20.json` | Recording writes for sync, against the write path with sync off |
 | `sync-checkpoint-cost-2026-11-21.json` | Checkpoint size and creation, and starting from a checkpoint against receiving every record |
+| `sync-receive-cost-2026-11-22.json` | Receiving every record before and after paged receive with a lazily rebuilt index (#241) |
 
-The weekly `checkpoint cost, measured` job runs the same example on a CI runner and keeps its output, to show the trend. A runner is not the evidence host, so no budget is set from it. Budgets on bootstrap and catch-up wait for #241, the per-record projection rebuild.
+The weekly `checkpoint cost, measured` job runs the same example on a CI runner and keeps its output, to show the trend. A runner is not the evidence host, so no budget is set from it. Budgets on bootstrap and catch-up are the maintainer's to set from these records.
 
 ## One command
 
