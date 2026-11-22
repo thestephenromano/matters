@@ -13,6 +13,13 @@
 # were reported as hung. A real hang still fails, after four minutes.
 minimum_test_timeout = 240
 
+# The fuzz harness (#45) drives receiving and the engine's imports for
+# cargo-fuzz; it is built only with the `fuzzing` feature and is not part of
+# Matters. Its oracle is the absence of a panic under fuzzing (ci/fuzz.sh)
+# and its corpus replay: a harness that does less finds less, which no test
+# of Matters' behaviour can observe.
+exclude_globs = ["crates/matters-core/src/fuzzing.rs"]
+
 exclude_re = [
     # Schedule::parse_typed answers "" and "today" itself, as Matters' own
     # words, rather than leaving them to `interim`. Without these arms
