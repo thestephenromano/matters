@@ -26,6 +26,9 @@ subtle = "=2.6.1"
 # and back, checksum included, without BIP39's PBKDF2 seed. CC0-1.0. Its
 # zeroize feature wipes parsed mnemonics; zeroize is already compiled in.
 bip39 = { version = "=3.0.0", default-features = false, features = ["zeroize"] }
+# Zeroing signing keys and derived record keys (#45); already compiled in
+# through hpke-rs and bip39.
+zeroize = "=1.9.2"
 thiserror = "2.0"
 
 [features]
