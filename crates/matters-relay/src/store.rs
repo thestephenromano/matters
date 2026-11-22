@@ -246,12 +246,22 @@ impl Manifest {
     }
 }
 
-/// The most writer claims and key envelopes a route stores: beyond what
-/// 16 transitions of a 16-member roster need (an envelope per member and
-/// epoch, history and recovery envelopes, writer claims), but a bound on
-/// a member that uploads without end. Bytes count toward the route's
-/// quota as well.
-pub const MAX_AUTHORITY_OBJECTS: i64 = 4096;
+// Writer claims and key envelopes have no count cap (#45). Every app open
+// adds a claim and every transition adds envelopes, so any count would be
+// a lifetime cap on legitimate growth. Like records, they count toward
+// the route's byte quota, which bounds them.
+
+/// The most membership transitions and root recoveries a route stores
+/// (#45). They are exempt from the byte quota, because each is admin- or
+/// root-signed and
+/// fully verified before it is stored, and a full route must still be able
+/// to remove a device. This cap bounds them instead: at most 2,048 of 64 KiB
+/// each, 128 MiB per route outside the byte quota. The authority itself has
+/// no lifetime limit on transitions. Replaying them is what an authority
+/// cache miss costs. A request otherwise reads the route's replayed
+/// authority from the cache, keyed by the log's high-water mark and head,
+/// so a miss replays at most this many transitions once per change.
+pub const MAX_STORED_TRANSITIONS: i64 = 2048;
 /// The most `root_recovery` objects stored per generation they start: the
 /// accepted one, and one competing recovery kept as fork evidence.
 pub const MAX_RECOVERIES_PER_GENERATION: usize = 2;
@@ -626,10 +636,10 @@ impl Relay {
     /// - `genesis` (provisioned by the operator) and `enrollment_request`
     ///   (left in the mailbox) do not belong in the log.
     ///
-    /// Bytes count toward the route's quota, and writer claims and
-    /// envelopes toward [`MAX_AUTHORITY_OBJECTS`]; transitions are exempt
-    /// from both refusals, so a full route can still remove a device, and are
-    /// bounded by the authority's own transition limit.
+    /// Writer claims and envelopes count toward the route's byte quota,
+    /// their only bound, as for records. Transitions are exempt from it, so
+    /// a full route can still remove a device, and are bounded by
+    /// [`MAX_STORED_TRANSITIONS`] instead.
     pub async fn put_authority_as(
         &self,
         route: &Route,
@@ -662,6 +672,21 @@ impl Relay {
                 generation: row.generation,
                 digest: *digest,
             }));
+        }
+        if matches!(
+            parsed.message.body,
+            Body::Membership(_) | Body::RootRecovery(_)
+        ) {
+            let stored: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM authority
+                 WHERE route = $1 AND kind IN ('membership', 'root_recovery')",
+            )
+            .bind(row.id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if stored >= MAX_STORED_TRANSITIONS {
+                return Err(RelayError::QuotaExhausted);
+            }
         }
         let replayed = self.replayed(&mut tx, route, &row).await?;
         let transition = match &parsed.message.body {
@@ -755,18 +780,6 @@ impl Relay {
                 return Err(RelayError::Authority(authority::Error::Unsupported))
             }
         };
-        if !transition {
-            let stored: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM authority
-                 WHERE route = $1 AND kind NOT IN ('genesis', 'membership', 'root_recovery')",
-            )
-            .bind(row.id)
-            .fetch_one(&mut *tx)
-            .await?;
-            if stored >= MAX_AUTHORITY_OBJECTS {
-                return Err(RelayError::QuotaExhausted);
-            }
-        }
         let seq = insert_authority(&mut tx, row.id, digest, kind, bytes, !transition).await?;
         tx.commit().await?;
         Ok(Appended::Stored(Receipt {

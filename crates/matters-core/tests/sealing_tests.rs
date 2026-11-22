@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::process::Command;
 
 use matters_core::storage::sealing::SealingIdentity;
-use matters_core::{Database, Task};
+use matters_core::{Database, MattersError, Task};
 use matters_sync::{generate_signing_key, record_hash, verify, wire, ContentKey, VerificationKey};
 
 fn id(n: u128) -> String {
@@ -164,9 +164,16 @@ fn concurrent_handles_on_one_file_never_share_a_record_id() {
     let b = Database::open(&path).unwrap();
     sealing(&b);
     let (ta, tb) = (a.clone(), b.clone());
+    // B's open replaced A's writer: A's writes are refused, never sealed
+    // under a retired writer and lost (#45); B's all seal.
     let threads = [
         std::thread::spawn(move || {
-            (0..15).for_each(|n| ta.set_task_notes(&id(1), &format!("a{n}")).unwrap())
+            (0..15).for_each(|n| {
+                assert!(matches!(
+                    ta.set_task_notes(&id(1), &format!("a{n}")),
+                    Err(MattersError::Superseded)
+                ))
+            })
         }),
         std::thread::spawn(move || {
             (0..15).for_each(|n| tb.set_task_notes(&id(1), &format!("b{n}")).unwrap())
@@ -178,7 +185,7 @@ fn concurrent_handles_on_one_file_never_share_a_record_id() {
     let records = Database::open(&path).unwrap().outgoing_records().unwrap();
     let ids: BTreeSet<_> = records.iter().map(|r| r.record_id).collect();
     assert_eq!(ids.len(), records.len());
-    assert_eq!(records.len(), 31);
+    assert_eq!(records.len(), 16);
 }
 
 #[test]

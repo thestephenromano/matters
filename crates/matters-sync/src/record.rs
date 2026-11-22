@@ -17,6 +17,7 @@
 use hpke_rs_crypto::types::{AeadAlgorithm, TwoStageKdfAlgorithm};
 use hpke_rs_crypto::HpkeCrypto;
 use libcrux_ml_dsa::ml_dsa_65;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::wire::{self, Header, ParsedRecord, MAX_PLAINTEXT_BYTES};
 
@@ -53,10 +54,7 @@ impl ContentKey {
 
 impl Drop for ContentKey {
     fn drop(&mut self) {
-        // Volatile writes, so the zeroing is not optimized away.
-        for byte in &mut self.0 {
-            unsafe { std::ptr::write_volatile(byte, 0) };
-        }
+        self.0.zeroize();
     }
 }
 
@@ -66,8 +64,20 @@ impl std::fmt::Debug for ContentKey {
     }
 }
 
-/// A device's ML-DSA-65 signing key. Never printed.
+/// A device's ML-DSA-65 signing key. Never printed; zeroed when dropped.
+///
+/// libcrux's key type has no `Drop` of its own, so this wrapper zeroes its
+/// bytes. What it cannot reach: libcrux copies the key and the expanded
+/// secret polynomials into stack temporaries while it generates and signs,
+/// and does not zero them; and the 32-byte seed passed to
+/// [`generate_signing_key`] by value is a copy the caller must wipe.
 pub struct SigningKey(pub(crate) ml_dsa_65::MLDSA65SigningKey);
+
+impl Drop for SigningKey {
+    fn drop(&mut self) {
+        self.0.as_mut_slice().zeroize();
+    }
+}
 
 impl std::fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -96,20 +106,27 @@ impl std::fmt::Debug for VerificationKey {
 }
 
 /// A signing key and its verification key, from 32 bytes of fresh OS
-/// entropy. A predictable seed gives a predictable key.
+/// entropy. A predictable seed gives a predictable key. The seed is moved
+/// in by value: the caller's copy is its own to wipe.
 pub fn generate_signing_key(seed: [u8; 32]) -> (SigningKey, VerificationKey) {
-    let pair = ml_dsa_65::generate_key_pair(seed);
+    let mut seed = Zeroizing::new(seed);
+    let pair = ml_dsa_65::generate_key_pair(*seed);
+    seed.zeroize();
     (
         SigningKey(pair.signing_key),
         VerificationKey(pair.verification_key),
     )
 }
 
-/// The one-time key for record `header.record_id` under `cek`.
-fn record_key(record_id: &[u8; 32], cek: &ContentKey, info: &[u8]) -> Result<Vec<u8>> {
-    let prk = Provider::kdf_extract(TwoStageKdfAlgorithm::HkdfSha256, record_id, &cek.0)
-        .map_err(|_| Error::Crypto)?;
+/// The one-time key for record `header.record_id` under `cek`. It and the
+/// HKDF pseudorandom key are zeroed when dropped.
+fn record_key(record_id: &[u8; 32], cek: &ContentKey, info: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    let prk = Zeroizing::new(
+        Provider::kdf_extract(TwoStageKdfAlgorithm::HkdfSha256, record_id, &cek.0)
+            .map_err(|_| Error::Crypto)?,
+    );
     Provider::kdf_expand(TwoStageKdfAlgorithm::HkdfSha256, &prk, info, 32)
+        .map(Zeroizing::new)
         .map_err(|_| Error::Crypto)
 }
 
@@ -189,7 +206,7 @@ impl<'a> Verified<'a> {
 /// oracle. Not for sealing.
 #[doc(hidden)]
 pub fn derived_key_for_vectors(header: Header<'_>, cek: &ContentKey) -> Result<Vec<u8>> {
-    record_key(header.record_id, cek, &wire::record_key_info(header)?)
+    Ok(record_key(header.record_id, cek, &wire::record_key_info(header)?)?.to_vec())
 }
 
 /// SHA-384 of a complete signed record: its identity in a writer's chain

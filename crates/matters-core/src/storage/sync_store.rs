@@ -266,7 +266,12 @@ impl<K: super::membership::KeyStore + Send + Sync> RecoveringStore for Recoverin
         )?)
     }
 
-    fn recover(&self, controls: &[Vec<u8>], envelopes: &[Vec<u8>]) -> StoreResult<()> {
+    fn recover(
+        &self,
+        controls: &[Vec<u8>],
+        envelopes: &[Vec<u8>],
+        records: &[Vec<u8>],
+    ) -> StoreResult<()> {
         // Only the envelopes addressed to the recovery key open with it.
         let recipient = self.recovery_keys()?.recipient()?;
         let recovery: Vec<Vec<u8>> = envelopes
@@ -277,12 +282,15 @@ impl<K: super::membership::KeyStore + Send + Sync> RecoveringStore for Recoverin
             })
             .cloned()
             .collect();
-        self.db.recover_collection(
+        // With the relay's records, the recovery closes every lost writer
+        // at what the relay holds of it (#45).
+        self.db.recover_collection_holding(
             &self.keys,
             &self.words,
             self.route.clone(),
             controls,
             &recovery,
+            records,
         )?;
         Ok(())
     }

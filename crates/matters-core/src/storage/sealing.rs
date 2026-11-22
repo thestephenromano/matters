@@ -70,13 +70,38 @@ pub struct SealedRecord {
     pub bytes: Vec<u8>,
 }
 
-/// 32 bytes of fresh OS entropy.
-pub(crate) fn random32() -> [u8; 32] {
-    let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
-    let mut out = [0; 32];
-    out[..16].copy_from_slice(a.as_bytes());
-    out[16..].copy_from_slice(b.as_bytes());
+/// `N` bytes of fresh OS entropy, all of them uniformly random: record IDs,
+/// content keys, device seeds, the recovery secret, the invitation secret
+/// and signing randomness all draw from here. Panics if the operating
+/// system has no entropy source, as `uuid::Uuid::new_v4` did before it.
+pub(crate) fn random<const N: usize>() -> [u8; N] {
+    let mut out = [0; N];
+    getrandom::fill(&mut out).expect("the operating system's entropy source failed");
     out
+}
+
+/// 32 bytes of fresh OS entropy (256 bits).
+pub(crate) fn random32() -> [u8; 32] {
+    random()
+}
+
+/// Refuse a write from a handle whose writer another open of the same
+/// database has since replaced (#45). That open signed a handoff closing
+/// this writer's chain at its head, so a record sealed here now would be
+/// accepted by the relay but never applied anywhere: refuse it instead, so
+/// the caller can reload. The newest writer row is the active incarnation.
+pub(crate) fn fence(tx: &Transaction<'_>, sealing: &Sealing) -> Result<()> {
+    let newest: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT incarnation FROM sync_writers ORDER BY opened_at DESC, rowid DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if newest.as_deref() != Some(sealing.incarnation.as_slice()) {
+        return Err(MattersError::Superseded);
+    }
+    Ok(())
 }
 
 fn sealing_error(error: matters_sync::Error) -> MattersError {
@@ -91,6 +116,7 @@ pub(crate) fn seal_update(
     seq: i64,
     update: &[u8],
 ) -> Result<()> {
+    fence(tx, sealing)?;
     let head: Option<Vec<u8>> = tx.query_row(
         "SELECT head FROM sync_writers WHERE incarnation = ?1",
         params![sealing.incarnation.as_slice()],
@@ -180,11 +206,15 @@ impl Sealing {
         self.identity.epoch
     }
 
-    /// Start sealing as `identity` under a new writer incarnation.
+    /// Start sealing as `identity` under a new writer incarnation, which
+    /// becomes the database's active one: an older handle's writer stops
+    /// sealing (see `fence`). Its opening time never precedes the newest
+    /// writer's, so the order holds even if the clock steps back.
     pub(crate) fn begin(conn: &rusqlite::Connection, identity: SealingIdentity) -> Result<Self> {
         let incarnation = random32();
         conn.execute(
-            "INSERT INTO sync_writers (incarnation, opened_at) VALUES (?1, ?2)",
+            "INSERT INTO sync_writers (incarnation, opened_at)
+             VALUES (?1, max(?2, coalesce((SELECT max(opened_at) FROM sync_writers), ?2)))",
             params![incarnation.as_slice(), crate::clock::now_millis()],
         )?;
         Ok(Self {

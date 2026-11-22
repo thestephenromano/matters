@@ -9,12 +9,18 @@ genesis = [prefix, "genesis", route, signer: hash48,
   [root-key: sig-key, recovery-key: kem-key, generation: u64, roster, admin: hash48, epoch: u64, checkpoint: hash48 / null,
    key-commitment: hash48]]
 membership = [prefix, "membership", route, signer: hash48,
-  [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key, [],
-   key-commitment: hash48]]
+  [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key,
+   frontier, key-commitment: hash48]]
 ; Signed by the root after every device is lost; the membership body, one admin member.
 root-recovery = [prefix, "root_recovery", route, signer: hash48,
-  [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key, [],
-   key-commitment: hash48]]
+  [generation: u64, sequence: u64, previous: hash48, roster, admin: hash48, epoch: u64, recovery-key: kem-key,
+   frontier, key-commitment: hash48]]
+; The historical closing frontier: for writers of devices that leave the roster
+; (or, in a root recovery, of the superseded generation), the exact retained
+; content prefix, as a writer-handoff closing head. Empty when nobody leaves.
+; Entries are strictly sorted by device, document and incarnation.
+frontier = [0*64 closing]
+closing = [device: hash48, document: id16, incarnation: id32, closing-head: hash48 / null]
 ; key-commitment = SHA-384(canonical CBOR of
 ;   ["matters-sync/v0/epoch-key-commitment", "matters-sync-pq-v0", application, tenant, collection,
 ;    generation, epoch, content-key32])

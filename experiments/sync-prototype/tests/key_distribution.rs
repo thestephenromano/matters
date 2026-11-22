@@ -665,6 +665,13 @@ fn independent_control_bytes_fingerprints_and_hpke_contexts_match() {
     }
     cddl_cat::validate_cbor_bytes("key-plaintext", schema, &bytes(&f, "key_plaintext_hex"))
         .unwrap();
+    // Production's populated closing frontiers (#45) match the schema too;
+    // this experiment's own parser still admits only the empty frontier.
+    for v in f["frontier_vectors"].as_array().unwrap() {
+        let wire = bytes(v, "wire_hex");
+        cddl_cat::validate_cbor_bytes("control", schema, &wire).unwrap();
+        assert!(parse(&wire).is_err());
+    }
 }
 
 #[test]

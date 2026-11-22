@@ -32,7 +32,7 @@ The root signer ID is its signing-key fingerprint. Device IDs bind both keys; ro
 | Kind | Exact body | Authority and supported subset |
 | --- | --- | --- |
 | `genesis` | `[root_key1952, recovery_kem_key1249, generation, roster, admin48, epoch, checkpoint48_or_null, key_commitment48]` | Root signature, independently supplied expected route and pinned root public key; generation 0, epoch 0, null checkpoint only. Commits to the epoch-0 content key. |
-| `membership` | `[generation, sequence, previous_manifest48, roster, admin48, epoch, recovery_kem_key1249, [], key_commitment48]` | Previous manifest's admin; generation 0; sequence and epoch each advance by exactly one; same admin/recovery keys; unchanged or reduced roster only. Commits to the new epoch's content key. |
+| `membership` | `[generation, sequence, previous_manifest48, roster, admin48, epoch, recovery_kem_key1249, frontier, key_commitment48]` | Previous manifest's admin; generation 0; sequence and epoch each advance by exactly one; same admin/recovery keys; unchanged or reduced roster only. Commits to the new epoch's content key. The experiment admits only an empty `frontier`; production populates it (see [Revocation](#revocation)). |
 | `writer_start` | `[manifest48, document16, device48, incarnation32, actor_u64, predecessor_incarnation32_or_null]` | Current roster device signs as itself; document is independently expected; actor and incarnation admission described below. |
 | `writer_handoff` | `[manifest48, document16, device48, incarnation32, actor_u64, predecessor_incarnation32, closing_head48_or_null]` | Current device signs a fresh successor and an exact closed content prefix. See [writer lifecycle](SYNC_WRITER_LIFECYCLE.md) for durable admission and historical eligibility. |
 | `key_envelope` | `[manifest48, epoch, recipient48, recipient_key_fingerprint48, "content-key", encapsulation1153, ciphertext, authority48]` | Current admin signs and is the authority; recipient must be in the current verified roster. |
@@ -45,7 +45,7 @@ A transition is verified using its named predecessor's admin, including when che
 
 Two independently valid successors of one predecessor freeze authority: retain both signed byte strings as fork evidence and reject further key distribution, writer admission and content opening. Neither timestamps nor relay arrival order resolves the fork. Signatures use fresh randomness; signing the same membership body again produces a distinct signed record and can constitute a fork. Retry must retain exact existing bytes. This experiment has no durable receipt/outbox implementation.
 
-Supported transitions are removal and epoch rotation with an empty closing frontier. Enrollment additions, admin transfer, nonempty historical frontiers, root recovery and recovery-recipient envelopes are explicitly unsupported. The admin chooses the next epoch's CEK before signing the transition, because the transition commits to it (see below). Removed devices cannot be envelope recipients under the known current manifest, and old envelopes and old epoch-key handles fail after a transition. Rotation cannot erase old keys; a withheld transition is not detectable from a root pin alone. There is no globally latest membership or immediate offline-revocation guarantee.
+The experiment supports removal and epoch rotation with an empty closing frontier. In the experiment, enrollment additions, admin transfer, nonempty historical frontiers, root recovery and recovery-recipient envelopes are explicitly unsupported. Production supports all of these except admin transfer; see the sections from [Production code](#production-code) on. The admin chooses the next epoch's CEK before signing the transition, because the transition commits to it (see below). Removed devices cannot be envelope recipients under the known current manifest, and old envelopes and old epoch-key handles fail after a transition. Rotation cannot erase old keys; a withheld transition is not detectable from a root pin alone. There is no globally latest membership or immediate offline-revocation guarantee.
 
 ## Epoch content-key commitment
 
@@ -89,7 +89,9 @@ The import gate accepts only a first `data` record with null predecessor, curren
 
 [Independent fixtures](../experiments/sync-prototype/tests/vectors/key-distribution/README.md) pin six complete structural messages, signing bytes, SHA-384 hashes, key fingerprints, device IDs, HPKE info/AAD and inner plaintext. Python cbor2/hashlib supplies the oracle; cddl-cat checks the wire shapes with its separate decoder. Ten malformed fixtures and every truncation of all six messages reject. The maximum-roster genesis compares both byte count and SHA-384, not length alone.
 
-The experiment chooses 1..16 roster members, 64 KiB maximum control input, at most 16 membership transitions and 16 admitted writer incarnations per authority instance. These budgets bound test support and preserve inspectable histories; they are not production capacity promises. The independent 16-member genesis is 58,899 bytes. One additional member, transition or writer is explicitly rejected. Input is capped before decoding; fixed key lengths and roster count are checked before copying. The existing content-record cap remains separate. These controls do not establish a decompression, engine CPU, memory or total cryptographic-work bound for hostile signed Loro payloads.
+The experiment chooses 1..16 roster members, 64 KiB maximum control input, at most 16 membership transitions and 16 admitted writer incarnations per authority instance. These budgets bound test support and preserve inspectable histories. The independent 16-member genesis is 58,899 bytes. In the experiment, one additional member, transition or writer is explicitly rejected.
+
+Production keeps the per-object budgets: 1..16 roster members, at most 64 closing-frontier entries, and 64 KiB per control. It has no lifetime cap on transitions, recoveries or writer incarnations. Each of those is a signed control the device stores anyway. A device has at most one active writer per document, because a second root or a second successor of one incarnation freezes its lineage. A handed-off incarnation is closed and no longer counts as active. So the active writers of a document are bounded by the roster, however often devices reopen. `authority_tests.rs` applies 20 transitions and 40 successive writers. `revocation_tests.rs` (`matters-core`) runs 40 reopen-and-resume cycles across two devices that keep sealing and receiving, and applies a removal and a recovery after 20 transitions. Input is capped before decoding; fixed key lengths and roster count are checked before copying. The existing content-record cap remains separate. These controls do not establish a decompression, engine CPU, memory or total cryptographic-work bound for hostile signed Loro payloads.
 
 The [active execution evidence](../experiments/sync-prototype/evidence/record-contract-2026-11-18.json) binds source, schemas, documents and fixture generators to a source commit. CI runs on every pull request and main push, checks its hashes, independently regenerates both fixture sets, and executes formatting, Clippy and the full prototype suite. This avoids a separate path allowlist drifting from the evidence manifest. Generator guard tests exercise drift and version-pin rejection with and without Python optimization. The key-distribution tests cover forged signers, changed recipients/keys, stale epochs, malformed authenticated key plaintext, invalid roster material, actor collisions, unsupported ceremonies and competing valid membership successors.
 
@@ -97,7 +99,7 @@ The control oracle uses patterned public bytes and invalid zero signatures. It p
 
 ## Remaining implementation gates
 
-Before application integration: durable authenticated membership/fork evidence and writer state; secure local key storage; root/enrollment possession ceremonies; recovery envelopes and all-devices-lost recovery; historical frontier admission; receive-chain/idempotency/quarantine semantics; crash-safe encrypted outbox and immutable retry bytes; restore/clone safety; task-domain import validation; aggregate crypto and hostile-import resource budgets; cross-target execution and independent review. The generic service API, acknowledged failure domain, transport/storage adoption and relay conformance remain with #34. The existing SQLite-backed task app remains unchanged.
+Before application integration: durable authenticated membership/fork evidence and writer state; secure local key storage; root/enrollment possession ceremonies; recovery envelopes and all-devices-lost recovery; historical frontier admission (in production, see [Revocation](#revocation)); receive-chain/idempotency/quarantine semantics; crash-safe encrypted outbox and immutable retry bytes; restore/clone safety; task-domain import validation; aggregate crypto and hostile-import resource budgets; cross-target execution and independent review. The generic service API, acknowledged failure domain, transport/storage adoption and relay conformance remain with #34. The existing SQLite-backed task app remains unchanged.
 
 The [review record](../experiments/sync-prototype/REVIEW_KEY_DISTRIBUTION.md) maps the review findings to their owning invariants and regression evidence.
 
@@ -111,7 +113,7 @@ The [writer lifecycle extension](SYNC_WRITER_LIFECYCLE.md) adds a distinct `writ
 
 ## Production code
 
-[`matters-sync`'s authority module](../crates/matters-sync/src/authority.rs) carries this contract into production for [#37](https://github.com/thestephenromano/matters/issues/37): the same message codec, authority rules, envelope transcripts, key commitment and budgets, on the content-record keys and codec of the same crate. [Its tests](../crates/matters-sync/tests/authority_tests.rs) check the independent golden fixtures above in place. The first-record Loro import gate stays prototype test support; chain position and engine admission belong to the durable receiver.
+[`matters-sync`'s authority module](../crates/matters-sync/src/authority.rs) carries this contract into production for [#37](https://github.com/thestephenromano/matters/issues/37): the same message codec, authority rules, envelope transcripts and key commitment, on the content-record keys and codec of the same crate. The production budgets are given above, and the closing frontier under [Revocation](#revocation). [Its tests](../crates/matters-sync/tests/authority_tests.rs) check the independent golden fixtures above in place. The first-record Loro import gate stays prototype test support; chain position and engine admission belong to the durable receiver.
 
 ## Enrollment
 
@@ -130,7 +132,7 @@ binding    = HMAC-SHA384(key("matters-sync/v0/enrollment"),
                    root48, manifest48, device48, signing_key1952, kem_key1249]))
 ```
 
-- **Invitation.** The admin draws 16 bytes of OS entropy and shows the invitation as a QR code. Alternatively it shows the 26-character code and publishes the offer under the lookup, so a device that has only the code can fetch the route, root ID and manifest. The code-holding device checks the offer's tag before using anything in it. The secret is one-time, and the admin's application forgets it after one accepted request.
+- **Invitation.** The admin draws 16 bytes (128 bits) of OS entropy, read directly through `getrandom`, and shows the invitation as a QR code. Alternatively it shows the 26-character code and publishes the offer under the lookup, so a device that has only the code can fetch the route, root ID and manifest. The code-holding device checks the offer's tag before using anything in it. The secret is one-time, and the admin's application forgets it after one accepted request.
 - **Request.** The new device pins the root by the invitation's root ID (`Authority::bootstrap_from_invitation`) and signs an `enrollment_request` with its own signing key, as the device ID of its two keys. It leaves the request in the relay's enrollment mailbox under the invitation's lookup ID, and the admin's device collects it there (SYNC_SERVICE_CONTRACT.md, #42).
 - **Acceptance.** `Authority::accept_enrollment` checks, before the admin signs anything:
   - the invitation's route, root and current manifest;
@@ -162,7 +164,7 @@ The secret's 128 bits face no offline attack before the admin uses it once; quan
 
 ## Recovery
 
-When every device is lost, a 256-bit recovery secret restores the collection. This follows the maintainer decisions of 2026-11-21 on [#37](https://github.com/thestephenromano/matters/issues/37). The user keeps the secret as 24 English BIP39 words; nothing else holds the private keys it derives. [The recovery module](../crates/matters-sync/src/authority/recovery.rs) implements it.
+When every device is lost, a 256-bit recovery secret restores the collection. All 256 bits are drawn from the OS through `getrandom`. This follows the maintainer decisions of 2026-11-21 on [#37](https://github.com/thestephenromano/matters/issues/37). The user keeps the secret as 24 English BIP39 words; nothing else holds the private keys it derives. [The recovery module](../crates/matters-sync/src/authority/recovery.rs) implements it.
 
 ```text
 seed(label)  = HKDF-SHA384(salt = suite, ikm = secret32,
@@ -186,7 +188,7 @@ root_recovery body = membership body, signed by the root under "matters-sync/v0/
   - one member, who is the admin;
   - the same recovery key;
   - a commitment to a fresh content key.
-- **Admitting a recovery** (`apply_recovery`). Every device checks the root signature against its pin. The recovery then becomes current even if generation N had later transitions the recoverer did not see, or was frozen by a membership fork, and it clears that freeze. From then on, any membership transition of an earlier generation is `Stale`, whoever signed it. Exact replays of accepted records still return a duplicate result. Two different valid recoveries to one generation retain both and freeze; a recovery to the next generation clears the freeze.
+- **Admitting a recovery** (`apply_recovery`). Every device checks the root signature against its pin. The recovery then becomes current even if generation N had later transitions the recoverer did not see, or was frozen by a membership fork, and it clears that freeze. From then on, any membership transition of an earlier generation is `Stale`, whoever signed it. Exact replays of accepted records still return a duplicate result. Two different valid recoveries to one generation retain both and freeze. Once frozen, a further different recovery to that generation keeps the first evidence pair, and the device stores nothing more of it. A recovery to the next generation clears the freeze.
 - **After recovery.** Earlier devices are no longer members: they re-enroll through an invitation from the new admin. Until then they keep their unsent work for explicit recovery.
 - **Through the relay (#42).** The recovering device signs in as the root (SYNC_SERVICE_CONTRACT.md, "The root's session"), reads the authority log, recovers locally, and publishes the root recovery and its recovery envelope. Its own writer claim then goes through its ordinary session.
 - **The recovery kit.** The keys derive from the words *and* the route, so recovering needs the route too. Applications show the relay address, the collection's ID (its tenant and collection) and the 24 words together, and the user keeps all three.
@@ -216,13 +218,17 @@ A device's membership survives restarts, and is never split between stores ([`ma
   - `sync_device`: the route, the document, the pinned root ID, the device ID, the keyring entry's name and the device's standing;
   - `sync_controls`: the signed control records the device accepted, in order, including the competing record of any fork;
   - `sync_envelopes`: the key envelopes addressed to the device, one per epoch.
-- **Replay on open.** Each open rebuilds the authority by replaying `sync_controls`, pinned by the stored root ID.
+- **Replay on open.** Each open rebuilds the authority by replaying `sync_controls`, pinned by the stored root ID. A stored control that this version refuses is skipped rather than failing the open. A control refused as `Fork` that adds no new evidence (its authority or lineage was already frozen) is not stored.
 - **One commit per change.** `apply_control` commits a transition, the new epoch's envelope and the device's standing in one transaction. If the device stays a member, the envelope is required, and without it nothing is stored.
 - **Sealing follows.** It continues under the new epoch's key, or stops when the device is removed or the authority freezes on a fork.
 
 **Writes always seal or wait.** A joined, active device seals every recorded write, keeping #36's rule that nothing is left to seal later. After an open, writes are refused until `resume_sync` loads the keys. Missing keys, or a keyring entry holding another device's keys, are explicit errors and change nothing.
 
 **Unsent work is kept.** A removed or frozen device keeps editing locally. Its writes are journalled, unsealed and unsent, for explicit recovery.
+
+**One writer per database.** Each open that seals is a new writer incarnation, and its claim hands off the previous one at its exact head. Two handles can be open on one database at once, such as the Qt and GTK front ends, or the app and the command line. The newer open's writer is then the active one: the newest row of `sync_writers`. Every write checks this inside its transaction, before anything is written. A write from an older handle is refused with `MattersError::Superseded`, and nothing is journalled or sealed. The caller reloads, and its next open becomes the writer. `tests/revocation_tests.rs` and `tests/sealing_tests.rs` cover this with two handles on one file.
+
+**Entropy.** Record IDs, content keys, device seeds, the recovery secret and signing randomness take 32 bytes from the OS, read directly through `getrandom`, so each carries 256 bits. The invitation secret takes 16 bytes, so 128 bits.
 
 `create_collection` makes the first device's collection in one transaction: the device's keys, the recovery words, the genesis signed by the words' root, and the device's own envelope of the first key. Its seeds reach the keyring before that commit. A crash in between leaves an unused keyring entry and no collection, and a retry starts clean.
 
@@ -243,11 +249,11 @@ A device's membership survives restarts, and is never split between stores ([`ma
 
 **Publishing.** Everything signed for others waits in `sync_publish`, and `outgoing_controls` returns exactly the stored bytes until `acknowledge_control`. Signing a transition again would fork the collection, so a retry never re-signs. A crash before the commit publishes nothing, and the admission can simply be made again.
 
-**A new device** (`start_enrollment`) generates its keys and signs its request under the invitation. The request is kept, so asking again returns the same bytes, and an invitation into another collection is refused meanwhile. `finish_enrollment` then takes:
+**A new device** (`start_enrollment`) generates its keys and signs its request under the invitation. The request is kept, so asking again under the same invitation returns the same bytes. A new invitation into the same collection (another secret or manifest, as when the first request never reached the admin) replaces the request. The new request is signed with the same device keys and bound to the new invitation. An invitation into another collection is refused until `cancel_enrollment` gives the pending one up. `finish_enrollment` then takes:
 - the collection's control records, ending with the admin's transition adding the device;
 - the envelopes the admin wrapped for it.
 
-It verifies all of them, requires an envelope for the current epoch, and turns sync on, stores everything and starts sealing in one transaction. Until then, nothing is half-joined.
+It verifies each object and skips any that fails, keeping only the controls it accepted. A forged writer claim, a stray enrollment request or a forged envelope therefore cannot block joining. It tries every candidate envelope, requires one for the current epoch, and turns sync on, stores what it accepted and starts sealing in one transaction. Until then, nothing is half-joined.
 
 **One document.** Every device seals for the same document of the collection, so a joining device needs nothing more to find it.
 
@@ -260,12 +266,16 @@ It verifies all of them, requires an envelope for the current epoch, and turns s
 - another collection's invitation while joining;
 - a crash before an admission commits.
 
+`tests/revocation_tests.rs` covers:
+- joining and recovering with an unsigned claim, an enrollment request and forged envelopes injected;
+- a replaced invitation, and a cancelled enrollment.
+
 ## Recovering, pausing and leaving
 
-**Recovering onto a new device.** `recover_collection` takes the 24 words, the collection's control records as the relay holds them, and its recovery envelopes. Then:
-1. It bootstraps from the root the words derive; other words fail with `Identity` before anything is stored.
-2. It opens every epoch key it has an envelope for.
-3. It signs the root recovery that makes the new device the sole admin of the next generation.
+**Recovering onto a new device.** `recover_collection` takes the 24 words, the collection's control records as the relay holds them, and its recovery envelopes. `recover_collection_holding` also takes the content records the relay holds. Then:
+1. It bootstraps from the root the words derive; other words fail with `Identity` before anything is stored. Controls that fail verification are skipped.
+2. It opens every epoch key it has an envelope for, trying every candidate envelope and skipping those that do not open.
+3. It signs the root recovery that makes the new device the sole admin of the next generation. Given records, the recovery closes every writer of the superseded generation at the head of the chain those records hold, at null where they hold nothing (see [Revocation](#revocation)).
 4. It keeps its own envelopes of the new key and the recovered ones, so later admissions can hand on history.
 5. It queues the recovery and its recovery envelope for publishing, all in one transaction.
 
@@ -286,11 +296,60 @@ It reports the manifests of epochs that had no recovery envelope. Their records 
 
 ## Writer admission in production
 
-Production admits a writer claim signed under any known manifest of the current membership generation, provided the claiming device was in that manifest's roster. The claim's signature is checked with the key that roster lists. The experiment admitted only claims signed under the current manifest.
+Production admits a writer claim signed under any known manifest of the current membership generation, provided the claiming device was in that manifest's roster *and is in the current roster*. The claim's signature is checked with the key that the claim manifest's roster lists. The experiment admitted only claims signed under the current manifest.
 
-The change follows from how claims are read. Replicas read the relay's authority log in order. A claim a device signs just before a concurrent transition therefore reaches every replica after it, and under the old rule every replica refused it, so that writer's records waited forever. #39's recorded-schedule convergence test found exactly this case.
+The first condition follows from how claims are read. Replicas read the relay's authority log in order. A claim a device signs just before a concurrent transition therefore reaches every replica after it, and under the experiment's rule every replica refused it, so that writer's records waited forever. #39's recorded-schedule convergence test found exactly this case. The second condition is revocation: a device that the current roster no longer lists claims no new writer.
 
-- **What admission grants:** nothing by itself. Each record is authorized against the roster of its own epoch (`Authority::authenticate_at`), so admitting a claim from an earlier manifest gives no device rights it lacked when it signed.
+- **What admission grants:** nothing by itself. Each record is authorized against the roster of its own epoch (`Authority::authenticate_at`), so admitting a claim from an earlier manifest gives no device rights it lacked when it signed. A removed device's records are further bounded by [Revocation](#revocation).
 - **Replays:** an admitted claim replayed later is the same step and changes nothing.
 - **Competing definitions:** these still freeze the lineage.
-- **Refused claims:** a claim under an unknown manifest, or one from a recovery's earlier generation, is stale. A device outside the claim manifest's roster is refused.
+- **Refused claims:** a claim under an unknown manifest, or one from a recovery's earlier generation, is stale. A device outside the claim manifest's roster is refused (`Unauthorized`). A device outside the current roster is refused (`Revoked`), unless a signed closing frontier names that exact writer.
+
+## Revocation
+
+A device leaves the roster in one of two ways: the admin removes it, or a root recovery supersedes its generation. A signed record it made earlier stays authentic, and its epoch's key cannot be taken back. So revocation bounds what is *admitted*: the leaving device's records are admitted only up to a prefix that the remaining authority signed. This is the historical closing frontier, the ninth field of the `membership` and `root_recovery` body ([CDDL](protocol/sync-key-distribution-v0.cddl)):
+
+```text
+frontier = [0*64 [device48, document16, incarnation32, closing_head48_or_null]]
+```
+
+Each entry names one writer incarnation of a device that is not in the new roster. Its closing head is SHA-384 of the last retained signed content record of that writer's chain, or null for an empty prefix. This is the exact-prefix meaning of a `writer_handoff`'s closing head ([writer lifecycle](SYNC_WRITER_LIFECYCLE.md)). Entries are strictly sorted by device, document and incarnation. A frontier never names a member of the roster it starts, and it names only devices that were members earlier in its history. An empty frontier is the no-removal case, and the existing vectors keep it byte for byte.
+
+**What the admin signs.** `remove_member` closes each of the removed device's writers that no signed prefix closes yet, at the head of the chain the admin holds:
+- the head it applied, or that the checkpoint it started from covered;
+- followed through the signed records it keeps waiting, while each step has exactly one successor;
+- null if it holds nothing of that writer.
+
+A writer already handed off at a signed head needs no entry of its own. Its prefix stays bounded by that handoff, provided the chain of handoffs after it reaches a writer the frontier names.
+
+**What a recovery signs.** `recover_collection_holding` closes every writer of the superseded generation at what the records it is given hold. `recover_collection` holds no records, so its recovery closes nothing yet, and the old generation's records are not admitted. Every later transition by the new admin (an admission, a rotation, a removal) closes such a writer at the head it then holds, once it holds something of it. A device recovering through the relay therefore passes the relay's records to `recover_collection_holding`. A receiver keeps a `Revoked` record waiting rather than discarding it, because it is signed and a later frontier may name its writer.
+
+**What receivers admit.** For a device not in the current roster:
+- A writer named by a frontier admits records up to its closing head. `writer_history` reports that head as the writer's `closed` boundary, so the receiver stops there exactly as for a handoff, and a record after it waits `AfterClose`. A record within the prefix still applies on a device that had not received it yet.
+- A writer handed off at a signed head admits records up to that head, if the handoffs after it lead to a named writer.
+- Any other writer admits nothing: `authenticate_at` refuses its records with `Revoked`, after their signature verifies.
+- A new `writer_start` or `writer_handoff` is refused with `Revoked`.
+
+The first signed entry for an incarnation binds, and a later one changes nothing. A removed device ID is never added back: rejoining is a fresh enrollment under new keys. These rules depend only on which controls were accepted, not on the order replicas read claims and transitions in.
+
+**The contract's scope.** An honest admin's frontier closes what the admin has seen. Records the removed device made but the admin never received are not admitted by anyone, even if the device made them before it was removed. A device that applied a removed device's records beyond the frontier before it learned of the removal keeps them, as for a handoff whose prefix it had passed. From then on it admits nothing more of that writer: a receiver refuses a writer's next record once its chain holds the closing head (a null head is held from the start). The frontier therefore bounds every record admitted after the removal is known. As before, a withheld transition is not detectable from a root pin alone.
+
+**Known limit: the authority log is not compacted.** The log only grows. It gains one writer claim of about 3.7 KB per app open, and a transition plus about 4.9 KB of envelope per member per membership change. The relay bounds a route by its byte quota and at most 2,048 transitions ([service contract](SYNC_SERVICE_CONTRACT.md)). A device that reads the whole log holds it in memory, under the client's caps:
+- **Joining or recovering:** the authority log up to 128 MiB. At 4 opens a day on each of 3 devices, this is 134,217,728 / (12 × 3,695 × 365) ≈ 8.3 years of opens. A single device at 4 opens a day has about 25 years. Membership changes add little at this scale: a change with 3 members is about 33 KB.
+- **Recovering:** the relay's content records up to 512 MiB as well. At about 4.8 KB per edit (the #40 workloads), that is about 110,000 edits, or about 6 years at 50 edits a day.
+
+Past either cap, joining or recovery fails with a retry. Nothing is lost, but a device cannot join until the log is compacted. Compaction would replace the claims of retired writers and old epochs' envelopes with a signed summary. It is not implemented.
+
+**Evidence:**
+- `authority_tests.rs`:
+  - records within, at and beyond a removal frontier;
+  - the same with the handoff and the removal read in either order;
+  - an empty frontier;
+  - a handed-off writer bounded through a named successor;
+  - malformed, unsorted and member-naming frontiers;
+  - a removed ID re-added;
+  - a recovery closing at what it holds, and one holding nothing.
+- `tests/vectors/key-distribution/generate.py` computes a removal frontier (one populated head, one null) and a root-recovery frontier independently. Both are checked byte for byte here, and with cddl-cat in the prototype.
+- `revocation_tests.rs` (`matters-core`):
+  - After A removes B, a record B signs under the old epoch, chained on its head, waits `AfterClose` on A and on a third device C. A record within the frontier still applies on C. B's claim after it reopens is refused by both.
+  - The same holds for a generation-0 device after a root recovery that holds its records.

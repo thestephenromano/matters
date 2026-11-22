@@ -774,3 +774,111 @@ async fn forks_are_kept_as_evidence_once_and_never_unverified() {
     ));
     db.finish().await;
 }
+
+/// Transitions are exempt from the byte quota, so a full route can still
+/// remove a device, and bounded instead by a per-route count (#45): the
+/// authority has no lifetime limit on them.
+#[tokio::test]
+async fn transitions_pass_a_full_quota_but_a_route_stores_a_bounded_number() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let mut c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    // A full byte quota refuses records, but still takes a transition.
+    db.relay.set_quota(&route(), Some(1)).await.unwrap();
+    let id = fresh();
+    let bytes = record(&c.admin, id, b"q", &route());
+    assert_eq!(
+        db.relay
+            .append(&route(), &c.admin.id(), &id, &bytes)
+            .await
+            .unwrap_err()
+            .code(),
+        "quota-exhausted"
+    );
+    let first = transition(&c, vec![c.admin.member(true)]);
+    db.relay
+        .put_authority(&route(), &record_hash(&first), &first)
+        .await
+        .unwrap();
+    c.authority.apply_membership(&first).unwrap();
+    // Stand-in rows fill the route to its transition cap, past the
+    // replayed high-water mark so the replay never reads them.
+    sqlx::query(
+        "INSERT INTO authority (route, sequence, digest, kind, bytes)
+         SELECT r.id, 1000000 + g, sha384(int8send(g)), 'membership', '\\x00'
+         FROM routes r, generate_series(1, $1) g",
+    )
+    .bind(matters_relay::MAX_STORED_TRANSITIONS - 1)
+    .execute(db.relay.pool())
+    .await
+    .unwrap();
+    let next = transition(&c, vec![c.admin.member(true)]);
+    assert_eq!(
+        db.relay
+            .put_authority(&route(), &record_hash(&next), &next)
+            .await
+            .unwrap_err()
+            .code(),
+        "quota-exhausted"
+    );
+    // An exact retry of a stored transition is still answered.
+    assert!(matches!(
+        db.relay
+            .put_authority(&route(), &record_hash(&first), &first)
+            .await
+            .unwrap(),
+        Appended::Existing(_)
+    ));
+    db.finish().await;
+}
+
+/// Writer claims and key envelopes have no count cap: every app open adds a
+/// claim, so a count would be a lifetime cap (#45). The byte quota bounds
+/// them, as it bounds records.
+#[tokio::test]
+async fn writer_claims_past_4096_are_stored_and_only_the_byte_quota_refuses_them() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    let put = |bytes: Vec<u8>| {
+        let relay = db.relay.clone();
+        let device = c.admin.id();
+        async move {
+            relay
+                .put_authority_as(&route(), Some(&device), &record_hash(&bytes), &bytes)
+                .await
+        }
+    };
+    // 4,096 claims already stored, as years of app opens leave them. Stand-in
+    // rows past the replayed high-water mark: the replay never reads claims.
+    sqlx::query(
+        "INSERT INTO authority (route, sequence, digest, kind, bytes)
+         SELECT r.id, 1000000 + g, sha384(int8send(g)), 'writer_start', '\\x00'
+         FROM routes r, generate_series(1, 4096) g",
+    )
+    .execute(db.relay.pool())
+    .await
+    .unwrap();
+    let claim = writer_start(&c, &c.admin, &c.admin);
+    assert!(matches!(put(claim).await.unwrap(), Appended::Stored(_)));
+    // A full byte quota refuses the next one with 507, storing nothing.
+    let used = used_bytes(&db).await;
+    db.relay
+        .set_quota(&route(), Some(used as u64))
+        .await
+        .unwrap();
+    let refused = put(writer_start(&c, &c.admin, &c.admin)).await.unwrap_err();
+    assert_eq!(refused.code(), "quota-exhausted");
+    assert_eq!(used_bytes(&db).await, used, "nothing stored");
+    db.finish().await;
+}

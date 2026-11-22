@@ -191,6 +191,7 @@ pub fn transition(c: &Collection, roster: Vec<authority::Member>) -> Vec<u8> {
                 admin: c.admin.id(),
                 epoch,
                 recovery_key: a.recovery().unwrap(),
+                frontier: vec![],
                 key_commitment: key_commitment(&route(), 0, epoch, &ContentKey::new([8; 32]))
                     .unwrap(),
             }),

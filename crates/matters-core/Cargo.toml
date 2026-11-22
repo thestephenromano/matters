@@ -12,6 +12,9 @@ rusqlite = { version = "=0.43.0", features = ["bundled", "uuid"] }
 # Dates and times; chrono is unmaintained (RUSTSEC-2026-0543, #123).
 jiff = { version = "0.2", features = ["serde"] }
 uuid = { version = "1.10", features = ["v4", "v8", "serde"] }
+# OS entropy for keys, secrets and record IDs (#45); already in the
+# lockfile through uuid.
+getrandom = "=0.4.3"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "6.0"

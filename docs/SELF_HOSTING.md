@@ -162,7 +162,13 @@ Clients retry `503` with backoff, and an upload cut off this way is "not known t
 matters-relay quota <route-hex> bytes <n>     # or records <n>, or none
 ```
 
-The byte quota counts records and authority objects. At its quota, a route refuses new records, writer claims and key envelopes with `quota-exhausted`. Membership transitions are still stored, so the admin can remove a device from a full route. Nothing stored is deleted, and clients keep the refused work locally.
+The byte quota counts records and authority objects. At its quota, a route refuses new records, writer claims and key envelopes with `quota-exhausted`. Membership transitions are still stored, so the admin can remove a device from a full route. They have their own bound instead: at most 2,048 transitions and recoveries per route (about 128 MiB at most), past which they too get `quota-exhausted`. Nothing stored is deleted, and clients keep the refused work locally.
+
+A route's authority log grows with use. It never shrinks, because the relay deletes nothing:
+- **Every app open** stores one signed writer claim, about 3.7 KB (a `writer_handoff` is 3,695 bytes, almost all of it the ML-DSA-65 signature).
+- **Every membership change** stores the transition (up to 64 KiB with a full roster), plus a key envelope of about 4.9 KB for each member and one for the recovery key.
+
+Writer claims and key envelopes have no count limit. The byte quota is what bounds them, as it bounds records. Set a byte quota on every route you serve (`matters-relay quota <route-hex> bytes <n>`). Without one, nothing bounds a route's storage, and a member that uploads without end fills the disk.
 
 ## Ownership and retention
 
