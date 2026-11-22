@@ -1,7 +1,7 @@
 use jiff::civil::Date;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::schema::{
     MIGRATION_V10, MIGRATION_V11, MIGRATION_V12, MIGRATION_V13, MIGRATION_V14, MIGRATION_V15,
@@ -113,11 +113,59 @@ impl Database {
             sealing: Arc::new(Mutex::new(Default::default())),
         };
         db.init_schema()?;
-        let engine = super::sync::load_engine(&db.conn.lock().unwrap())?;
-        *db.engine.lock().unwrap() = engine;
-        db.sealing.lock().unwrap().required =
-            super::membership::joined_and_active(&db.conn.lock().unwrap())?;
+        let engine = super::sync::load_engine(&db.lock_conn())?;
+        *db.lock_engine(&db.lock_conn())? = engine;
+        let required = super::membership::joined_and_active(&db.lock_conn())?;
+        db.lock_sealing().required = required;
         Ok(db)
+    }
+
+    /// The connection, locked. A panic while it was held (#45) poisons the
+    /// lock; the connection is then taken back as SQLite left it: whatever
+    /// the panicking call had not committed is rolled back, and writes are
+    /// allowed again, so one panic does not disable every later call.
+    pub(crate) fn lock_conn(&self) -> MutexGuard<'_, Connection> {
+        match self.conn.lock() {
+            Ok(conn) => conn,
+            Err(poisoned) => {
+                self.conn.clear_poison();
+                let conn = poisoned.into_inner();
+                if !conn.is_autocommit() {
+                    let _ = conn.execute_batch("ROLLBACK");
+                }
+                let _ = conn.pragma_update(None, "query_only", false);
+                conn
+            }
+        }
+    }
+
+    /// The engine, locked after `conn`. A panic while it was held may have
+    /// left it half-changed, so it is rebuilt from the journal, as the
+    /// connection now holds it.
+    fn lock_engine(
+        &self,
+        conn: &Connection,
+    ) -> Result<MutexGuard<'_, Option<crate::crdt::Document>>> {
+        match self.engine.lock() {
+            Ok(engine) => Ok(engine),
+            Err(poisoned) => {
+                self.engine.clear_poison();
+                let mut engine = poisoned.into_inner();
+                super::receive::reload(conn, &mut engine)?;
+                Ok(engine)
+            }
+        }
+    }
+
+    /// The sealing and membership state, locked after `engine`. It holds
+    /// keys and the authority as last committed; a call that panicked
+    /// while it held them changed nothing durable, and a membership it had
+    /// taken out reads as sync not resumed until the next resume.
+    fn lock_sealing(&self) -> MutexGuard<'_, super::sealing::SyncKeys> {
+        self.sealing.lock().unwrap_or_else(|poisoned| {
+            self.sealing.clear_poison();
+            poisoned.into_inner()
+        })
     }
 
     /// The connection and the engine, locked in that order.
@@ -125,8 +173,8 @@ impl Database {
         &self,
         f: impl FnOnce(&mut Connection, &mut Option<crate::crdt::Document>) -> Result<T>,
     ) -> Result<T> {
-        let mut conn = self.conn.lock().unwrap();
-        let mut engine = self.engine.lock().unwrap();
+        let mut conn = self.lock_conn();
+        let mut engine = self.lock_engine(&conn)?;
         f(&mut conn, &mut engine)
     }
 
@@ -140,14 +188,14 @@ impl Database {
             &mut super::sealing::SyncKeys,
         ) -> Result<T>,
     ) -> Result<T> {
-        let mut conn = self.conn.lock().unwrap();
-        let mut engine = self.engine.lock().unwrap();
-        let mut sealing = self.sealing.lock().unwrap();
+        let mut conn = self.lock_conn();
+        let mut engine = self.lock_engine(&conn)?;
+        let mut sealing = self.lock_sealing();
         f(&mut conn, &mut engine, &mut sealing)
     }
 
     fn init_schema(&self) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn();
         conn.execute_batch(SCHEMA_V1)?;
         let now = crate::clock::now_millis();
         conn.execute(
@@ -188,7 +236,7 @@ impl Database {
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.pragma_update(None, "query_only", true)?;
         let result = f(&conn);
         conn.pragma_update(None, "query_only", false)?;
@@ -202,8 +250,19 @@ impl Database {
     where
         F: FnOnce(&mut Connection) -> Result<T>,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn();
         f(&mut conn)
+    }
+
+    /// Panic while holding every lock, halfway through an explicit write
+    /// transaction, as a bug inside a call would: tests check that the
+    /// database recovers (#45). Only with the `test-support` feature.
+    #[cfg(feature = "test-support")]
+    pub fn panic_holding_locks(&self) {
+        let _ = self.with_sealing(|conn, _, _| -> Result<()> {
+            conn.execute_batch("BEGIN; DELETE FROM tasks;")?;
+            panic!("a bug while every lock is held");
+        });
     }
 
     /// Run one `UPDATE … WHERE id = ?` that sets `assignments` (with
@@ -307,7 +366,7 @@ impl Database {
     }
 
     pub fn get_area(&self, id: &str) -> Result<Option<Area>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(&format!("SELECT {AREA_COLUMNS} FROM areas WHERE id = ?1"))?;
         let area = stmt.query_row(params![id], Self::map_area_row).optional()?;
         Ok(area)
@@ -330,7 +389,7 @@ impl Database {
     }
 
     fn select_areas(&self, filter_and_order: &str) -> Result<Vec<Area>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {AREA_COLUMNS} FROM areas WHERE {filter_and_order}"
         ))?;
@@ -513,7 +572,7 @@ impl Database {
     }
 
     pub fn get_project(&self, id: &str) -> Result<Option<Project>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {PROJECT_COLUMNS} FROM projects WHERE id = ?1"
         ))?;
@@ -647,7 +706,7 @@ impl Database {
     }
 
     fn select_projects(&self, filter_and_order: &str) -> Result<Vec<Project>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {PROJECT_COLUMNS} FROM projects WHERE {filter_and_order}"
         ))?;
@@ -794,7 +853,7 @@ impl Database {
     }
 
     pub fn get_heading(&self, id: &str) -> Result<Option<Heading>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         Ok(conn
             .query_row(
                 "SELECT id, project_id, title, sort_order, created_at, updated_at
@@ -829,7 +888,7 @@ impl Database {
     /// A project's headings in their order. Tied keys (headings never
     /// arranged) fall back to the order they were added.
     pub fn list_headings_for_project(&self, project_id: &str) -> Result<Vec<Heading>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, title, sort_order, created_at, updated_at
              FROM headings WHERE project_id = ?1
@@ -1005,7 +1064,7 @@ impl Database {
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(&format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"))?;
         let task = stmt.query_row(params![id], Self::map_task_row).optional()?;
         Ok(task)
@@ -1408,7 +1467,7 @@ impl Database {
     }
 
     pub fn get_checklist_item(&self, id: &str) -> Result<Option<ChecklistItem>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         Ok(conn
             .query_row(
                 "SELECT id, task_id, title, is_completed, sort_order, created_at, updated_at
@@ -1422,7 +1481,7 @@ impl Database {
     /// A task's checklist in its order. Tied keys (items never arranged)
     /// fall back to the order they were added.
     pub fn list_checklist_items(&self, task_id: &str) -> Result<Vec<ChecklistItem>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, task_id, title, is_completed, sort_order, created_at, updated_at
              FROM checklist_items WHERE task_id = ?1
@@ -1480,7 +1539,7 @@ impl Database {
         &self,
         task_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, ChecklistProgress>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut progress = std::collections::HashMap::new();
         for chunk in task_ids.chunks(PROGRESS_CHUNK) {
             let marks = vec!["?"; chunk.len()].join(",");
