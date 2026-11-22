@@ -8,7 +8,7 @@ use matters_sync::authority::{self, Hash, Route};
 use matters_sync::record::record_hash;
 use matters_sync::wire::SIGNATURE_BYTES;
 
-use crate::store::{route_authority, route_row, Relay, RelayError};
+use crate::store::{route_row, Relay, RelayError};
 
 /// How long a challenge may be answered.
 pub const CHALLENGE_MS: u64 = 60_000;
@@ -47,8 +47,9 @@ impl Relay {
     ) -> Result<([u8; 32], u64)> {
         let mut tx = self.pool().begin().await?;
         let row = route_row(&mut tx, route, false).await?;
-        let authority = route_authority(&mut tx, route, &row).await?;
-        if !crate::store::member(&authority, device) && *device != authority.root() {
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let authority = &replayed.authority;
+        if !crate::store::member(authority, device) && *device != authority.root() {
             return Err(RelayError::NotAMember);
         }
         sqlx::query("DELETE FROM challenges WHERE route = $1 AND expires_at < $2")
@@ -100,7 +101,8 @@ impl Relay {
         .await?;
         // Using up the challenge commits even when the answer is refused.
         let fresh = used.is_some_and(|expires| expires >= ms(now));
-        let authority = route_authority(&mut tx, route, &row).await?;
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let authority = &replayed.authority;
         // A member's enrolled key, or for the root's ID the root key: a
         // recovering device's session (#42).
         let key = authority
@@ -175,12 +177,13 @@ impl Relay {
             return Err(RelayError::SessionExpired);
         }
         let device: Hash = device.try_into().map_err(|_| RelayError::Malformed)?;
-        let authority = route_authority(&mut tx, route, &row).await?;
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let authority = &replayed.authority;
         let root = device == authority.root();
         if root && !root_allowed {
             return Err(RelayError::NotAMember);
         }
-        if !root && !crate::store::member(&authority, &device) {
+        if !root && !crate::store::member(authority, &device) {
             return Err(RelayError::Revoked);
         }
         Ok(device)

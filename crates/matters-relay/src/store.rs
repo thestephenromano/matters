@@ -4,6 +4,8 @@ use matters_sync::{wire, VerificationKey};
 use minicbor::{Decoder, Encoder};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// The most records or authority objects one page returns.
 pub const MAX_PAGE: u32 = 256;
@@ -192,6 +194,7 @@ pub struct Snapshots {
 #[derive(Clone)]
 pub struct Relay {
     pool: PgPool,
+    authorities: Arc<Mutex<AuthorityCache>>,
 }
 
 /// A provisioned route's row.
@@ -199,6 +202,72 @@ pub(crate) struct RouteRow {
     pub(crate) id: i64,
     root_key: Vec<u8>,
     pub(crate) generation: [u8; 16],
+    /// The authority log's length and the digest at its end: with the row
+    /// and the generation, what names one replay of the log.
+    authority_high_water: i64,
+    authority_head: Option<Vec<u8>>,
+}
+
+/// The route's authority, replayed from its stored log.
+pub(crate) struct Replayed {
+    pub(crate) authority: Authority,
+}
+
+/// Routes whose replayed authority the relay keeps in memory.
+const CACHED_AUTHORITIES: usize = 4096;
+
+/// What names one replay: the route's row, its generation, and the log's
+/// length and last digest. Authority rows are append-only, so a key names
+/// exactly one stored log. A restore keeps sequences but not the process:
+/// the restore procedure restarts the relay, and installs a new
+/// generation besides.
+type CacheKey = (i64, [u8; 16], i64, Option<Vec<u8>>);
+
+/// The newest replay of each route's authority (#45): a session challenge,
+/// a session and every authenticated request would otherwise replay the
+/// whole log, an ML-DSA verification per transition, each time. A route
+/// keeps only its newest entry, so a new authority object replaces it.
+pub(crate) struct AuthorityCache<V = Arc<Replayed>> {
+    entries: HashMap<i64, (CacheKey, u64, V)>,
+    tick: u64,
+}
+
+impl<V> Default for AuthorityCache<V> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            tick: 0,
+        }
+    }
+}
+
+impl<V: Clone> AuthorityCache<V> {
+    fn get(&mut self, key: &CacheKey) -> Option<V> {
+        self.tick += 1;
+        let tick = self.tick;
+        let (stored, used, replayed) = self.entries.get_mut(&key.0)?;
+        if stored != key {
+            return None;
+        }
+        *used = tick;
+        Some(replayed.clone())
+    }
+
+    fn put(&mut self, key: CacheKey, replayed: V) {
+        self.tick += 1;
+        if self.entries.len() >= CACHED_AUTHORITIES && !self.entries.contains_key(&key.0) {
+            // The least recently used route makes room.
+            if let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, used, _))| *used)
+                .map(|(id, _)| *id)
+            {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(key.0, (key, self.tick, replayed));
+    }
 }
 
 pub(crate) fn random16() -> [u8; 16] {
@@ -230,7 +299,10 @@ impl Relay {
             .run(&pool)
             .await
             .map_err(|e| RelayError::Unavailable(e.into()))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            authorities: Arc::default(),
+        })
     }
 
     /// Whether the relay can serve: its database answers within a second.
@@ -381,15 +453,15 @@ impl Relay {
     pub async fn is_member(&self, route: &Route, device: &Hash) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let row = route_row(&mut tx, route, false).await?;
-        let authority = route_authority(&mut tx, route, &row).await?;
-        Ok(member(&authority, device))
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        Ok(member(&replayed.authority, device))
     }
 
     /// The route's authority as the relay has accepted it.
     pub async fn authority(&self, route: &Route) -> Result<Authority> {
         let mut tx = self.pool.begin().await?;
         let row = route_row(&mut tx, route, false).await?;
-        route_authority(&mut tx, route, &row).await
+        Ok(self.replayed(&mut tx, route, &row).await?.authority.clone())
     }
 
     /// Append a content record uploaded by `device` (the session's device)
@@ -428,8 +500,8 @@ impl Relay {
                 digest,
             }));
         }
-        let authority = route_authority(&mut tx, route, &row).await?;
-        if !member(&authority, device) {
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        if !member(&replayed.authority, device) {
             return Err(RelayError::NotAMember);
         }
         let size = i64::try_from(bytes.len()).map_err(|_| RelayError::TooLarge)?;
@@ -517,7 +589,7 @@ impl Relay {
         }
         match parsed.message.body {
             Body::Membership(_) | Body::RootRecovery(_) => {
-                let mut authority = route_authority(&mut tx, route, &row).await?;
+                let mut authority = self.replayed(&mut tx, route, &row).await?.authority.clone();
                 let applied = match parsed.message.body {
                     Body::Membership(_) => authority.apply_membership(bytes),
                     _ => authority.apply_recovery(bytes),
@@ -807,10 +879,18 @@ pub(crate) async fn route_row(
     lock: bool,
 ) -> Result<RouteRow> {
     let sql = if lock {
-        "SELECT id, root_key, generation FROM routes
+        "SELECT id, root_key, generation, authority_high_water,
+                (SELECT digest FROM authority a
+                 WHERE a.route = routes.id AND a.sequence = routes.authority_high_water)
+                AS authority_head
+         FROM routes
          WHERE application = $1 AND tenant = $2 AND collection = $3 FOR UPDATE"
     } else {
-        "SELECT id, root_key, generation FROM routes
+        "SELECT id, root_key, generation, authority_high_water,
+                (SELECT digest FROM authority a
+                 WHERE a.route = routes.id AND a.sequence = routes.authority_high_water)
+                AS authority_head
+         FROM routes
          WHERE application = $1 AND tenant = $2 AND collection = $3"
     };
     let row = sqlx::query(sql)
@@ -824,22 +904,60 @@ pub(crate) async fn route_row(
         id: row.get("id"),
         root_key: row.get("root_key"),
         generation: generation_of(row.get("generation"))?,
+        authority_high_water: row.get("authority_high_water"),
+        authority_head: row.get("authority_head"),
     })
+}
+
+impl Relay {
+    /// The route's authority as of `row`, read in `tx`: from the cache when
+    /// the log is unchanged since it was last replayed, else replayed.
+    pub(crate) async fn replayed(
+        &self,
+        tx: &mut Transaction<'static, Postgres>,
+        route: &Route,
+        row: &RouteRow,
+    ) -> Result<Arc<Replayed>> {
+        let key: CacheKey = (
+            row.id,
+            row.generation,
+            row.authority_high_water,
+            row.authority_head.clone(),
+        );
+        let cached = self
+            .authorities
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key);
+        if let Some(replayed) = cached {
+            return Ok(replayed);
+        }
+        let replayed = Arc::new(replay(tx, route, row).await?);
+        self.authorities
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put(key, replayed.clone());
+        Ok(replayed)
+    }
 }
 
 /// Replay the route's genesis, transitions and recoveries, in acceptance
 /// order, against its pinned root.
-pub(crate) async fn route_authority(
+async fn replay(
     tx: &mut Transaction<'static, Postgres>,
     route: &Route,
     row: &RouteRow,
-) -> Result<Authority> {
+) -> Result<Replayed> {
+    // Up to the high-water mark the row was read at, so that the replay is
+    // exactly the one its cache key names, even under READ COMMITTED.
     let rows = sqlx::query(
         "SELECT kind, bytes FROM authority
-         WHERE route = $1 AND kind IN ('genesis', 'membership', 'root_recovery')
+         WHERE route = $1 AND sequence <= $2
+           AND kind IN ('genesis', 'membership', 'root_recovery')
          ORDER BY sequence",
     )
     .bind(row.id)
+    .bind(row.authority_high_water)
     .fetch_all(&mut **tx)
     .await?;
     let mut rows = rows.into_iter();
@@ -859,7 +977,7 @@ pub(crate) async fn route_authority(
             Err(error) => return Err(RelayError::Authority(error)),
         }
     }
-    Ok(authority)
+    Ok(Replayed { authority })
 }
 
 pub(crate) async fn insert_authority(
@@ -887,4 +1005,34 @@ pub(crate) async fn insert_authority(
     .execute(&mut **tx)
     .await?;
     Ok(sequence(seq))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AuthorityCache, CACHED_AUTHORITIES};
+
+    #[test]
+    fn the_authority_cache_keeps_each_routes_newest_replay_and_is_bounded() {
+        let mut cache = AuthorityCache::<u32>::default();
+        let key =
+            |id: i64, high_water: i64| (id, [1; 16], high_water, Some(vec![high_water as u8]));
+        cache.put(key(1, 1), 10);
+        assert_eq!(cache.get(&key(1, 1)), Some(10));
+        // A longer log, another generation or another head is another replay.
+        assert_eq!(cache.get(&key(1, 2)), None);
+        assert_eq!(cache.get(&(1, [2; 16], 1, Some(vec![1]))), None);
+        assert_eq!(cache.get(&(1, [1; 16], 1, Some(vec![9]))), None);
+        cache.put(key(1, 2), 11);
+        assert_eq!(cache.get(&key(1, 1)), None, "replaced, not kept beside");
+        assert_eq!(cache.get(&key(1, 2)), Some(11));
+        // Full: the least recently used route makes room.
+        for id in 2..=CACHED_AUTHORITIES as i64 {
+            cache.put(key(id, 1), 0);
+        }
+        assert_eq!(cache.get(&key(1, 2)), Some(11));
+        cache.put(key(0, 1), 1);
+        assert_eq!(cache.entries.len(), CACHED_AUTHORITIES);
+        assert_eq!(cache.get(&key(2, 1)), None, "evicted");
+        assert_eq!(cache.get(&key(1, 2)), Some(11), "recently used, kept");
+    }
 }
