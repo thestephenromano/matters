@@ -79,6 +79,12 @@ pub const MAX_PAGES_PER_ROUND: usize = 16_384;
 /// for its envelope on a later page, and when a joining or recovering
 /// device reads the whole log.
 const MAX_HELD_AUTHORITY_BYTES: usize = 128 * 1024 * 1024;
+/// The most bytes of content records a recovering device holds at once: it
+/// reads the whole record log so the root recovery can close each lost
+/// writer at the head the relay holds (#45). Checkpoints keep the log a
+/// collection needs far below this; a longer one fails with a retry rather
+/// than growing without bound.
+const MAX_HELD_RECOVERY_RECORD_BYTES: usize = 512 * 1024 * 1024;
 /// The longest wait a relay's `retry-after-ms` is followed for.
 pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
 /// How long the hints WebSocket may take to connect.
@@ -1042,21 +1048,34 @@ impl<S: LocalStore + 'static> Client<S> {
     /// The whole authority log from its start, keeping the entries `keep`
     /// selects, up to [`MAX_HELD_AUTHORITY_BYTES`] of them.
     async fn whole_authority(&self, r: &str, keep: impl Fn(&[u8]) -> bool) -> Result<Vec<Vec<u8>>> {
-        let mut reader = LogReader::new(self, r, "authority", None);
-        let (mut log, mut held) = (Vec::new(), 0);
+        self.whole_log(r, "authority", MAX_HELD_AUTHORITY_BYTES, keep)
+            .await
+    }
+
+    /// The whole of `log` from its start, read and checked page by page,
+    /// keeping the entries `keep` selects, up to `cap` bytes of them.
+    async fn whole_log(
+        &self,
+        r: &str,
+        log: &'static str,
+        cap: usize,
+        keep: impl Fn(&[u8]) -> bool,
+    ) -> Result<Vec<Vec<u8>>> {
+        let mut reader = LogReader::new(self, r, log, None);
+        let (mut entries, mut held) = (Vec::new(), 0);
         while let Some(page) = reader.next().await? {
             for (_, bytes) in page.entries {
                 if !keep(&bytes) {
                     continue;
                 }
                 held += bytes.len();
-                if held > MAX_HELD_AUTHORITY_BYTES {
-                    return Err(retry("the relay's authority log is too large"));
+                if held > cap {
+                    return Err(retry(format!("the relay's {log} log is too large")));
                 }
-                log.push(bytes);
+                entries.push(bytes);
             }
         }
-        Ok(log)
+        Ok(entries)
     }
 
     /// Run rounds until `shutdown` resolves: on hints, local edits, every
@@ -1477,7 +1496,7 @@ impl<R: RecoveringStore> LocalStore for RootAsLocal<R> {
 }
 
 /// A device recovering a collection from its recovery words (#42). It
-/// signs in as the collection's root and reads the authority log. It then
+/// signs in as the collection's root and reads the authority and record logs. It then
 /// recovers locally, as the next generation's sole admin, and publishes the
 /// root recovery. From then on it syncs with an ordinary [`Client`].
 pub struct Recoverer<R: RecoveringStore + 'static> {
@@ -1508,8 +1527,18 @@ impl<R: RecoveringStore + 'static> Recoverer<R> {
                 Err(_) => {}
             }
         }
+        // The content records too, so the recovery closes each lost
+        // writer at the head the relay holds (#45). Only this route's data
+        // records matter; checkpoint parts stand outside the chains.
+        let records = self
+            .client
+            .whole_log(&r, "records", MAX_HELD_RECOVERY_RECORD_BYTES, |bytes| {
+                wire::parse_for_route(bytes, &route.application, &route.tenant, &route.collection)
+                    .is_ok_and(|p| p.header.kind == wire::Kind::Data)
+            })
+            .await?;
         let store = self.store.clone();
-        tokio::task::spawn_blocking(move || store.recover(&controls, &envelopes))
+        tokio::task::spawn_blocking(move || store.recover(&controls, &envelopes, &records))
             .await
             .map_err(|e| SyncError::Store(e.to_string().into()))?
             .map_err(SyncError::Store)?;

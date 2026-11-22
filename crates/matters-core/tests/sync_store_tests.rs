@@ -356,7 +356,15 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
     for (_, e) in a.sync_envelopes().unwrap() {
         envelopes.push(e);
     }
-    recovering.recover(&controls, &envelopes).unwrap();
+    // The relay's records too, so the recovery closes A's writer at the
+    // head they hold (#45).
+    let held: Vec<Vec<u8>> = a
+        .outgoing_records()
+        .unwrap()
+        .into_iter()
+        .map(|r| r.bytes)
+        .collect();
+    recovering.recover(&controls, &envelopes, &held).unwrap();
     assert!(r.sync_enabled());
     let outgoing = recovering.outgoing().unwrap();
     assert!(outgoing
@@ -366,17 +374,10 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
         recovering.acknowledge(*seq).unwrap();
     }
     assert!(recovering.outgoing().unwrap().is_empty());
-    // The store recovers from the authority log alone, so the recovery
-    // closes none of the lost device's writers: their records are not
-    // admitted until a signed frontier names them (#45). Recovering with
-    // the relay's records (`recover_collection_holding`) reads them back.
-    for record in a.outgoing_records().unwrap() {
-        assert!(matches!(
-            r.receive_record(&record.bytes),
-            Err(matters_core::MattersError::Validation(m)) if m.contains("removed")
-        ));
+    for record in &held {
+        r.receive_record(record).unwrap();
     }
-    assert!(r.get_task(&id(1)).unwrap().is_none());
+    assert_eq!(r.get_task(&id(1)).unwrap().unwrap().title, "kept");
     // Other words are another root.
     let wrong = Recovering {
         db: r.clone(),
