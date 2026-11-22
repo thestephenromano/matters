@@ -217,10 +217,14 @@ fn a_removed_devices_records_apply_only_within_the_admins_signed_frontier() {
             ))
         ));
     }
-    // A record of that refused writer never applies either.
+    // A record of that refused writer never applies either: it is kept as
+    // revoked, as a later frontier might still name its writer.
     b.add_task(&mut Task::new(id(3), "reopened", 2.0)).unwrap();
     let newest = records(&b).pop().unwrap();
-    assert!(t.c.receive_record(&newest).is_err());
+    assert_eq!(
+        t.c.receive_record(&newest).unwrap(),
+        Received::Pending(Waiting::Revoked)
+    );
     assert!(!has(&t.c, 3));
 }
 

@@ -360,3 +360,91 @@ CREATE TABLE IF NOT EXISTS sync_covered (
     digest BLOB NOT NULL CHECK (length(digest) = 48)
 );
 "#;
+
+/// v19: receiving hardened after the internal review (#45,
+/// docs/SYNC_DURABLE_RECEIVE.md).
+///
+/// - `sync_received` and `sync_covered` keep each record's predecessor and
+///   chain position, so a second signed successor of one record is seen as
+///   a fork, and a checkpoint's head is compared with the record at its
+///   position. Rows from before have neither, and take no part in either.
+/// - `sync_pending` is keyed by record ID and digest, so bytes under a
+///   genuine record's ID never displace it, and indexed by what each row
+///   waits for, so a newly applied record or key retries only the rows it
+///   unblocks. `authenticated` is 0 for a row whose signature this device
+///   could not check yet (its manifest is unknown): such rows are kept
+///   within a small budget, never applied or carried without
+///   authentication. The v16 rows move to `sync_pending_v16` and are
+///   received again, once, at the next receive.
+/// - `sync_quarantine` keeps each refused record's ID, digest and reason,
+///   with its bytes when a member signed it (evidence), within a budget.
+/// - `sync_frozen` is a writer lineage this device froze on evidence it
+///   holds: a second signed successor, or a record past a closing head.
+/// - `sync_checkpoint_parts` are grouped by checkpoint and author, so one
+///   member's parts never spoil another's checkpoint; `digest` compares a
+///   part met again by its bytes, and `part` and `total` let a checkpoint
+///   be assembled once, when its last part arrives;
+///   `sync_checkpoint_waits` records a complete checkpoint that waits for a
+///   writer's admission, so it is judged again only once that arrives;
+///   `sync_checkpoints.verified` is 0 for one accepted on claims this device
+///   could not check, which never decides another.
+pub const MIGRATION_V19: &str = r#"
+ALTER TABLE sync_received ADD COLUMN previous BLOB
+    CHECK (previous IS NULL OR length(previous) = 48);
+ALTER TABLE sync_received ADD COLUMN position INTEGER;
+CREATE INDEX IF NOT EXISTS idx_sync_received_link ON sync_received(incarnation, previous);
+CREATE INDEX IF NOT EXISTS idx_sync_received_position ON sync_received(incarnation, position);
+CREATE INDEX IF NOT EXISTS idx_sync_received_digest ON sync_received(incarnation, digest);
+ALTER TABLE sync_covered ADD COLUMN previous BLOB
+    CHECK (previous IS NULL OR length(previous) = 48);
+ALTER TABLE sync_covered ADD COLUMN position INTEGER;
+CREATE INDEX IF NOT EXISTS idx_sync_covered_link ON sync_covered(incarnation, previous);
+CREATE INDEX IF NOT EXISTS idx_sync_covered_position ON sync_covered(incarnation, position);
+ALTER TABLE sync_pending RENAME TO sync_pending_v16;
+CREATE TABLE sync_pending (
+    seq INTEGER PRIMARY KEY,
+    record_id BLOB NOT NULL CHECK (length(record_id) = 32),
+    digest BLOB NOT NULL CHECK (length(digest) = 48),
+    bytes BLOB NOT NULL,
+    reason TEXT NOT NULL,
+    awaits BLOB,
+    authenticated INTEGER NOT NULL CHECK (authenticated IN (0, 1)),
+    UNIQUE (record_id, digest)
+);
+CREATE INDEX idx_sync_pending_awaits ON sync_pending(reason, awaits);
+CREATE INDEX idx_sync_pending_digest ON sync_pending(digest);
+CREATE TABLE sync_quarantine (
+    seq INTEGER PRIMARY KEY,
+    record_id BLOB NOT NULL CHECK (length(record_id) = 32),
+    digest BLOB NOT NULL CHECK (length(digest) = 48),
+    reason TEXT NOT NULL,
+    bytes BLOB,
+    UNIQUE (record_id, digest)
+);
+CREATE TABLE sync_frozen (
+    author BLOB PRIMARY KEY CHECK (length(author) = 48),
+    reason TEXT NOT NULL,
+    -- The digest of the record already held at the contested place, if any.
+    held BLOB CHECK (held IS NULL OR length(held) = 48),
+    -- The signed record that contradicted it.
+    bytes BLOB NOT NULL
+);
+ALTER TABLE sync_checkpoint_parts ADD COLUMN digest BLOB
+    CHECK (digest IS NULL OR length(digest) = 48);
+-- The part's index, and on part 0 the checkpoint's part count, so a
+-- checkpoint is assembled only once all its parts are here.
+ALTER TABLE sync_checkpoint_parts ADD COLUMN part INTEGER;
+ALTER TABLE sync_checkpoint_parts ADD COLUMN total INTEGER;
+CREATE INDEX IF NOT EXISTS idx_sync_checkpoint_parts_group
+    ON sync_checkpoint_parts(checkpoint, author);
+CREATE INDEX IF NOT EXISTS idx_sync_checkpoint_parts_author
+    ON sync_checkpoint_parts(author);
+CREATE TABLE sync_checkpoint_waits (
+    checkpoint BLOB NOT NULL CHECK (length(checkpoint) = 48),
+    author BLOB NOT NULL CHECK (length(author) = 48),
+    incarnation BLOB NOT NULL CHECK (length(incarnation) = 32),
+    PRIMARY KEY (checkpoint, author)
+);
+ALTER TABLE sync_checkpoints ADD COLUMN verified INTEGER NOT NULL DEFAULT 1
+    CHECK (verified IN (0, 1));
+"#;

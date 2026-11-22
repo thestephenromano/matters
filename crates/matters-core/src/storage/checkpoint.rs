@@ -6,20 +6,31 @@
 //!   pending records;
 //! - seals the parts as `snapshot` records to publish, in one transaction.
 //!
-//! Received parts are kept until their checkpoint is complete. It is then
-//! judged against what this device holds:
-//! 1. the snapshot's own version and frontier must be the statement's;
-//! 2. each listed writer must be admitted, under its listed author, and
-//!    every actor in the version must be one of theirs;
-//! 3. where this device holds a listed chain as far, the head must be the
-//!    one it holds there;
+//! Received parts are kept, grouped by checkpoint and author, until their
+//! checkpoint is complete; one member's parts never spoil another's. An
+//! author's parts are held to one checkpoint's worth ([`format::MAX_PARTS`]),
+//! and a part of an author's newer checkpoint drops the parts of its
+//! earlier ones. A complete checkpoint is assembled once, when its last
+//! part arrives, and judged against what this device holds:
+//! 1. each listed writer must be admitted, under its listed author: one not
+//!    admitted yet makes the checkpoint wait, recorded, before its snapshot
+//!    is imported, and it is judged again only once that writer arrives;
+//! 2. the snapshot's own version and frontier must be the statement's, and
+//!    every actor in the version must be a listed writer's;
+//! 3. where this device holds a listed chain as far, the record at the
+//!    listed length must be the listed head;
 //! 4. each writer's counter must agree with the chain lengths.
 //!
-//! What it is then compared with the latest accepted checkpoint decides:
-//! - a contradiction is refused, and kept as evidence;
+//! What it is then compared with the latest checkpoint this device accepted
+//! and could verify decides:
+//! - a contradiction is refused, and its coverage kept as evidence;
 //! - an older one is kept as superseded and never becomes the latest, so a
 //!   relay cannot roll a device back;
-//! - a newer one is accepted.
+//! - a newer one is accepted. One that lists a chain further than this
+//!   device holds it is accepted unverified: it never becomes the latest,
+//!   so claims this device cannot check never decide another checkpoint.
+//!
+//! Decided checkpoints beyond [`KEEP_DECIDED`] are pruned, oldest first.
 //!
 //! Nothing a device already holds is replaced. A device with history
 //! imports nothing from a checkpoint.
@@ -48,7 +59,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use super::db::Database;
 use super::membership::{Joined, HOME_DOCUMENT};
 use super::sealing::seal_snapshot;
-use super::sync::{crash_point, load_engine, rebuild_rows};
+use super::sync::{crash_point, rebuild_rows};
 use crate::crdt::{self, Document};
 use crate::error::{MattersError, Result};
 
@@ -56,6 +67,9 @@ use crate::error::{MattersError, Result};
 pub const ENGINE: &str = "loro-1";
 /// The document layout checkpoints carry. A new layout bumps it.
 pub const DOCUMENT_SCHEMA: u64 = 1;
+/// Refused, superseded and unverified checkpoints kept, newest first; and,
+/// apart from those, accepted ones.
+pub const KEEP_DECIDED: i64 = 32;
 
 /// What became of a checkpoint part.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +187,40 @@ fn holds(conn: &Connection, incarnation: &Id, digest: &Hash, own: bool) -> Resul
         .is_some())
 }
 
+/// The digest of the record at `position` (from 1) of chain
+/// `incarnation`, where this device knows it: its own chain, a record it
+/// received, or one it met again past a checkpoint it started from. Rows
+/// received before v19 have no position.
+fn at_position(
+    conn: &Connection,
+    incarnation: &Id,
+    position: u64,
+    own: bool,
+) -> Result<Option<Hash>> {
+    let inc = incarnation.as_slice();
+    if own {
+        let bytes: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT bytes FROM sync_records WHERE incarnation = ?1 ORDER BY seq
+                 LIMIT 1 OFFSET ?2",
+                params![inc, position as i64 - 1],
+                |r| r.get(0),
+            )
+            .optional()?;
+        return Ok(bytes.map(|b| record_hash(&b)));
+    }
+    conn.query_row(
+        "SELECT digest FROM sync_received WHERE incarnation = ?1 AND position = ?2
+         UNION ALL SELECT digest FROM sync_covered WHERE incarnation = ?1 AND position = ?2
+         LIMIT 1",
+        params![inc, position as i64],
+        |r| r.get::<_, Vec<u8>>(0),
+    )
+    .optional()?
+    .map(stored)
+    .transpose()
+}
+
 /// Every chain this device holds records of, as a checkpoint lists them.
 fn writers(conn: &Connection, joined: &Joined) -> Result<Vec<Writer>> {
     let mut out = Vec::new();
@@ -191,10 +239,11 @@ fn writers(conn: &Connection, joined: &Joined) -> Result<Vec<Writer>> {
     Ok(out)
 }
 
+/// The latest checkpoint this device accepted and could verify.
 fn latest(conn: &Connection) -> Result<Option<Coverage>> {
     let bytes: Option<Vec<u8>> = conn
         .query_row(
-            "SELECT coverage FROM sync_checkpoints WHERE state = 'accepted'
+            "SELECT coverage FROM sync_checkpoints WHERE state = 'accepted' AND verified = 1
              ORDER BY seq DESC LIMIT 1",
             [],
             |r| r.get(0),
@@ -207,65 +256,76 @@ fn latest(conn: &Connection) -> Result<Option<Coverage>> {
 
 /// How a complete checkpoint compares with what this device holds.
 enum Verdict {
-    Accept,
+    /// Newer than the latest: `verified` when this device holds every
+    /// listed chain as far as it is listed.
+    Accept {
+        verified: bool,
+    },
     Supersede,
     Refuse(String),
     /// It names a writer whose admission has not arrived yet.
-    Wait,
+    Wait(Id),
 }
 
-/// Checks 1 and 2: the parts of the judgement that need no history.
-fn consistent(joined: &Joined, c: &Checkpoint) -> Result<std::result::Result<(), Verdict>> {
+/// Checks 1 and 2: the parts of the judgement that need no history. The
+/// writers are checked first, so a checkpoint that must wait imports no
+/// snapshot.
+fn consistent(joined: &Joined, c: &Checkpoint) -> std::result::Result<(), Verdict> {
     let coverage = &c.coverage;
     if coverage.engine != ENGINE {
-        return Ok(Err(Verdict::Refuse(format!(
+        return Err(Verdict::Refuse(format!(
             "unknown engine {}",
             coverage.engine
-        ))));
+        )));
     }
     if coverage.schema > DOCUMENT_SCHEMA {
-        return Ok(Err(Verdict::Supersede));
-    }
-    match crdt::snapshot_version(&c.snapshot) {
-        Ok((version, frontiers))
-            if version == coverage.version && frontiers == coverage.frontiers => {}
-        Ok(_) => {
-            return Ok(Err(Verdict::Refuse(
-                "the snapshot does not match its coverage".into(),
-            )))
-        }
-        Err(_) => return Ok(Err(Verdict::Refuse("not a full-history snapshot".into()))),
+        return Err(Verdict::Supersede);
     }
     let histories = joined.authority.writer_histories(HOME_DOCUMENT);
     let mut actors = BTreeMap::new();
     for w in &coverage.writers {
         let Some(history) = histories.get(&w.incarnation) else {
-            return Ok(Err(Verdict::Wait));
+            return Err(Verdict::Wait(w.incarnation));
         };
         if history.device != w.author {
-            return Ok(Err(Verdict::Refuse(
+            return Err(Verdict::Refuse(
                 "a writer listed under another author".into(),
-            )));
+            ));
         }
         actors.insert(history.actor, w);
     }
-    let version = crdt::decode_version(&coverage.version)?;
+    let Ok(version) = crdt::decode_version(&coverage.version) else {
+        return Err(Verdict::Refuse("a malformed version".into()));
+    };
     if version.keys().any(|actor| !actors.contains_key(actor)) {
-        return Ok(Err(Verdict::Refuse(
+        return Err(Verdict::Refuse(
             "operations of an actor no listed writer holds".into(),
-        )));
+        ));
     }
-    Ok(Ok(()))
+    match crdt::snapshot_version(&c.snapshot) {
+        Ok((version, frontiers))
+            if version == coverage.version && frontiers == coverage.frontiers =>
+        {
+            Ok(())
+        }
+        Ok(_) => Err(Verdict::Refuse(
+            "the snapshot does not match its coverage".into(),
+        )),
+        Err(_) => Err(Verdict::Refuse("not a full-history snapshot".into())),
+    }
 }
 
 fn judge(conn: &Connection, joined: &Joined, doc: &Document, c: &Checkpoint) -> Result<Verdict> {
-    if let Err(verdict) = consistent(joined, c)? {
+    if let Err(verdict) = consistent(joined, c) {
         return Ok(verdict);
     }
     let coverage = &c.coverage;
     let histories = joined.authority.writer_histories(HOME_DOCUMENT);
-    let theirs = crdt::decode_version(&coverage.version)?;
+    let Ok(theirs) = crdt::decode_version(&coverage.version) else {
+        return Ok(Verdict::Refuse("a malformed version".into()));
+    };
     let mine = crdt::decode_version(&crdt::encode_version(&doc.version()))?;
+    let mut verified = true;
     for w in &coverage.writers {
         let actor = histories[&w.incarnation].actor;
         let (t, m) = (
@@ -285,13 +345,19 @@ fn judge(conn: &Connection, joined: &Joined, doc: &Document, c: &Checkpoint) -> 
                 }
             }
             std::cmp::Ordering::Greater => {
-                let known = if w.records > held.base {
-                    holds(conn, &w.incarnation, &w.head, held.own)?
-                } else if w.records == held.base {
+                // The record at the listed length must be the listed head.
+                let known = if w.records == held.base && !held.own {
                     held.base_head == Some(w.head)
                 } else {
-                    // Inside what this device knows only by its length.
-                    true
+                    match at_position(conn, &w.incarnation, w.records, held.own)? {
+                        Some(digest) => digest == w.head,
+                        // Received before positions were kept.
+                        None if w.records > held.base => {
+                            holds(conn, &w.incarnation, &w.head, held.own)?
+                        }
+                        // Inside what this device knows only by its length.
+                        None => true,
+                    }
                 };
                 if !known {
                     return Ok(fork());
@@ -304,13 +370,16 @@ fn judge(conn: &Connection, joined: &Joined, doc: &Document, c: &Checkpoint) -> 
                 if t <= m {
                     return Ok(counters());
                 }
+                // Further than this device holds: nothing here can refute
+                // the listed head.
+                verified = false;
             }
         }
     }
     Ok(match latest(conn)? {
-        None => Verdict::Accept,
+        None => Verdict::Accept { verified },
         Some(known) => match coverage.follows(&known) {
-            Ok(()) => Verdict::Accept,
+            Ok(()) => Verdict::Accept { verified },
             Err(format::Error::Fork) => {
                 Verdict::Refuse("it contradicts an accepted checkpoint".into())
             }
@@ -325,12 +394,38 @@ fn record(
     coverage: &[u8],
     state: &str,
     reason: Option<&str>,
+    verified: bool,
 ) -> Result<()> {
     tx.execute(
-        "INSERT INTO sync_checkpoints (id, coverage, state, reason, journal)
-         VALUES (?1, ?2, ?3, ?4, (SELECT COUNT(*) FROM sync_journal))
+        "INSERT INTO sync_checkpoints (id, coverage, state, reason, journal, verified)
+         VALUES (?1, ?2, ?3, ?4, (SELECT COUNT(*) FROM sync_journal), ?5)
          ON CONFLICT (id) DO NOTHING",
-        params![id.as_slice(), coverage, state, reason],
+        params![id.as_slice(), coverage, state, reason, verified],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_checkpoint_waits WHERE checkpoint = ?1",
+        params![id.as_slice()],
+    )?;
+    prune(tx)
+}
+
+/// Keep [`KEEP_DECIDED`] of the checkpoints that never decide another
+/// (refused, superseded, unverified) and as many accepted ones besides,
+/// newest first. The latest accepted is never pruned.
+fn prune(tx: &Connection) -> Result<()> {
+    tx.execute(
+        "DELETE FROM sync_checkpoints WHERE seq IN (
+             SELECT seq FROM sync_checkpoints
+             WHERE state != 'accepted' OR verified = 0
+             ORDER BY seq DESC LIMIT -1 OFFSET ?1)",
+        params![KEEP_DECIDED],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_checkpoints WHERE seq IN (
+             SELECT seq FROM sync_checkpoints
+             WHERE state = 'accepted' AND verified = 1
+             ORDER BY seq DESC LIMIT -1 OFFSET ?1)",
+        params![KEEP_DECIDED],
     )?;
     Ok(())
 }
@@ -350,44 +445,102 @@ fn decided(conn: &Connection, id: &Hash) -> Result<Option<Checkpointed>> {
     }))
 }
 
-/// Keep one authenticated, opened part, then judge its checkpoint if it
-/// is complete, in the caller's transaction.
+/// Keep one authenticated, opened part, then judge its checkpoint if this
+/// part completes it, in the caller's transaction. `Err` refuses the part's
+/// record: it is no part, or its author already sent a checkpoint's worth.
 pub(super) fn keep_part(
     tx: &Connection,
     engine: &Option<Document>,
     joined: &Joined,
     record_id: &[u8; 32],
+    digest: &Hash,
     sealed: &Sealed,
     plaintext: &[u8],
-) -> Result<Checkpointed> {
-    let part = format::parse_part(plaintext)
-        .map_err(|e| invalid(format!("record refused: checkpoint part: {e}")))?;
+) -> Result<std::result::Result<Checkpointed, String>> {
+    let part = match format::parse_part(plaintext) {
+        Ok(p) => p,
+        Err(e) => return Ok(Err(e.to_string())),
+    };
+    let total = match part.coverage.map(Coverage::parse).transpose() {
+        Ok(c) => c.map(|c| c.parts),
+        Err(e) => return Ok(Err(e.to_string())),
+    };
     let id = part.id;
+    let author = sealed.author.as_slice();
+    // An author's newer checkpoint supersedes its earlier, undecided ones.
     tx.execute(
-        "INSERT INTO sync_checkpoint_parts (record_id, checkpoint, author, incarnation, epoch, plaintext)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (record_id) DO NOTHING",
+        "DELETE FROM sync_checkpoint_parts WHERE author = ?1 AND checkpoint != ?2",
+        params![author, id.as_slice()],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_checkpoint_waits WHERE author = ?1 AND checkpoint != ?2",
+        params![author, id.as_slice()],
+    )?;
+    if let Some(outcome) = decided(tx, &id)? {
+        return Ok(Ok(outcome));
+    }
+    tx.execute(
+        "INSERT INTO sync_checkpoint_parts
+             (record_id, checkpoint, author, incarnation, epoch, plaintext, digest, part, total)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT (record_id) DO NOTHING",
         params![
             record_id.as_slice(),
             id.as_slice(),
-            sealed.author.as_slice(),
+            author,
             sealed.incarnation.as_slice(),
             sealed.epoch as i64,
-            plaintext
+            plaintext,
+            digest.as_slice(),
+            part.index as i64,
+            total.map(|t| t as i64)
         ],
     )?;
-    tx.execute(
-        "DELETE FROM sync_pending WHERE record_id = ?1",
-        params![record_id.as_slice()],
+    let (kept, have, unindexed, total): (i64, i64, i64, Option<i64>) = tx.query_row(
+        "SELECT COUNT(*), COUNT(DISTINCT part), COUNT(*) - COUNT(part), MAX(total)
+         FROM sync_checkpoint_parts WHERE checkpoint = ?1 AND author = ?2",
+        params![id.as_slice(), author],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    finish(tx, engine, joined, &id)
+    if kept as u64 > format::MAX_PARTS {
+        drop_parts(tx, &id, author, "more parts than one checkpoint has")?;
+        return Ok(Err("more parts than one checkpoint has".into()));
+    }
+    // Assembled once, when the last part arrives.
+    if unindexed == 0 && total.is_none_or(|t| have < t) {
+        return Ok(Ok(Checkpointed::Part));
+    }
+    Ok(Ok(finish(tx, engine, joined, &id, author)?))
 }
 
-/// Judge checkpoint `id` from its kept parts, if they are complete.
+/// Refuse an author's parts of checkpoint `id` that do not assemble: their
+/// records are quarantined, and the parts dropped. Nothing is recorded
+/// under the checkpoint's ID, so another member's parts of it stand.
+fn drop_parts(tx: &Connection, id: &Hash, author: &[u8], reason: &str) -> Result<()> {
+    tx.execute(
+        "INSERT INTO sync_quarantine (record_id, digest, reason)
+         SELECT record_id, digest, ?3 FROM sync_checkpoint_parts
+         WHERE checkpoint = ?1 AND author = ?2 AND digest IS NOT NULL
+         ON CONFLICT (record_id, digest) DO NOTHING",
+        params![id.as_slice(), author, format!("checkpoint part: {reason}")],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_checkpoint_parts WHERE checkpoint = ?1 AND author = ?2",
+        params![id.as_slice(), author],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_checkpoint_waits WHERE checkpoint = ?1 AND author = ?2",
+        params![id.as_slice(), author],
+    )?;
+    Ok(())
+}
+
+/// Judge checkpoint `id` from `author`'s kept parts, if they are complete.
 fn finish(
     tx: &Connection,
     engine: &Option<Document>,
     joined: &Joined,
     id: &Hash,
+    author: &[u8],
 ) -> Result<Checkpointed> {
     if let Some(outcome) = decided(tx, id)? {
         if !matches!(outcome, Checkpointed::Refused(_)) {
@@ -401,9 +554,9 @@ fn finish(
     let parts: Vec<(Sealed, Vec<u8>)> = {
         let mut stmt = tx.prepare(
             "SELECT author, incarnation, epoch, plaintext FROM sync_checkpoint_parts
-             WHERE checkpoint = ?1",
+             WHERE checkpoint = ?1 AND author = ?2",
         )?;
-        let rows = stmt.query_map(params![id.as_slice()], |r| {
+        let rows = stmt.query_map(params![id.as_slice(), author], |r| {
             Ok((
                 r.get::<_, Vec<u8>>(0)?,
                 r.get::<_, Vec<u8>>(1)?,
@@ -432,7 +585,7 @@ fn finish(
     let checkpoint = match format::assemble(&borrowed) {
         Err(error) => {
             let reason = error.to_string();
-            record(tx, id, &[], "refused", Some(&reason))?;
+            drop_parts(tx, id, author, &reason)?;
             return Ok(Checkpointed::Refused(reason));
         }
         Ok(Assembled::Incomplete { .. }) => return Ok(Checkpointed::Part),
@@ -441,17 +594,25 @@ fn finish(
     let doc = engine.as_ref().ok_or_else(|| invalid("sync is off"))?;
     let coverage = checkpoint.coverage.encode()?;
     let outcome = match judge(tx, joined, doc, &checkpoint)? {
-        Verdict::Wait => return Ok(Checkpointed::Part),
-        Verdict::Accept => {
-            record(tx, id, &coverage, "accepted", None)?;
+        Verdict::Wait(incarnation) => {
+            tx.execute(
+                "INSERT INTO sync_checkpoint_waits (checkpoint, author, incarnation)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT (checkpoint, author) DO UPDATE SET incarnation = excluded.incarnation",
+                params![id.as_slice(), author, incarnation.as_slice()],
+            )?;
+            return Ok(Checkpointed::Part);
+        }
+        Verdict::Accept { verified } => {
+            record(tx, id, &coverage, "accepted", None, verified)?;
             Checkpointed::Accepted
         }
         Verdict::Supersede => {
-            record(tx, id, &coverage, "superseded", None)?;
+            record(tx, id, &coverage, "superseded", None, true)?;
             Checkpointed::Superseded
         }
         Verdict::Refuse(reason) => {
-            record(tx, id, &coverage, "refused", Some(&reason))?;
+            record(tx, id, &coverage, "refused", Some(&reason), true)?;
             return Ok(Checkpointed::Refused(reason));
         }
     };
@@ -462,102 +623,104 @@ fn finish(
     Ok(outcome)
 }
 
-/// Judge again every complete checkpoint that waited for a writer, in the
-/// caller's transaction.
+/// Judge again each complete checkpoint that waited for a writer now
+/// admitted, in the caller's transaction. The others are not touched.
 pub(super) fn finish_waiting(
     conn: &Connection,
     engine: &Option<Document>,
     joined: &Joined,
 ) -> Result<()> {
-    let ids: Vec<Vec<u8>> = {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT checkpoint FROM sync_checkpoint_parts
-             WHERE checkpoint NOT IN (SELECT id FROM sync_checkpoints)",
-        )?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
-        rows.collect::<rusqlite::Result<_>>()?
-    };
-    for id in ids {
-        finish(conn, engine, joined, &stored(id)?)?;
-    }
-    Ok(())
-}
-
-/// A pending data record's place in its chain.
-struct Link {
-    record_id: [u8; 32],
-    previous: Option<Hash>,
-    incarnation: [u8; 32],
-}
-
-/// Recognise covered records met again: walk each chain a checkpoint
-/// started back from its covered head, by hash, through the pending
-/// records. Each one found is held already, so it is recorded as received
-/// and no longer pending.
-pub(super) fn walk_covered(conn: &Connection, joined: &Joined) -> Result<()> {
-    let chains: Vec<(Vec<u8>, Vec<u8>)> = {
+    let histories = joined.authority.writer_histories(HOME_DOCUMENT);
+    let ready: Vec<(Vec<u8>, Vec<u8>)> = {
         let mut stmt =
-            conn.prepare("SELECT incarnation, COALESCE(reach, base_head) FROM sync_receive_base")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        rows.collect::<rusqlite::Result<_>>()?
-    };
-    if chains.is_empty() {
-        return Ok(());
-    }
-    let pending: BTreeMap<Hash, Link> = {
-        let mut stmt = conn.prepare("SELECT bytes FROM sync_pending")?;
-        let rows = stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
-        let mut out = BTreeMap::new();
-        for bytes in rows {
-            let bytes = bytes?;
-            let Ok(p) = wire::parse(&bytes, joined.route.content(&HOME_DOCUMENT)) else {
-                continue;
-            };
-            if p.header.kind == wire::Kind::Data {
-                out.insert(
-                    record_hash(&bytes),
-                    Link {
-                        record_id: *p.header.record_id,
-                        previous: p.header.previous.copied(),
-                        incarnation: *p.header.incarnation,
-                    },
-                );
+            conn.prepare("SELECT checkpoint, author, incarnation FROM sync_checkpoint_waits")?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let incarnation: Id = stored(row.get(2)?)?;
+            if histories.contains_key(&incarnation) {
+                out.push((row.get(0)?, row.get(1)?));
             }
         }
         out
     };
-    let tx = conn;
-    for (incarnation, reach) in chains {
+    for (id, author) in ready {
+        conn.execute(
+            "DELETE FROM sync_checkpoint_waits WHERE checkpoint = ?1 AND author = ?2",
+            params![id, author],
+        )?;
+        finish(conn, engine, joined, &stored(id)?, &author)?;
+    }
+    Ok(())
+}
+
+/// Recognise covered records met again: walk each chain a checkpoint
+/// started back from its covered head, by hash, through the pending
+/// records, looked up by digest. Each one found is held already, so it is
+/// kept apart as covered, with its predecessor and position, and no longer
+/// pending. The checkpoint vouches for the hash, so these need no
+/// authentication.
+pub(super) fn walk_covered(conn: &Connection, joined: &Joined) -> Result<()> {
+    let chains: Vec<(Vec<u8>, Vec<u8>, i64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT incarnation, COALESCE(reach, base_head), base FROM sync_receive_base",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for (incarnation, reach, base) in chains {
         let mut at: Hash = stored(reach)?;
         let mut moved = false;
-        while let Some(Link {
-            record_id,
-            previous,
-            incarnation: inc,
-        }) = pending.get(&at)
-        {
-            if inc.as_slice() != incarnation.as_slice() {
+        let mut covered: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sync_covered WHERE incarnation = ?1",
+            params![incarnation],
+            |r| r.get(0),
+        )?;
+        loop {
+            let row: Option<Vec<u8>> = conn
+                .query_row(
+                    "SELECT bytes FROM sync_pending WHERE digest = ?1 LIMIT 1",
+                    params![at.as_slice()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(bytes) = row else {
+                break;
+            };
+            let Ok(p) = wire::parse(&bytes, joined.route.content(&HOME_DOCUMENT)) else {
+                break;
+            };
+            if p.header.kind != wire::Kind::Data
+                || p.header.incarnation.as_slice() != incarnation.as_slice()
+            {
                 break;
             }
             // Counted in the base already: kept apart as covered, so it is
             // known by its ID and hash without counting twice.
-            tx.execute(
-                "INSERT INTO sync_covered (record_id, incarnation, digest)
-                 VALUES (?1, ?2, ?3) ON CONFLICT (record_id) DO NOTHING",
-                params![record_id.as_slice(), inc.as_slice(), at.as_slice()],
+            conn.execute(
+                "INSERT INTO sync_covered (record_id, incarnation, digest, previous, position)
+                 VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (record_id) DO NOTHING",
+                params![
+                    p.header.record_id.as_slice(),
+                    incarnation,
+                    at.as_slice(),
+                    p.header.previous.map(|h| h.as_slice()),
+                    base - covered
+                ],
             )?;
-            tx.execute(
-                "DELETE FROM sync_pending WHERE record_id = ?1",
-                params![record_id.as_slice()],
+            conn.execute(
+                "DELETE FROM sync_pending WHERE record_id = ?1 AND digest = ?2",
+                params![p.header.record_id.as_slice(), at.as_slice()],
             )?;
+            covered += 1;
             moved = true;
-            match previous {
-                Some(p) => at = *p,
+            match p.header.previous {
+                Some(previous) => at = *previous,
                 None => break,
             }
         }
         if moved {
-            tx.execute(
+            conn.execute(
                 "UPDATE sync_receive_base SET reach = ?1 WHERE incarnation = ?2",
                 params![at.as_slice(), incarnation],
             )?;
@@ -590,7 +753,10 @@ impl Database {
     /// synced: every record it wrote acknowledged by the relay, and its
     /// last pull, which ended at `cursor`, complete. The caller passes the
     /// cursor right after that pull. Returns the checkpoint's ID, or `None`
-    /// when a record of its own still waits for the relay.
+    /// when none can be made now: a record of its own still waits for the
+    /// relay, the engine holds operations aside for missing dependencies,
+    /// or more authenticated records wait than a checkpoint carries. Only
+    /// pending records whose signature was checked are carried.
     pub fn create_checkpoint(&self, cursor: Option<Cursor>) -> Result<Option<Hash>> {
         self.with_sealing(|conn, engine, sync| {
             let joined = sync
@@ -602,7 +768,14 @@ impl Database {
                 .as_ref()
                 .ok_or_else(|| invalid("this device does not write"))?;
             let doc = engine.as_ref().ok_or_else(|| invalid("sync is off"))?;
+            // Operations the engine holds aside, for dependencies it lacks,
+            // would be in no snapshot's version: no checkpoint then.
+            if doc.has_pending() {
+                return Ok(None);
+            }
             let tx = conn.transaction()?;
+            // A handle whose writer another open replaced makes none.
+            super::sealing::fence(&tx, sealing)?;
             let unacked: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM sync_records WHERE acked = 0",
                 [],
@@ -611,8 +784,19 @@ impl Database {
             if unacked > 0 {
                 return Ok(None);
             }
+            // Only records a member's signature was checked on travel.
+            let carried: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM sync_pending WHERE authenticated = 1",
+                [],
+                |r| r.get(0),
+            )?;
+            if carried as usize > format::MAX_PENDING {
+                return Ok(None);
+            }
             let pending: Vec<Vec<u8>> = {
-                let mut stmt = tx.prepare("SELECT bytes FROM sync_pending ORDER BY seq")?;
+                let mut stmt = tx.prepare(
+                    "SELECT bytes FROM sync_pending WHERE authenticated = 1 ORDER BY seq",
+                )?;
                 let rows = stmt.query_map([], |r| r.get(0))?;
                 rows.collect::<rusqlite::Result<_>>()?
             };
@@ -640,7 +824,14 @@ impl Database {
                     params![record_id.as_slice(), id.as_slice(), index as i64, bytes],
                 )?;
             }
-            record(&tx, &id, &checkpoint.coverage.encode()?, "accepted", None)?;
+            record(
+                &tx,
+                &id,
+                &checkpoint.coverage.encode()?,
+                "accepted",
+                None,
+                true,
+            )?;
             crash_point("checkpoint-before-commit");
             tx.commit()?;
             Ok(Some(id))
@@ -654,7 +845,8 @@ impl Database {
         self.with_conn(|conn| {
             let (journal, at): (i64, Option<i64>) = conn.query_row(
                 "SELECT (SELECT COUNT(*) FROM sync_journal),
-                        (SELECT journal FROM sync_checkpoints WHERE state = 'accepted'
+                        (SELECT journal FROM sync_checkpoints
+                         WHERE state = 'accepted' AND verified = 1
                          ORDER BY seq DESC LIMIT 1)",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
@@ -692,9 +884,28 @@ impl Database {
         })
     }
 
-    /// The coverage of the latest accepted checkpoint.
+    /// The coverage of the latest checkpoint accepted here: the latest
+    /// this device verified, or, while it verified none, the latest it
+    /// accepted on claims it could not check.
     pub fn latest_checkpoint(&self) -> Result<Option<Coverage>> {
-        self.with_conn(latest)
+        self.with_conn(|conn| {
+            if let Some(verified) = latest(conn)? {
+                return Ok(Some(verified));
+            }
+            let bytes: Option<Vec<u8>> = conn
+                .query_row(
+                    "SELECT coverage FROM sync_checkpoints WHERE state = 'accepted'
+                     ORDER BY seq DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            bytes
+                .map(|b| {
+                    Coverage::parse(&b).map_err(|e| MattersError::Engine(format!("stored: {e}")))
+                })
+                .transpose()
+        })
     }
 
     /// Every complete checkpoint seen, oldest first, as `(ID, state,
@@ -751,7 +962,7 @@ impl Database {
                     return Err(invalid("the checkpoint is incomplete"))
                 }
             };
-            match consistent(joined, &checkpoint)? {
+            match consistent(joined, &checkpoint) {
                 Ok(()) => {}
                 Err(Verdict::Refuse(reason)) => {
                     return Err(invalid(format!("checkpoint refused: {reason}")))
@@ -775,7 +986,10 @@ impl Database {
                     params![checkpoint.snapshot],
                 )?;
                 doc.merge(&checkpoint.snapshot)?;
-                rebuild_rows(&tx, &doc.project()?)?;
+                if doc.has_pending() {
+                    return Err(invalid("the snapshot waits for operations it lacks"));
+                }
+                rebuild_rows(&tx, &doc.settle()?)?;
                 for w in &checkpoint.coverage.writers {
                     tx.execute(
                         "INSERT INTO sync_receive_heads (incarnation, head) VALUES (?1, ?2)",
@@ -791,18 +1005,20 @@ impl Database {
                         ],
                     )?;
                 }
+                // Received again, and authenticated here, by the drain
+                // below.
                 for bytes in &checkpoint.pending {
-                    let p = wire::parse(bytes, joined.route.content(&HOME_DOCUMENT))
-                        .map_err(|e| invalid(format!("carried record: {e}")))?;
-                    tx.execute(
-                        "INSERT INTO sync_pending (record_id, bytes, reason, seq)
-                         VALUES (?1, ?2, 'predecessor',
-                                 (SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_pending))
-                         ON CONFLICT (record_id) DO NOTHING",
-                        params![p.header.record_id.as_slice(), bytes],
-                    )?;
+                    super::receive::keep_carried(&tx, joined, bytes)?;
                 }
-                record(&tx, &id, &checkpoint.coverage.encode()?, "accepted", None)?;
+                // The device's own starting point: what it verifies others by.
+                record(
+                    &tx,
+                    &id,
+                    &checkpoint.coverage.encode()?,
+                    "accepted",
+                    None,
+                    true,
+                )?;
                 tx.execute(
                     "INSERT INTO sync_cursors (log, cursor) VALUES ('records', ?1)
                      ON CONFLICT (log) DO UPDATE SET cursor = excluded.cursor",
@@ -812,7 +1028,7 @@ impl Database {
                 Ok::<_, MattersError>(tx.commit()?)
             })();
             if let Err(error) = started {
-                *engine = load_engine(conn)?;
+                super::receive::reload(conn, engine)?;
                 return Err(error);
             }
             super::receive::drain(conn, engine, joined)?;

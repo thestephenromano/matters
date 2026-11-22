@@ -422,6 +422,7 @@ fn sealed_by(a: &Database, device: &DeviceKeys, c: &Checkpoint) -> Vec<Vec<u8>> 
 #[test]
 fn dishonest_and_wrong_epoch_checkpoints_are_refused_and_kept() {
     let p = pair();
+    let first = record_hash(&records(&p.a)[0]);
     acknowledge_all(&p.a);
     p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
     let a_dev = keys(&p.a_keys);
@@ -440,10 +441,15 @@ fn dishonest_and_wrong_epoch_checkpoints_are_refused_and_kept() {
     let mut c = honest.clone();
     c.coverage.writers[0].author = [8; 48];
     cases.push(("another author", c));
-    // More records than the counter shows.
+    // Fewer records, at their true head, than the counter shows.
     let mut c = honest.clone();
     c.coverage.writers[0].records = 1;
+    c.coverage.writers[0].head = first;
     cases.push(("counter disagrees", c));
+    // A claimed head that B holds, but at another position (#45).
+    let mut c = honest.clone();
+    c.coverage.writers[0].records = 1;
+    cases.push(("another head", c));
     // Coverage naming another epoch than its records.
     let mut c = honest.clone();
     c.coverage.epoch = 7;
@@ -473,9 +479,19 @@ fn dishonest_and_wrong_epoch_checkpoints_are_refused_and_kept() {
         }
         assert_eq!(view(&p.b), before, "{why}: nothing imported");
     }
+    // Each is kept as evidence under its ID, but for the wrong epoch: that
+    // is its author's sealing, not the checkpoint's, so its parts are
+    // quarantined instead, and another member's parts of the same
+    // checkpoint would still stand (#45).
     let kept = p.b.checkpoints().unwrap();
-    assert_eq!(kept.len(), cases.len());
+    assert_eq!(kept.len(), cases.len() - 1);
     assert!(kept.iter().all(|(_, state, _)| state == "refused"));
+    assert!(p
+        .b
+        .quarantined_records()
+        .unwrap()
+        .iter()
+        .any(|(_, (reason, _))| reason.contains("epoch")));
     assert!(p.b.latest_checkpoint().unwrap().is_none());
     // The honest one is still accepted afterwards.
     assert_eq!(
@@ -494,6 +510,8 @@ fn an_older_checkpoint_never_replaces_a_newer_one() {
         p.a.acknowledge_checkpoint_part(&id).unwrap();
     }
     p.a.add_task(&mut Task::new(id(5), "later", 4.0)).unwrap();
+    // B holds what the newer one covers, so it can verify it.
+    p.b.receive_record(&records(&p.a).pop().unwrap()).unwrap();
     acknowledge_all(&p.a);
     let newer = p.a.create_checkpoint(cursor(4)).unwrap().unwrap();
     let newer_parts = parts(&p.a);
