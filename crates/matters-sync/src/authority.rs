@@ -17,12 +17,19 @@
 //! recovery words (`recovery`) signs a `root_recovery` that starts the next
 //! membership generation with one admin; transitions of earlier
 //! generations are then stale. Recovery envelopes carry each epoch's key to
-//! the recovery KEM key. Out of scope here, and refused rather than
-//! inferred: admin transfer and nonempty closing frontiers. Durable state, chain position and engine admission belong to
-//! the receiver. Ported from the prototype unchanged in wire behavior and
-//! budgets; the prototype's independent golden fixtures check it here too.
+//! the recovery KEM key.
+//!
+//! Revocation is by closing frontier: a transition that removes a device,
+//! and a recovery that supersedes a generation, signs for each writer of a
+//! leaving device the exact content prefix it retains. A device outside the
+//! current roster then claims no new writer, and its records are admitted
+//! only within a signed closing prefix. Out of scope here, and refused
+//! rather than inferred: admin transfer. Durable state, chain position and
+//! engine admission belong to the receiver. The prototype's independent
+//! golden fixtures check the codec here too.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::record::{self, ContentKey, VerificationKey};
 use crate::wire;
@@ -45,9 +52,9 @@ pub use identity::{
     Member, KEM_ENCAPSULATION_BYTES, KEM_KEY_LABEL, KEM_PUBLIC_KEY_BYTES, SIGNATURE_KEY_LABEL,
 };
 pub use message::{
-    encode, parse, sign, signing_bytes, Body, Boundary, EnrollmentRequest, Genesis, KeyEnvelope,
-    Membership, Message, ParsedControl, Route, WriterClaim, WriterHandoff, WriterStart,
-    MAX_CONTROL_BYTES, MAX_ROSTER,
+    encode, parse, sign, signing_bytes, Body, Boundary, Closing, EnrollmentRequest, Genesis,
+    KeyEnvelope, Membership, Message, ParsedControl, Route, WriterClaim, WriterHandoff,
+    WriterStart, MAX_CONTROL_BYTES, MAX_FRONTIER, MAX_ROSTER,
 };
 #[doc(hidden)]
 pub use recovery::recovery_seeds;
@@ -59,10 +66,12 @@ pub type Hash = [u8; 48];
 /// A random 32-byte identifier (incarnation, record or batch).
 pub type Id = [u8; 32];
 
-/// At most this many membership transitions per authority instance.
-const MAX_TRANSITIONS: usize = 16;
-/// At most this many admitted writer incarnations per authority instance.
-const MAX_WRITERS: usize = 16;
+// There is no lifetime cap on transitions, recoveries or writer
+// incarnations: each is a signed control the device keeps anyway. Each
+// object is bounded (roster, frontier, control bytes), and a device has at
+// most one active writer per document, since a second root or a second
+// successor of one incarnation freezes its lineage. A handed-off
+// incarnation is closed and no longer active.
 
 /// Why a control message or record was refused. No variant carries key
 /// material.
@@ -99,6 +108,12 @@ pub enum Error {
     /// The content key does not match the epoch's signed commitment.
     #[error("the content key does not match the epoch's signed commitment")]
     KeyCommitment,
+    /// The author is not in the current roster, and the record or writer
+    /// claim lies outside every signed closing prefix. Signatures are
+    /// verified before this is returned. A later transition of the admin
+    /// may still name the writer's closing prefix.
+    #[error("the author was removed, and this lies outside its signed closing prefix")]
+    Revoked,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -113,6 +128,24 @@ impl From<minicbor::encode::Error<std::convert::Infallible>> for Error {
     fn from(_: minicbor::encode::Error<std::convert::Infallible>) -> Self {
         Self::Format
     }
+}
+
+/// A transition's closing frontier names, in strict order, only devices
+/// that leave or left the roster `next` starts; never a current member.
+fn validate_frontier(frontier: &[Closing], next: &State) -> Result<()> {
+    let key = |c: &Closing| (c.device, c.document, c.incarnation);
+    if frontier.windows(2).any(|w| key(&w[0]) >= key(&w[1])) {
+        return Err(Error::Identity);
+    }
+    for c in frontier {
+        if next.has(&c.device) {
+            return Err(Error::Unsupported);
+        }
+        if !next.retired.contains(&c.device) {
+            return Err(Error::Identity);
+        }
+    }
+    Ok(())
 }
 
 fn validate_roster(members: &[Member], admin: &Hash) -> Result<()> {
@@ -142,9 +175,63 @@ struct State {
     generation: u64,
     epoch: u64,
     key_commitment: Hash,
-    roster: Vec<Member>,
+    /// Shared with the predecessor's when unchanged.
+    roster: Arc<Vec<Member>>,
     admin: Hash,
     recovery: KemPublicKey,
+    /// Devices that were members of an earlier manifest in this state's
+    /// history and are not members here. None of them can be added back.
+    retired: Arc<BTreeSet<Hash>>,
+}
+
+impl State {
+    fn has(&self, device: &Hash) -> bool {
+        self.roster.iter().any(|m| &m.id == device)
+    }
+
+    /// The state a transition or recovery to `m` starts from `self`.
+    fn successor(&self, m: &Membership) -> State {
+        let roster = if *self.roster == m.roster {
+            self.roster.clone()
+        } else {
+            Arc::new(m.roster.clone())
+        };
+        let leaving: Vec<Hash> = self
+            .roster
+            .iter()
+            .map(|member| member.id)
+            .filter(|id| !m.roster.iter().any(|n| &n.id == id))
+            .collect();
+        let retired = if leaving.is_empty() {
+            self.retired.clone()
+        } else {
+            let mut set = (*self.retired).clone();
+            set.extend(leaving);
+            Arc::new(set)
+        };
+        State {
+            sequence: m.sequence,
+            generation: m.generation,
+            epoch: m.epoch,
+            key_commitment: m.key_commitment,
+            roster,
+            admin: m.admin,
+            recovery: m.recovery_key.clone(),
+            retired,
+        }
+    }
+}
+
+/// How far an admitted writer's records are admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admission {
+    /// Its device is a current member: the receiver applies its chain,
+    /// bounded only by its own handoff's closing head.
+    Open,
+    /// A removed device's writer, up to this exact signed closing head.
+    Closed(Option<Hash>),
+    /// A removed device's writer outside every signed closing prefix.
+    Revoked,
 }
 
 #[derive(Clone)]
@@ -157,6 +244,16 @@ struct Writer {
 struct WriterLineage {
     head: Id,
     fork_evidence: Option<(Vec<u8>, Vec<u8>)>,
+}
+
+/// A content record whose author's signature verified, not yet admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignedRecord {
+    pub author: Hash,
+    pub incarnation: Id,
+    pub previous: Option<Hash>,
+    /// SHA-384 of the complete record: its identity in the chain.
+    pub hash: Hash,
 }
 
 /// One admitted writer's lineage facts.
@@ -187,6 +284,16 @@ pub struct Authority {
     fork_evidence: Option<(Vec<u8>, Vec<u8>)>,
     writers: BTreeMap<([u8; 16], Id), Writer>,
     lineages: BTreeMap<([u8; 16], Hash), WriterLineage>,
+    /// Each admitted claim by (document, device, predecessor): a second
+    /// claim of one step is a competing definition.
+    steps: BTreeMap<([u8; 16], Hash, Option<Id>), Id>,
+    /// The admitted successor of each retired incarnation.
+    successor_of: BTreeMap<([u8; 16], Id), Id>,
+    /// Engine actors reserved per document.
+    actors: BTreeSet<([u8; 16], u64)>,
+    /// Signed closing-frontier entries by (document, incarnation): the
+    /// device and the exact retained head. The first signed entry binds.
+    closures: BTreeMap<([u8; 16], Id), (Hash, Option<Hash>)>,
 }
 
 impl std::fmt::Debug for Authority {
@@ -231,9 +338,10 @@ impl Authority {
             generation: 0,
             epoch: 0,
             key_commitment: g.key_commitment,
-            roster: g.roster.clone(),
+            roster: Arc::new(g.roster.clone()),
             admin: g.admin,
             recovery: g.recovery_key.clone(),
+            retired: Arc::new(BTreeSet::new()),
         };
         Ok(Self {
             route: expected,
@@ -246,6 +354,10 @@ impl Authority {
             fork_evidence: None,
             writers: BTreeMap::new(),
             lineages: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            successor_of: BTreeMap::new(),
+            actors: BTreeSet::new(),
+            closures: BTreeMap::new(),
         })
     }
 
@@ -307,7 +419,7 @@ impl Authority {
     }
 
     pub fn members(&self) -> Result<Vec<Member>> {
-        Ok(self.active()?.roster.clone())
+        Ok(self.active()?.roster.to_vec())
     }
 
     pub fn recovery(&self) -> Result<KemPublicKey> {
@@ -387,7 +499,9 @@ impl Authority {
         if !enrollment::tags_match(&invitation.binding(&device, r)?, &r.binding) {
             return Err(Error::Unauthorized);
         }
-        if state.roster.iter().any(|m| m.id == device) {
+        // A removed device's ID never returns: rejoining is a fresh
+        // enrollment under new keys.
+        if state.has(&device) || state.retired.contains(&device) {
             return Err(Error::Identity);
         }
         if state.roster.len() >= MAX_ROSTER {
@@ -452,29 +566,31 @@ impl Authority {
         if m.admin != old.admin || m.recovery_key != old.recovery {
             return Err(Error::Unsupported);
         }
+        // A removed device is never added back under the same ID.
+        if m.roster.iter().any(|n| old.retired.contains(&n.id)) {
+            return Err(Error::Unsupported);
+        }
+        let next = old.successor(m);
+        validate_frontier(&m.frontier, &next)?;
         if let Some(first) = self.successors.get(&m.previous) {
             self.fork_evidence = Some((first.clone(), bytes.to_vec()));
             return Err(Error::Fork);
         }
-        // Every known non-head manifest already has a successor, handled above.
-        if self.successors.len() + self.recoveries.len() >= MAX_TRANSITIONS {
-            return Err(Error::Limit);
-        }
-        self.states.insert(
-            candidate,
-            State {
-                sequence: m.sequence,
-                generation: m.generation,
-                epoch: m.epoch,
-                key_commitment: m.key_commitment,
-                roster: m.roster.clone(),
-                admin: m.admin,
-                recovery: m.recovery_key.clone(),
-            },
-        );
+        self.states.insert(candidate, next);
         self.successors.insert(m.previous, bytes.to_vec());
+        self.close(&m.frontier);
         self.current = candidate;
         Ok(true)
+    }
+
+    /// Record a frontier's closing prefixes. The first signed entry for an
+    /// incarnation binds; a later one changes nothing.
+    fn close(&mut self, frontier: &[Closing]) {
+        for c in frontier {
+            self.closures
+                .entry((c.document, c.incarnation))
+                .or_insert((c.device, c.head));
+        }
     }
 
     /// Admit a `root_recovery`: signed by the pinned root, it starts
@@ -512,29 +628,26 @@ impl Authority {
         if m.roster.len() != 1 || m.recovery_key != old.recovery {
             return Err(Error::Unsupported);
         }
+        if m.roster.iter().any(|n| old.retired.contains(&n.id)) {
+            return Err(Error::Unsupported);
+        }
+        let next = old.successor(m);
+        validate_frontier(&m.frontier, &next)?;
         // A valid, different recovery to a generation already started is
-        // a fork the root signed: freeze, keeping both. Only recoveries
-        // start generations, so once this passes, `old` is in the newest.
+        // a fork the root signed: freeze, keeping both. Once frozen, a
+        // further different recovery to that generation changes nothing:
+        // the first evidence pair stays, and nothing new is retained. Only
+        // recoveries start generations, so once this passes, `old` is in
+        // the newest.
         if let Some(first) = self.recoveries.get(&m.generation) {
-            self.fork_evidence = Some((first.clone(), bytes.to_vec()));
+            if self.fork_evidence.is_none() {
+                self.fork_evidence = Some((first.clone(), bytes.to_vec()));
+            }
             return Err(Error::Fork);
         }
-        if self.successors.len() + self.recoveries.len() >= MAX_TRANSITIONS {
-            return Err(Error::Limit);
-        }
-        self.states.insert(
-            candidate,
-            State {
-                sequence: m.sequence,
-                generation: m.generation,
-                epoch: m.epoch,
-                key_commitment: m.key_commitment,
-                roster: m.roster.clone(),
-                admin: m.admin,
-                recovery: m.recovery_key.clone(),
-            },
-        );
+        self.states.insert(candidate, next);
         self.recoveries.insert(m.generation, bytes.to_vec());
+        self.close(&m.frontier);
         self.current = candidate;
         self.fork_evidence = None;
         Ok(true)
@@ -553,6 +666,22 @@ impl Authority {
         key: &ContentKey,
         signing_randomness: [u8; 32],
     ) -> Result<Vec<u8>> {
+        self.recover_closing(recovery, device, key, Vec::new(), signing_randomness)
+    }
+
+    /// As [`Self::recover`], closing the superseded generation's writers at
+    /// `frontier`: for each writer the recovering device knows, the exact
+    /// prefix it holds (see [`Self::unclosed_writers`]). Writers it leaves
+    /// out admit no records until a later transition names them.
+    pub fn recover_closing(
+        &self,
+        recovery: &RecoveryKeys,
+        device: &DeviceKeys,
+        key: &ContentKey,
+        mut frontier: Vec<Closing>,
+        signing_randomness: [u8; 32],
+    ) -> Result<Vec<u8>> {
+        frontier.sort();
         let old = self
             .states
             .get(&self.current)
@@ -573,6 +702,7 @@ impl Authority {
                 admin: device.id(),
                 epoch,
                 recovery_key: old.recovery.clone(),
+                frontier,
                 key_commitment: key_commitment(&self.route, generation, epoch, key)?,
             }),
         };
@@ -592,7 +722,7 @@ impl Authority {
     /// `Ok(true)` admits it, `Ok(false)` is the same claim again (even
     /// re-signed). Competing same-device claims freeze the lineage.
     pub fn admit_writer(&mut self, bytes: &[u8], expected_document: [u8; 16]) -> Result<bool> {
-        self.active()?;
+        let current = self.active()?;
         let p = parse(bytes)?;
         if p.message.route != self.route {
             return Err(Error::Context);
@@ -602,20 +732,36 @@ impl Authority {
         if document != expected_document {
             return Err(Error::Context);
         }
-        // A claim signed under any known manifest of the current
-        // generation is admitted, if its device was a member there: replicas
-        // read the log in order, and a claim made just before a concurrent
-        // transition reaches every one of them after it. Admission grants no
-        // authorship by itself; each record is still checked against its own
-        // epoch's roster (`authenticate_at`). A recovery's new generation
-        // makes earlier claims stale.
-        let generation = self.active()?.generation;
-        let at = self.states.get(&claim.manifest).ok_or(Error::Stale)?;
-        if at.generation != generation {
-            return Err(Error::Stale);
-        }
         if claim.device != p.message.signer {
             return Err(Error::Identity);
+        }
+        // A claim signed under any known manifest of the current
+        // generation is admitted if its device is a current member and was
+        // a member there: replicas read the log in order, and a claim made
+        // just before a concurrent transition reaches every one of them
+        // after it. A device the current roster no longer lists claims
+        // nothing new: only a writer a signed closing frontier names is
+        // still admitted, and only within its prefix. Admission grants no
+        // authorship by itself; each record is still checked against its
+        // own epoch's roster (`authenticate_at`).
+        let at = self.states.get(&claim.manifest).ok_or(Error::Stale)?;
+        let named = self
+            .closures
+            .get(&(document, claim.incarnation))
+            .is_some_and(|(device, _)| *device == claim.device);
+        if !named {
+            if at.generation != current.generation {
+                return Err(Error::Stale);
+            }
+            if !current.has(&claim.device) {
+                let signer = at
+                    .roster
+                    .iter()
+                    .find(|m| m.id == claim.device)
+                    .ok_or(Error::Unauthorized)?;
+                p.verify(&signer.signing_key)?;
+                return Err(Error::Revoked);
+            }
         }
         let signer = at
             .roster
@@ -658,23 +804,16 @@ impl Authority {
         // Same-device conflicting successor claims are evidence even when
         // they reuse an actor. Never let an arrival-dependent uniqueness check
         // hide two authenticated definitions of the same lineage step.
-        if let Some(first) = self.writers.iter().find_map(|((doc, _), w)| {
-            (*doc == document
-                && w.claim.device == claim.device
-                && w.claim.previous.map(|(prev, _)| prev) == predecessor)
-                .then(|| w.signed_bytes.clone())
-        }) {
+        if let Some(first) = self
+            .steps
+            .get(&(document, claim.device, predecessor))
+            .and_then(|incarnation| self.writers.get(&(document, *incarnation)))
+            .map(|w| w.signed_bytes.clone())
+        {
             return Err(self.freeze_writer(lineage, first, bytes));
         }
-        if self
-            .writers
-            .iter()
-            .any(|((doc, _), w)| *doc == document && w.claim.actor == claim.actor)
-        {
+        if self.actors.contains(&(document, claim.actor)) {
             return Err(Error::Actor);
-        }
-        if self.writers.len() >= MAX_WRITERS {
-            return Err(Error::Limit);
         }
         self.writers.insert(
             index,
@@ -683,6 +822,13 @@ impl Authority {
                 signed_bytes: bytes.to_vec(),
             },
         );
+        self.steps
+            .insert((document, claim.device, predecessor), claim.incarnation);
+        self.actors.insert((document, claim.actor));
+        if let Some(prev) = predecessor {
+            self.successor_of
+                .insert((document, prev), claim.incarnation);
+        }
         self.lineages.insert(
             lineage,
             WriterLineage {
@@ -712,43 +858,151 @@ impl Authority {
             .is_some_and(|l| l.fork_evidence.is_some())
     }
 
+    /// The newest accepted state, even while frozen.
+    fn top(&self) -> Option<&State> {
+        self.states.get(&self.current)
+    }
+
+    /// How far an admitted writer's records are admitted under `current`.
+    /// A writer a signed frontier names is closed at its entry. Otherwise a
+    /// current member's writer is open. A removed device's writer is closed
+    /// at its own successor's signed handoff head, if the chain of signed
+    /// handoffs after it reaches a writer a frontier names; otherwise it is
+    /// revoked. That makes the result independent of the order replicas
+    /// read claims and transitions in.
+    fn admission(&self, document: [u8; 16], incarnation: Id, current: &State) -> Admission {
+        let Some(writer) = self.writers.get(&(document, incarnation)) else {
+            return Admission::Revoked;
+        };
+        let device = writer.claim.device;
+        let named = |incarnation: &Id| {
+            self.closures
+                .get(&(document, *incarnation))
+                .filter(|(d, _)| *d == device)
+                .map(|(_, head)| *head)
+        };
+        if let Some(head) = named(&incarnation) {
+            return Admission::Closed(head);
+        }
+        if current.has(&device) {
+            return Admission::Open;
+        }
+        let mut at = incarnation;
+        let mut bound = None;
+        while let Some(next) = self.successor_of.get(&(document, at)) {
+            let Some((_, Boundary::Closed(head))) = self
+                .writers
+                .get(&(document, *next))
+                .and_then(|w| w.claim.previous)
+            else {
+                break;
+            };
+            let bound = *bound.get_or_insert(head);
+            if named(next).is_some() {
+                return Admission::Closed(bound);
+            }
+            at = *next;
+        }
+        Admission::Revoked
+    }
+
+    fn history(&self, document: [u8; 16], incarnation: Id, w: &Writer) -> WriterHistory {
+        let admission = self.top().map_or(Admission::Open, |c| {
+            self.admission(document, incarnation, c)
+        });
+        let closed = match admission {
+            Admission::Closed(head) => Some(Boundary::Closed(head)),
+            Admission::Revoked => Some(Boundary::Closed(None)),
+            Admission::Open => self
+                .successor_of
+                .get(&(document, incarnation))
+                .and_then(|next| self.writers.get(&(document, *next)))
+                .and_then(|next| next.claim.previous)
+                .map(|(_, boundary)| boundary),
+        };
+        WriterHistory {
+            device: w.claim.device,
+            actor: w.claim.actor,
+            predecessor: w.claim.previous,
+            closed,
+            frozen: self.lineage_frozen(document, &w.claim.device),
+        }
+    }
+
+    /// One admitted writer's lineage facts. `closed` is the exact signed
+    /// prefix its records end at: its successor's handoff head, or for a
+    /// removed device's writer the closing frontier's (null when no signed
+    /// prefix admits anything of it).
     pub fn writer_history(&self, document: [u8; 16], incarnation: Id) -> Result<WriterHistory> {
-        self.writer_histories(document)
-            .remove(&incarnation)
-            .ok_or(Error::MissingWriter)
+        let w = self
+            .writers
+            .get(&(document, incarnation))
+            .ok_or(Error::MissingWriter)?;
+        Ok(self.history(document, incarnation, w))
     }
 
     /// Every admitted writer's lineage facts for one document, in one pass.
     pub fn writer_histories(&self, document: [u8; 16]) -> BTreeMap<Id, WriterHistory> {
-        let mut out: BTreeMap<Id, WriterHistory> = self
-            .writers
-            .iter()
-            .filter(|((doc, _), _)| *doc == document)
-            .map(|((_, incarnation), w)| {
-                (
-                    *incarnation,
-                    WriterHistory {
-                        device: w.claim.device,
-                        actor: w.claim.actor,
-                        predecessor: w.claim.previous,
-                        closed: None,
-                        frozen: self.lineage_frozen(document, &w.claim.device),
-                    },
+        self.writers
+            .range((document, [0; 32])..=(document, [0xff; 32]))
+            .map(|((_, incarnation), w)| (*incarnation, self.history(document, *incarnation, w)))
+            .collect()
+    }
+
+    /// The writers a transition to the roster `keep` (device IDs) should
+    /// close in its frontier: each admitted writer for `document` of a
+    /// device outside `keep` that no signed prefix closes yet, neither a
+    /// frontier entry nor its successor's handoff. The admin closes each at
+    /// the exact head of the chain it holds (null if it holds nothing).
+    pub fn unclosed_writers(&self, document: [u8; 16], keep: &[Hash]) -> Vec<(Hash, Id)> {
+        self.writers
+            .range((document, [0; 32])..=(document, [0xff; 32]))
+            .filter(|(_, w)| !keep.contains(&w.claim.device))
+            .filter(|((_, incarnation), w)| {
+                !self
+                    .closures
+                    .get(&(document, *incarnation))
+                    .is_some_and(|(d, _)| *d == w.claim.device)
+            })
+            .filter(|((_, incarnation), _)| {
+                !matches!(
+                    self.successor_of
+                        .get(&(document, *incarnation))
+                        .and_then(|next| self.writers.get(&(document, *next)))
+                        .and_then(|next| next.claim.previous),
+                    Some((_, Boundary::Closed(_)))
                 )
             })
-            .collect();
-        for w in self
-            .writers
-            .values()
-            .filter(|w| w.claim.document == document)
-        {
-            if let Some((prev, boundary)) = w.claim.previous {
-                if let Some(h) = out.get_mut(&prev) {
-                    h.closed = Some(boundary);
-                }
-            }
+            .map(|((_, incarnation), w)| (w.claim.device, *incarnation))
+            .collect()
+    }
+
+    /// Check a `data` record's signature by its author, a member of the
+    /// epoch it names, without admitting it: for an admin or a recovering
+    /// device reading back the chains it holds to sign a closing frontier.
+    pub fn verify_signed_record(&self, bytes: &[u8], document: &[u8; 16]) -> Result<SignedRecord> {
+        let p = wire::parse(bytes, self.route.content(document)).map_err(|_| Error::Format)?;
+        let h = p.header;
+        if h.kind != wire::Kind::Data {
+            return Err(Error::Unsupported);
         }
-        out
+        let state = self.states.get(h.manifest).ok_or(Error::Stale)?;
+        if h.epoch != state.epoch {
+            return Err(Error::Stale);
+        }
+        let author = state
+            .roster
+            .iter()
+            .find(|m| &m.id == h.author)
+            .ok_or(Error::Unauthorized)?;
+        let facts = SignedRecord {
+            author: *h.author,
+            incarnation: *h.incarnation,
+            previous: h.previous.copied(),
+            hash: record::record_hash(bytes),
+        };
+        verify_record(p, &author.signing_key)?;
+        Ok(facts)
     }
 
     /// Wrap the current epoch's content key for `recipient`, a current
@@ -1083,9 +1337,7 @@ impl Authority {
         document: &[u8; 16],
         kind: wire::Kind,
     ) -> Result<AuthenticatedData<'a>> {
-        if self.fork_evidence.is_some() {
-            return Err(Error::Fork);
-        }
+        let current = self.active()?;
         if key.route != self.route {
             return Err(Error::Context);
         }
@@ -1117,12 +1369,26 @@ impl Authority {
         }
         let Some(writer) = self.writers.get(&(*document, *h.incarnation)) else {
             // A member's authenticated record may wait for its writer's
-            // admission; forged or unsigned bytes are rejected now.
+            // admission; forged or unsigned bytes are rejected now. A
+            // removed device's may wait only for a writer a frontier names.
             verify_record(p, &author.signing_key)?;
+            if !current.has(h.author) && !self.closures.contains_key(&(*document, *h.incarnation)) {
+                return Err(Error::Revoked);
+            }
             return Err(Error::MissingWriter);
         };
         if writer.claim.device != *h.author {
             return Err(Error::Actor);
+        }
+        // A removed device's writer is admitted only within its signed
+        // closing prefix; the receiver walks the chain to its exact head
+        // (`writer_history`). Nothing of an empty or unnamed one is.
+        if matches!(
+            self.admission(*document, *h.incarnation, current),
+            Admission::Revoked | Admission::Closed(None)
+        ) {
+            verify_record(p, &author.signing_key)?;
+            return Err(Error::Revoked);
         }
         Ok(AuthenticatedData {
             verified: verify_record(p, &author.signing_key)?,

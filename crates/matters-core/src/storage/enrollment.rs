@@ -154,6 +154,7 @@ impl Database {
                     admin: device.id(),
                     epoch,
                     recovery_key: a.recovery()?,
+                    frontier: vec![],
                     key_commitment: authority::key_commitment(
                         &joined.route,
                         generation,

@@ -25,6 +25,10 @@ use crate::wire::{self, SIGNATURE_BYTES, SUITE};
 pub const MAX_CONTROL_BYTES: usize = 64 * 1024;
 /// The largest roster accepted, checked before it is allocated.
 pub const MAX_ROSTER: usize = 16;
+/// The most closing-frontier entries one transition carries, checked before
+/// they are allocated. 64 entries of 152 bytes fit beside the largest roster
+/// in the control budget.
+pub const MAX_FRONTIER: usize = 64;
 pub(crate) const PURPOSE: &str = "content-key";
 /// An envelope's ciphertext bounds: a 16-byte tag at least, and at most the
 /// largest canonical plaintext (1 + 9 + 34 + 17 bytes) plus the tag.
@@ -65,8 +69,8 @@ pub struct Genesis {
     pub key_commitment: Hash,
 }
 
-/// A membership transition, signed by the previous manifest's admin. The
-/// closing frontier is always empty in this version.
+/// A membership transition, signed by the previous manifest's admin (or,
+/// as a `root_recovery`, by the root).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Membership {
     pub generation: u64,
@@ -76,8 +80,25 @@ pub struct Membership {
     pub admin: Hash,
     pub epoch: u64,
     pub recovery_key: KemPublicKey,
+    /// The historical closing frontier: for writers of devices that leave
+    /// the roster, the exact retained prefix of each chain the signer knows
+    /// (docs/SYNC_KEY_DISTRIBUTION.md "Revocation"). Empty when nobody
+    /// leaves. Strictly sorted by device, document and incarnation.
+    pub frontier: Vec<Closing>,
     /// Commitment to the new epoch's content key (`key_commitment`).
     pub key_commitment: Hash,
+}
+
+/// One closing-frontier entry: writer `incarnation` of `device` for
+/// `document` retains exactly the signed content prefix ending at `head`,
+/// SHA-384 of its last retained record; null retains nothing. The same
+/// exact-prefix meaning as a `writer_handoff`'s closing head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Closing {
+    pub device: Hash,
+    pub document: [u8; 16],
+    pub incarnation: Id,
+    pub head: Option<Hash>,
 }
 
 /// A writer root, or a legacy replacement with no signed closing boundary.
@@ -273,8 +294,15 @@ pub fn signing_bytes(message: &Message) -> Result<Vec<u8>> {
             e.bytes(&m.admin)?
                 .u64(m.epoch)?
                 .bytes(m.recovery_key.as_bytes())?
-                .array(0)?
-                .bytes(&m.key_commitment)?;
+                .array(m.frontier.len() as u64)?;
+            for c in &m.frontier {
+                e.array(4)?
+                    .bytes(&c.device)?
+                    .bytes(&c.document)?
+                    .bytes(&c.incarnation)?;
+                write_optional(&mut e, &c.head)?;
+            }
+            e.bytes(&m.key_commitment)?;
         }
         Body::WriterStart(w) => {
             e.array(6)?
@@ -455,7 +483,7 @@ impl<'a> Reader<'a> {
         let admin = self.fixed()?;
         let epoch = self.0.u64()?;
         let recovery_key = self.kem_key()?;
-        self.array(0)?;
+        let frontier = self.frontier()?;
         Ok(Membership {
             generation,
             sequence,
@@ -464,8 +492,27 @@ impl<'a> Reader<'a> {
             admin,
             epoch,
             recovery_key,
+            frontier,
             key_commitment: self.fixed()?,
         })
+    }
+
+    fn frontier(&mut self) -> Result<Vec<Closing>> {
+        let n = self.0.array()?.ok_or(Error::Format)?;
+        if n > MAX_FRONTIER as u64 {
+            return Err(Error::Limit);
+        }
+        let mut entries = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            self.array(4)?;
+            entries.push(Closing {
+                device: self.fixed()?,
+                document: self.fixed()?,
+                incarnation: self.fixed()?,
+                head: self.optional()?,
+            });
+        }
+        Ok(entries)
     }
 
     fn writer_start(&mut self) -> Result<WriterStart> {

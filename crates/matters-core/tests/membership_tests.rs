@@ -89,6 +89,7 @@ fn rotation(a: &Authority, admin: &DeviceKeys, key: &ContentKey) -> (Vec<u8>, Ve
                 admin: admin.id(),
                 epoch,
                 recovery_key: a.recovery().unwrap(),
+                frontier: vec![],
                 key_commitment: key_commitment(&route(), generation, epoch, key).unwrap(),
             }),
         },

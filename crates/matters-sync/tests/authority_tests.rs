@@ -6,13 +6,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use matters_sync::authority::{
     device_id, encode, envelope_aad, envelope_info, genesis, key_commitment, parse, recovery_seeds,
-    request_enrollment, root_id, sign, signing_bytes, Authority, Body, Boundary, DeviceKeys,
-    EpochKey, Error, Genesis, Hash, Id, Invitation, InvitationSecret, KemPublicKey, Member,
-    Membership, Message, RecoveryKeys, RecoverySecret, Result, Route, WriterHandoff, WriterStart,
-    CODE_LENGTH, KEM_PUBLIC_KEY_BYTES, MAX_CONTROL_BYTES, POLICY,
+    request_enrollment, root_id, sign, signing_bytes, Authority, Body, Boundary, Closing,
+    DeviceKeys, EpochKey, Error, Genesis, Hash, Id, Invitation, InvitationSecret, KemPublicKey,
+    Member, Membership, Message, RecoveryKeys, RecoverySecret, Result, Route, WriterHandoff,
+    WriterStart, CODE_LENGTH, KEM_PUBLIC_KEY_BYTES, MAX_CONTROL_BYTES, MAX_FRONTIER, POLICY,
 };
 use matters_sync::generate_signing_key;
-use matters_sync::record::{seal, ContentKey, SigningKey, VerificationKey, VERIFICATION_KEY_BYTES};
+use matters_sync::record::{
+    record_hash, seal, ContentKey, SigningKey, VerificationKey, VERIFICATION_KEY_BYTES,
+};
 use matters_sync::wire::{self, SIGNATURE_BYTES};
 use serde_json::Value;
 
@@ -124,6 +126,7 @@ fn transition(s: &Setup) -> Message {
             admin: s.a.id(),
             epoch,
             recovery_key: s.authority.recovery().unwrap(),
+            frontier: vec![],
             key_commitment: commitment(epoch),
         }),
     }
@@ -744,6 +747,83 @@ fn independent_control_bytes_fingerprints_and_hpke_contexts_match() {
 }
 
 #[test]
+fn independent_closing_frontier_vectors_match_byte_for_byte() {
+    // tests/vectors/key-distribution/generate.py: a removal closing two
+    // writers (one populated head, one null) and a root recovery closing
+    // one (#45). The empty-frontier vectors above are the no-removal case.
+    let f = fixtures();
+    let commitments = f["frontier_commitments"].as_array().unwrap();
+    let vectors = f["frontier_vectors"].as_array().unwrap();
+    assert_eq!(vectors.len(), 2);
+    for (v, commitment) in vectors.iter().zip(commitments) {
+        let wire = bytes(v, "wire_hex");
+        let p = parse(&wire).unwrap();
+        assert_eq!(p.message.body.kind(), v["kind"].as_str().unwrap());
+        assert_eq!(p.signed, bytes(v, "signed_hex"));
+        assert_eq!(signing_bytes(&p.message).unwrap(), p.signed);
+        assert_eq!(encode(&p.message, p.signature).unwrap(), wire);
+        assert_eq!(libcrux_sha2::sha384(&wire).as_slice(), bytes(v, "hash_hex"));
+        let (Body::Membership(m) | Body::RootRecovery(m)) = &p.message.body else {
+            unreachable!()
+        };
+        assert_eq!(
+            m.key_commitment.as_slice(),
+            bytes(commitment, "commitment_hex")
+        );
+        assert!(!m.frontier.is_empty());
+        assert!(m.frontier.windows(2).all(|w| w[0] < w[1]));
+        // Rebuilt from typed entries, the frontier encodes the same bytes.
+        let mut rebuilt = p.message.clone();
+        let (Body::Membership(r) | Body::RootRecovery(r)) = &mut rebuilt.body else {
+            unreachable!()
+        };
+        r.frontier = m.frontier.to_vec();
+        assert_eq!(signing_bytes(&rebuilt).unwrap(), p.signed);
+        let frontier = bytes(v, "frontier_hex");
+        assert!(p.signed.windows(frontier.len()).any(|w| w == frontier));
+        for end in 0..wire.len() {
+            assert!(parse(&wire[..end]).is_err(), "accepted prefix {end}");
+        }
+    }
+    let removal = parse(&bytes(&vectors[0], "wire_hex")).unwrap().message;
+    let Body::Membership(m) = &removal.body else {
+        unreachable!()
+    };
+    assert_eq!(
+        m.frontier
+            .iter()
+            .map(|c| c.head.is_some())
+            .collect::<Vec<_>>(),
+        [true, false]
+    );
+    // One entry past the budget is refused before it is allocated.
+    let mut over = removal.clone();
+    let Body::Membership(o) = &mut over.body else {
+        unreachable!()
+    };
+    o.frontier = (0..=MAX_FRONTIER as u32)
+        .map(|i| {
+            let mut incarnation = [0; 32];
+            incarnation[..4].copy_from_slice(&i.to_be_bytes());
+            Closing {
+                device: m.frontier[0].device,
+                document: DOC,
+                incarnation,
+                head: None,
+            }
+        })
+        .collect();
+    let encoded = encode(&over, &[0; SIGNATURE_BYTES]).unwrap();
+    assert_eq!(parse(&encoded).map(|_| ()), Err(Error::Limit));
+    if let Body::Membership(o) = &mut over.body {
+        o.frontier.pop();
+    }
+    let encoded = encode(&over, &[0; SIGNATURE_BYTES]).unwrap();
+    assert!(encoded.len() <= MAX_CONTROL_BYTES);
+    parse(&encoded).unwrap();
+}
+
+#[test]
 fn malformed_control_fixtures_and_every_truncation_reject() {
     let f = fixtures();
     let base = bytes(&f["vectors"][2], "wire_hex");
@@ -931,31 +1011,28 @@ fn unsupported_roster_key_material_and_state_limits_fail_closed() {
         wrap(&state, &s.a, bad.id, &epoch_key(0)),
         Err(Error::Crypto)
     );
-    for _ in 0..16 {
+    // No lifetime cap: transitions and successive writers keep coming
+    // (#45). Each object stays bounded.
+    for _ in 0..20 {
         let m = transition(&s);
         s.authority
             .apply_membership(&signed(&m, s.a.signing_key()))
             .unwrap();
     }
-    let next = transition(&s);
-    assert_eq!(
-        s.authority
-            .apply_membership(&signed(&next, s.a.signing_key())),
-        Err(Error::Limit)
-    );
-    for i in 0..16 {
+    for i in 0..40u8 {
         let previous = if i == 0 { None } else { Some([i - 1; 32]) };
         let m = writer(&s.authority, &s.a, [i; 32], i as u64, previous);
         s.authority
             .admit_writer(&signed(&m, s.a.signing_key()), DOC)
             .unwrap();
     }
-    let extra = writer(&s.authority, &s.a, [17; 32], 17, Some([15; 32]));
-    assert_eq!(
-        s.authority
-            .admit_writer(&signed(&extra, s.a.signing_key()), DOC),
-        Err(Error::Limit)
-    );
+    let active: Vec<_> = s
+        .authority
+        .writer_histories(DOC)
+        .into_values()
+        .filter(|h| h.closed.is_none())
+        .collect();
+    assert_eq!(active.len(), 1, "one active writer per device");
 }
 
 #[test]
@@ -1710,6 +1787,7 @@ fn step(authority: &Authority, admin: &DeviceKeys) -> Message {
             admin: admin.id(),
             epoch,
             recovery_key: authority.recovery().unwrap(),
+            frontier: vec![],
             key_commitment: key_commitment(&route(), generation, epoch, &epoch_key(epoch)).unwrap(),
         }),
     }
@@ -2120,9 +2198,16 @@ fn records_authenticate_at_their_own_epoch_after_rotation_and_removal() {
     );
     // B is removed in the next epoch; its epoch-0 record still reads at
     // epoch 0, with epoch 0's key.
+    // The removal closes B's writer at the record A holds (#45).
     let mut revoke = transition(&s);
     let a = s.a.id();
     membership(&mut revoke).roster.retain(|m| m.id == a);
+    membership(&mut revoke).frontier = vec![Closing {
+        device: author,
+        document: DOC,
+        incarnation: inc,
+        head: Some(record_hash(&sealed)),
+    }];
     s.authority
         .apply_membership(&signed(&revoke, s.a.signing_key()))
         .unwrap();
@@ -2223,4 +2308,409 @@ fn snapshot_records_authenticate_outside_their_writers_chain() {
             .map(|_| ()),
         Err(Error::Format)
     );
+}
+
+// Revocation by closing frontier (#45, docs/SYNC_KEY_DISTRIBUTION.md
+// "Revocation").
+
+fn handoff(
+    state: &Authority,
+    device: &DeviceKeys,
+    incarnation: Id,
+    actor: u64,
+    previous: Id,
+    closing: Option<Hash>,
+) -> Message {
+    Message {
+        route: route(),
+        signer: device.id(),
+        body: Body::WriterHandoff(WriterHandoff {
+            manifest: state.manifest(),
+            document: DOC,
+            device: device.id(),
+            incarnation,
+            actor,
+            previous,
+            closing,
+        }),
+    }
+}
+
+/// B's record `record` of writer `inc`, chained on `previous`, at the
+/// authority's current epoch.
+fn record_of(
+    s: &Setup,
+    inc: &Id,
+    previous: Option<&Hash>,
+    record: &Id,
+    key: &ContentKey,
+) -> Vec<u8> {
+    let (author, manifest) = (s.b.id(), s.authority.manifest());
+    let mut h = header(&s.authority, &author, inc, record, &manifest);
+    h.previous = previous;
+    seal_as(h, key, PLAINTEXT, &s.b)
+}
+
+/// A transition removing B, closing at `frontier`.
+fn removing_b(s: &Setup, frontier: Vec<Closing>) -> Vec<u8> {
+    let mut revoke = transition(s);
+    let a = s.a.id();
+    membership(&mut revoke).roster.retain(|m| m.id == a);
+    membership(&mut revoke).frontier = frontier;
+    signed(&revoke, s.a.signing_key())
+}
+
+#[test]
+fn a_removal_admits_the_removed_devices_records_only_within_its_signed_frontier() {
+    let mut s = setup();
+    let (inc, later) = ([31; 32], [32; 32]);
+    let start = signed(
+        &writer(&s.authority, &s.b, inc, 81, None),
+        s.b.signing_key(),
+    );
+    s.authority.admit_writer(&start, DOC).unwrap();
+    let envelope0 = wrap(&s.authority, &s.a, s.b.id(), &epoch_key(0)).unwrap();
+    let key0 = s.authority.unwrap_key(&envelope0, &s.b).unwrap();
+    let first = record_of(&s, &inc, None, &fresh(), &epoch_key(0));
+    let second = record_of(
+        &s,
+        &inc,
+        Some(&record_hash(&first)),
+        &fresh(),
+        &epoch_key(0),
+    );
+    // B's handoff, signed before the removal it hasn't seen.
+    let next = signed(
+        &handoff(
+            &s.authority,
+            &s.b,
+            later,
+            82,
+            inc,
+            Some(record_hash(&second)),
+        ),
+        s.b.signing_key(),
+    );
+    let before = s.authority.clone();
+    // A held only B's first record when it removed B.
+    let closing = Closing {
+        device: s.b.id(),
+        document: DOC,
+        incarnation: inc,
+        head: Some(record_hash(&first)),
+    };
+    let removal = removing_b(&s, vec![closing]);
+    let empty_removal = removing_b(&s, vec![]);
+    s.authority.apply_membership(&removal).unwrap();
+    let history = s.authority.writer_history(DOC, inc).unwrap();
+    assert_eq!(
+        history.closed,
+        Some(Boundary::Closed(Some(record_hash(&first))))
+    );
+    // Within the prefix: still authenticates, for a receiver that has not
+    // received it yet. Beyond it the receiver stops at the closing head.
+    let read = s.authority.authenticate_at(&first, &key0, &DOC).unwrap();
+    assert_eq!(read.open().unwrap(), PLAINTEXT);
+    // A new claim by the removed device is refused, whatever it names.
+    assert_eq!(
+        s.authority.clone().admit_writer(&next, DOC),
+        Err(Error::Revoked)
+    );
+    // Forged bytes are still refused as forged, not as revoked.
+    let mut forged = first.clone();
+    let n = forged.len();
+    forged[n - 1] ^= 1;
+    assert_eq!(
+        s.authority
+            .authenticate_at(&forged, &key0, &DOC)
+            .map(|_| ()),
+        Err(Error::Signature)
+    );
+
+    // The same, in the other order: a replica that admitted the handoff
+    // first. Its successor is unnamed, so it admits nothing, and the named
+    // writer is still bounded by the frontier, not by B's later handoff.
+    let mut c = before.clone();
+    c.admit_writer(&next, DOC).unwrap();
+    c.apply_membership(&removal).unwrap();
+    assert_eq!(
+        c.writer_history(DOC, inc).unwrap().closed,
+        Some(Boundary::Closed(Some(record_hash(&first))))
+    );
+    assert_eq!(
+        c.writer_history(DOC, later).unwrap().closed,
+        Some(Boundary::Closed(None))
+    );
+    let after = {
+        let (author, manifest) = (s.b.id(), before.manifest());
+        let h = header(&before, &author, &later, &[33; 32], &manifest);
+        seal_as(h, &epoch_key(0), PLAINTEXT, &s.b)
+    };
+    assert_eq!(
+        c.authenticate_at(&after, &key0, &DOC).map(|_| ()),
+        Err(Error::Revoked)
+    );
+
+    // An empty frontier closes everything B wrote.
+    let mut d = before.clone();
+    d.apply_membership(&empty_removal).unwrap();
+    assert_eq!(
+        d.authenticate_at(&first, &key0, &DOC).map(|_| ()),
+        Err(Error::Revoked)
+    );
+    assert_eq!(
+        d.writer_history(DOC, inc).unwrap().closed,
+        Some(Boundary::Closed(None))
+    );
+}
+
+#[test]
+fn a_handed_off_writer_of_a_removed_device_keeps_its_prefix_when_the_lineage_is_named() {
+    let mut s = setup();
+    let (one, two) = ([41; 32], [42; 32]);
+    s.authority
+        .admit_writer(
+            &signed(
+                &writer(&s.authority, &s.b, one, 91, None),
+                s.b.signing_key(),
+            ),
+            DOC,
+        )
+        .unwrap();
+    let first = record_of(&s, &one, None, &fresh(), &epoch_key(0));
+    s.authority
+        .admit_writer(
+            &signed(
+                &handoff(&s.authority, &s.b, two, 92, one, Some(record_hash(&first))),
+                s.b.signing_key(),
+            ),
+            DOC,
+        )
+        .unwrap();
+    let named = Closing {
+        device: s.b.id(),
+        document: DOC,
+        incarnation: two,
+        head: None,
+    };
+    s.authority
+        .apply_membership(&removing_b(&s, vec![named]))
+        .unwrap();
+    assert_eq!(
+        s.authority.writer_history(DOC, one).unwrap().closed,
+        Some(Boundary::Closed(Some(record_hash(&first))))
+    );
+    let key = wrap(&s.authority, &s.a, s.a.id(), &epoch_key(1)).unwrap();
+    let _ = s.authority.unwrap_key(&key, &s.a).unwrap();
+    // Nothing is left to close for a later transition.
+    assert!(s.authority.unclosed_writers(DOC, &[s.a.id()]).is_empty());
+}
+
+#[test]
+fn frontiers_name_only_departed_devices_in_order_and_ids_never_return() {
+    let mut s = setup();
+    let entry = |device: Hash, incarnation: Id| Closing {
+        device,
+        document: DOC,
+        incarnation,
+        head: None,
+    };
+    let (a, b) = (s.a.id(), s.b.id());
+    // A current member cannot be closed; an unknown device cannot either.
+    for (frontier, error) in [
+        (vec![entry(a, [1; 32])], Error::Unsupported),
+        (vec![entry([9; 48], [1; 32])], Error::Identity),
+        (vec![entry(b, [2; 32]), entry(b, [1; 32])], Error::Identity),
+        (vec![entry(b, [1; 32]), entry(b, [1; 32])], Error::Identity),
+    ] {
+        let mut t = s.authority.clone();
+        assert_eq!(t.apply_membership(&removing_b(&s, frontier)), Err(error));
+        assert_eq!(t.manifest(), s.authority.manifest());
+    }
+    let mut keep = transition(&s);
+    membership(&mut keep).frontier = vec![entry(b, [1; 32])];
+    assert_eq!(
+        s.authority
+            .clone()
+            .apply_membership(&signed(&keep, s.a.signing_key())),
+        Err(Error::Unsupported)
+    );
+    s.authority
+        .apply_membership(&removing_b(&s, vec![entry(b, [1; 32])]))
+        .unwrap();
+    // B is never added back under the same ID.
+    let mut back = transition(&s);
+    membership(&mut back).roster.push(s.b.member(false));
+    membership(&mut back).roster.sort_by_key(|m| m.id);
+    assert_eq!(
+        s.authority
+            .clone()
+            .apply_membership(&signed(&back, s.a.signing_key())),
+        Err(Error::Unsupported)
+    );
+    // A later transition may name a departed device's writer, once.
+    let mut later = transition(&s);
+    membership(&mut later).frontier = vec![entry(b, [2; 32])];
+    s.authority
+        .apply_membership(&signed(&later, s.a.signing_key()))
+        .unwrap();
+}
+
+#[test]
+fn a_recovery_closes_the_superseded_generations_writers_at_what_the_recoverer_holds() {
+    let mut r = recoverable();
+    let inc = [51; 32];
+    let claim = Message {
+        route: route(),
+        signer: r.admin.id(),
+        body: Body::WriterStart(WriterStart {
+            manifest: r.authority.manifest(),
+            document: DOC,
+            device: r.admin.id(),
+            incarnation: inc,
+            actor: 5,
+            previous: None,
+        }),
+    };
+    r.authority
+        .admit_writer(&signed(&claim, r.admin.signing_key()), DOC)
+        .unwrap();
+    let (author, manifest0) = (r.admin.id(), r.authority.manifest());
+    let seal_at = |record: Id, previous: Option<&Hash>| {
+        let mut h = header(&r.authority, &author, &inc, &record, &manifest0);
+        h.previous = previous;
+        seal_as(h, &epoch_key(0), PLAINTEXT, &r.admin)
+    };
+    let held = seal_at([52; 32], None);
+    let stolen = seal_at([53; 32], Some(&record_hash(&held)));
+    assert_eq!(
+        r.authority.unclosed_writers(DOC, &[]),
+        vec![(r.admin.id(), inc)]
+    );
+    let facts = r.authority.verify_signed_record(&held, &DOC).unwrap();
+    assert_eq!((facts.incarnation, facts.previous), (inc, None));
+    let d = device();
+    let frontier = vec![Closing {
+        device: r.admin.id(),
+        document: DOC,
+        incarnation: inc,
+        head: Some(facts.hash),
+    }];
+    let before = r.authority.clone();
+    let recovery = r
+        .authority
+        .recover_closing(&r.keys, &d, &ContentKey::new([6; 32]), frontier, fresh())
+        .unwrap();
+    r.authority.apply_recovery(&recovery).unwrap();
+    let history = r
+        .authority
+        .wrap_history_key(&d, d.id(), manifest0, &epoch_key(0), fresh())
+        .unwrap();
+    let key0 = r.authority.unwrap_history_key(&history, &d).unwrap();
+    assert_eq!(
+        r.authority
+            .authenticate_at(&held, &key0, &DOC)
+            .unwrap()
+            .open()
+            .unwrap(),
+        PLAINTEXT
+    );
+    assert_eq!(
+        r.authority.writer_history(DOC, inc).unwrap().closed,
+        Some(Boundary::Closed(Some(record_hash(&held))))
+    );
+    // The old device's record past the frontier waits at the closing head
+    // on every receiver; a new claim of it is refused.
+    let _ = stolen;
+    let mut again = claim.clone();
+    if let Body::WriterStart(w) = &mut again.body {
+        w.incarnation = [54; 32];
+        w.actor = 6;
+        w.previous = Some(inc);
+    }
+    assert!(matches!(
+        r.authority
+            .clone()
+            .admit_writer(&signed(&again, r.admin.signing_key()), DOC),
+        Err(Error::Stale | Error::Revoked)
+    ));
+    // Recovering with nothing held closes nothing yet: the old records
+    // wait (Revoked) until the new admin names them.
+    let mut empty = before.clone();
+    let bare = empty
+        .recover(&r.keys, &d, &ContentKey::new([7; 32]), fresh())
+        .unwrap();
+    empty.apply_recovery(&bare).unwrap();
+    let history = empty
+        .wrap_history_key(&d, d.id(), manifest0, &epoch_key(0), fresh())
+        .unwrap();
+    let key0 = empty.unwrap_history_key(&history, &d).unwrap();
+    assert_eq!(
+        empty.authenticate_at(&held, &key0, &DOC).map(|_| ()),
+        Err(Error::Revoked)
+    );
+    assert_eq!(
+        empty.unclosed_writers(DOC, &[d.id()]),
+        vec![(r.admin.id(), inc)]
+    );
+}
+
+#[test]
+fn twenty_transitions_then_a_removal_and_a_recovery_still_apply() {
+    let mut r = recoverable();
+    let b = device();
+    let mut add = step(&r.authority, &r.admin);
+    if let Body::Membership(m) = &mut add.body {
+        m.roster.push(b.member(false));
+        m.roster.sort_by_key(|m| m.id);
+    }
+    r.authority
+        .apply_membership(&signed(&add, r.admin.signing_key()))
+        .unwrap();
+    for _ in 0..20 {
+        let next = signed(&step(&r.authority, &r.admin), r.admin.signing_key());
+        r.authority.apply_membership(&next).unwrap();
+    }
+    let mut remove = step(&r.authority, &r.admin);
+    let admin = r.admin.id();
+    if let Body::Membership(m) = &mut remove.body {
+        m.roster.retain(|m| m.id == admin);
+    }
+    assert!(r
+        .authority
+        .apply_membership(&signed(&remove, r.admin.signing_key()))
+        .unwrap());
+    let recovery = r
+        .authority
+        .recover(&r.keys, &device(), &ContentKey::new([8; 32]), fresh())
+        .unwrap();
+    assert!(r.authority.apply_recovery(&recovery).unwrap());
+    assert_eq!(r.authority.generation().unwrap(), 1);
+    assert_eq!(r.authority.sequence().unwrap(), 23);
+}
+
+#[test]
+fn once_recoveries_compete_further_ones_to_that_generation_change_nothing() {
+    let mut r = recoverable();
+    let recover = |r: &Recoverable, seed: u8| {
+        r.authority
+            .recover(&r.keys, &device(), &ContentKey::new([seed; 32]), fresh())
+            .unwrap()
+    };
+    let (one, two, three) = (recover(&r, 1), recover(&r, 2), recover(&r, 3));
+    r.authority.apply_recovery(&one).unwrap();
+    assert_eq!(r.authority.apply_recovery(&two), Err(Error::Fork));
+    let evidence = r
+        .authority
+        .fork_evidence()
+        .map(|(a, b)| (a.to_vec(), b.to_vec()));
+    assert_eq!(r.authority.apply_recovery(&three), Err(Error::Fork));
+    assert_eq!(
+        r.authority
+            .fork_evidence()
+            .map(|(a, b)| (a.to_vec(), b.to_vec())),
+        evidence,
+        "the first evidence pair stays"
+    );
+    assert_eq!(evidence, Some((one, two)));
 }

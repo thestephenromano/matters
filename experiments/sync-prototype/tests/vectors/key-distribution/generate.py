@@ -49,6 +49,21 @@ envelope=signed("key_envelope",a[0],[manifest,0,b[0],fp(KEM,b[2]),"content-key",
 aad=[*envelope[0][:7],[manifest,0,b[0],fp(KEM,b[2]),"content-key",a[0]]]
 info=[SUITE,*route,"content-key",fp(KEM,b[2])]
 vectors=[dict(kind=v[0][2],wire_hex=encode(v).hex(),signed_hex=encode(v[0]).hex(),hash_hex=digest(encode(v)).hex()) for v in [genesis,membership,writer,envelope,handoff,empty_handoff]]
+# Revocation by closing frontier (#45): the membership body's ninth field
+# lists [device48, document16, incarnation32, closing_head48_or_null],
+# strictly sorted. Removing b closes two of its writers, one populated and
+# one empty; the root recovery closes a's writer. An empty list remains the
+# no-removal case above.
+closing=lambda device,inc,head: [device,bytes([4])*16,bytes([inc])*32,head]
+frontier=sorted([closing(b[0],7,bytes([9])*48),closing(b[0],8,None)],key=lambda e:(e[0],e[1],e[2]))
+key2=bytes([16])*32
+membership_manifest=digest(encode(membership))
+removal=signed("membership",a[0],[0,2,membership_manifest,[a],a[0],2,recovery,frontier,commit(0,2,key2)])
+c=member(2,True)
+recovery_frontier=[closing(a[0],7,bytes([10])*48)]
+key3=bytes([17])*32
+root_recovery=signed("root_recovery",root_id,[1,3,digest(encode(removal)),[c],c[0],3,recovery,recovery_frontier,commit(1,3,key3)])
+frontier_vectors=[dict(kind=v[0][2],wire_hex=encode(v).hex(),signed_hex=encode(v[0]).hex(),hash_hex=digest(encode(v)).hex(),frontier_hex=encode(v[0][7][7]).hex()) for v in [removal,root_recovery]]
 maximum=sorted([member(i,i==0) for i in range(16)],key=lambda x:x[0])
 max_genesis=signed("genesis",root_id,[root,recovery,0,maximum,a[0],0,None,commit(0,0,key0)])
 max_bytes=encode(max_genesis)
@@ -71,7 +86,7 @@ reject("short_signature",encode([writer[0],writer[1][:-1]]),"Format")
 for field,value,name in [(0,1,"future_version"),(1,"unknown","unknown_suite"),(2,"recovery_transition","unsupported_type")]:
     changed=list(writer[0]);changed[field]=value
     reject(name,encode([changed,writer[1]]),"Unsupported")
-result=dict(provenance="cbor2 5.9.0 + Python hashlib SHA-384; patterned public keys and invalid zero signatures",root_id_hex=root_id.hex(),admin_id_hex=a[0].hex(),recipient_id_hex=b[0].hex(),recipient_key_fingerprint_hex=fp(KEM,b[2]).hex(),info_hex=encode(info).hex(),aad_hex=encode(aad).hex(),key_plaintext_hex=encode([0,key0,"whole-collection"]).hex(),key_commitments=[dict(generation=0,epoch=e,key_hex=k.hex(),commitment_hex=commit(0,e,k).hex()) for e,k in [(0,key0),(1,key1)]],vectors=vectors,rejection_splices=negative,max_genesis_bytes=len(max_bytes),max_genesis_sha384=digest(max_bytes).hex())
+result=dict(provenance="cbor2 5.9.0 + Python hashlib SHA-384; patterned public keys and invalid zero signatures",root_id_hex=root_id.hex(),admin_id_hex=a[0].hex(),recipient_id_hex=b[0].hex(),recipient_key_fingerprint_hex=fp(KEM,b[2]).hex(),info_hex=encode(info).hex(),aad_hex=encode(aad).hex(),key_plaintext_hex=encode([0,key0,"whole-collection"]).hex(),key_commitments=[dict(generation=0,epoch=e,key_hex=k.hex(),commitment_hex=commit(0,e,k).hex()) for e,k in [(0,key0),(1,key1)]],vectors=vectors,frontier_vectors=frontier_vectors,frontier_commitments=[dict(generation=g,epoch=e,key_hex=k.hex(),commitment_hex=commit(g,e,k).hex()) for g,e,k in [(0,2,key2),(1,3,key3)]],rejection_splices=negative,max_genesis_bytes=len(max_bytes),max_genesis_sha384=digest(max_bytes).hex())
 output=json.dumps(result,indent=2)+"\n"
 path=Path(__file__).with_name("golden.json")
 if "--check" in sys.argv:
@@ -79,4 +94,4 @@ if "--check" in sys.argv:
         raise SystemExit("key-distribution fixture drift")
 else:
     path.write_text(output)
-print(f"{len(vectors)} structural vectors; {len(negative)} rejection cases; 16-member genesis {len(max_bytes)} bytes")
+print(f"{len(vectors)} structural vectors; {len(frontier_vectors)} closing-frontier vectors; {len(negative)} rejection cases; 16-member genesis {len(max_bytes)} bytes")
