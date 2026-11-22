@@ -157,7 +157,7 @@ jobs:
     name: sync parsers fuzzed
     runs-on: ubuntu-24.04
     container: fedora:44
-    # Four targets for 60 s each, after a nightly install and build.
+    # Seven targets for 60 s each, after a nightly install and build.
     timeout-minutes: 30
     steps:
       - run: dnf -y install --setopt=install_weak_deps=False git
@@ -170,7 +170,7 @@ jobs:
       - id: changed
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          if git diff --quiet "$(git merge-base origin/main HEAD)" -- crates/matters-sync fuzz; then
+          if git diff --quiet "$(git merge-base origin/main HEAD)" -- crates/matters-sync crates/matters-sync-client/src fuzz; then
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"

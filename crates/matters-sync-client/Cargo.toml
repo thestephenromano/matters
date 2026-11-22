@@ -22,7 +22,12 @@ minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
 base64 = "0.22"
 thiserror = "2.0"
 
+[features]
+# The parsers of relay responses, for the fuzz targets in fuzz/ (#45).
+fuzzing = []
+
 [dev-dependencies]
+matters-sync-client = { path = ".", features = ["fuzzing"] }
 matters-core = { path = "../matters-core", features = ["test-support"] }
 matters-relay = { path = "../matters-relay" }
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net"] }

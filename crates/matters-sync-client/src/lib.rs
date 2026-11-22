@@ -59,6 +59,9 @@ use matters_sync::wire::SIGNATURE_BYTES;
 use minicbor::Decoder;
 use tokio::sync::{watch, Mutex, Notify};
 
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
+
 /// Entries asked for per page: the contract's largest page.
 const PAGE: u32 = 256;
 const PERIOD: Duration = Duration::from_secs(60);
