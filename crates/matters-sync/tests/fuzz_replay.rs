@@ -32,6 +32,9 @@ fn every_corpus_and_regression_input_passes_its_target() {
         ("invitation", fuzzing::invitation, 2),
         ("typed", fuzzing::typed, 5),
         ("checkpoint", fuzzing::checkpoint, 2),
+        ("signed_record", fuzzing::signed_record, 4),
+        ("signed_control", fuzzing::signed_control, 6),
+        ("built_checkpoint", fuzzing::built_checkpoint, 2),
     ] {
         assert!(
             replay(target, body) >= seeds,
@@ -42,6 +45,8 @@ fn every_corpus_and_regression_input_passes_its_target() {
 
 #[test]
 fn the_targets_reject_garbage_and_truncations_without_panicking() {
+    // The parsers' targets only: the structure-aware ones sign whatever
+    // they are given, so a truncation is just another choice of fields.
     let seeds = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus");
     for (target, body) in [
         ("record", fuzzing::record as fn(&[u8])),

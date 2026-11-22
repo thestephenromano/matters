@@ -94,3 +94,24 @@ path = "fuzz_targets/relay_snapshots.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "signed_record"
+path = "fuzz_targets/signed_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signed_control"
+path = "fuzz_targets/signed_control.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "built_checkpoint"
+path = "fuzz_targets/built_checkpoint.rs"
+test = false
+doc = false
+bench = false
