@@ -7,6 +7,10 @@
 # changed code arrives with tests that notice when it breaks. `--all`
 # mutates the whole crate, to the same standard. A mutant that cannot change
 # behaviour is excluded in .cargo/mutants.toml, with the reason.
+#
+# MATTERS_MUTANTS_SHARD=k/n tests only every n-th mutant from the k-th
+# (counting from 0), so that CI can split a large diff across n jobs, each
+# with its own budget.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . ci/lib.sh
@@ -15,7 +19,7 @@ all=0
 if [ "${1:-}" = "--all" ]; then all=1; shift; fi
 reports="${1:-target/mutants}"
 base="${MATTERS_MUTANTS_BASE:-origin/main}"
-# 120 minutes. Four mutants at a time took about 25 s each on #193. With
+# 120 minutes, for each shard. Four mutants at a time took about 25 s each on #193. With
 # sync's tests in the suite they take about two minutes each (#245), so a
 # diff of 190 mutants needs over an hour and a half. Small diffs finish as
 # before.
@@ -38,6 +42,19 @@ if [ "$all" -eq 0 ]; then
         exit 0
     fi
     args+=(--in-diff "$reports/diff.patch")
+fi
+
+shard="${MATTERS_MUTANTS_SHARD:-}"
+if [ -n "$shard" ]; then
+    # Round-robin spreads each file's mutants, and so the slow tests, over
+    # every shard.
+    args+=(--shard "$shard" --sharding round-robin)
+    listed="$(cargo mutants "${args[@]}" --list)" \
+        || cannot_run "cargo mutants could not list shard $shard"
+    if [ -z "$listed" ]; then
+        echo "Shard $shard of the diff has no mutants."
+        exit 0
+    fi
 fi
 
 # cargo-mutants builds in copies of the tree under TMPDIR; keep them on
