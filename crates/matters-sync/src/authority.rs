@@ -1177,6 +1177,16 @@ impl Authority {
             actor: writer.claim.actor,
         })
     }
+
+    /// The epoch and roster of the accepted manifest `manifest`, current or
+    /// earlier. Read-only: a receiver that holds no key of that epoch yet
+    /// can still check a record's author and signature before it keeps the
+    /// record. Admission stays with `authenticate_at`.
+    pub fn roster_at(&self, manifest: &Hash) -> Option<(u64, &[Member])> {
+        self.states
+            .get(manifest)
+            .map(|state| (state.epoch, state.roster.as_slice()))
+    }
 }
 
 fn verify_record<'a>(
