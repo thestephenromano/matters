@@ -102,4 +102,47 @@ write("relay_page", "refusal", cbor({"code": "rate-limited", "retry": True,
                                      "retry-after-ms": 2 ** 64 - 1}))
 write("relay_snapshots", "one", cbor({"generation": generation, "records": [[3, wires[-1]]]}))
 write("relay_snapshots", "none", cbor({"generation": generation, "records": []}))
+
+
+# The relay's parsers of outside input (#45), from hand-encoded CBOR of the
+# shapes in docs/protocol/sync-relay-v0.cddl.
+def canonical_head(major, n):
+    if n < 24:
+        return bytes([major << 5 | n])
+    for extra, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * size):
+            return bytes([major << 5 | extra]) + n.to_bytes(size, "big")
+
+
+def canonical_cbor(value):
+    if isinstance(value, int):
+        return canonical_head(0, value)
+    if isinstance(value, bytes):
+        return canonical_head(2, len(value)) + value
+    if isinstance(value, str):
+        return canonical_head(3, len(value.encode())) + value.encode()
+    if isinstance(value, list):
+        return canonical_head(4, len(value)) + b"".join(canonical_cbor(v) for v in value)
+    if isinstance(value, dict):
+        keys = sorted(value, key=lambda k: (len(k.encode()), k.encode()))
+        return canonical_head(5, len(value)) + b"".join(canonical_cbor(k) + canonical_cbor(value[k]) for k in keys)
+    raise TypeError(value)
+
+
+route = [bytes([1] * 16), bytes([2] * 16), bytes([3] * 16)]
+write("relay-request", "challenge", canonical_cbor({"route": route, "device": bytes([4] * 48)}))
+write("relay-request", "session", canonical_cbor({
+    "route": route, "device": bytes([4] * 48), "challenge": bytes([5] * 32),
+    "signature": bytes([6] * 3309),
+}))
+write("relay-cursor", "start", canonical_cbor([bytes([7] * 16), 0]))
+write("relay-cursor", "later", canonical_cbor([bytes([7] * 16), 300]))
+write("relay-export", "empty", canonical_cbor(["matters-sync-export", 0, route, bytes([7] * 16), [], []]))
+write("relay-export", "records", canonical_cbor([
+    "matters-sync-export", 0, route, bytes([7] * 16),
+    [bytes.fromhex(controls["vectors"][0]["wire_hex"])],
+    [[1, bytes.fromhex(records["vectors"][0]["structural_wire_hex"])], [3, b"x"]],
+]))
+write("relay-hint", "hint", b"7:42:" + b"ab" * 16)
+write("relay-hint", "first", b"1:1:" + b"00" * 16)
 print("seeded", sum(1 for _ in CORPUS.rglob("*") if _.is_file()), "inputs")

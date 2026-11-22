@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Fuzz the sync parsers (#36) with cargo-fuzz (libFuzzer). Usage:
+# Fuzz the sync and relay parsers (#36, #45) with cargo-fuzz (libFuzzer).
+# Usage:
 #   ci/fuzz.sh [--all] [seconds-per-target]
 #
 # By default this runs only when matters-sync, the sync client's sources
-# (whose relay response parsers are fuzzed, #45) or fuzz/ changed relative to
-# origin/main, for 60 seconds per target, starting from the committed
-# corpus (fuzz/corpus, seeded from the golden vectors). A failing input
-# refuses the change: libFuzzer leaves it in fuzz/artifacts/<target>/, and
-# it belongs in fuzz/regressions/<target>/ with the fix, where the stable
-# replay test (crates/matters-sync/tests/fuzz_replay.rs) keeps checking it.
+# (whose relay response parsers are fuzzed), matters-relay or fuzz/ changed
+# relative to origin/main, for 60 seconds per target, starting from the
+# committed corpus (fuzz/corpus, seeded from the golden vectors). A failing
+# input refuses the change: libFuzzer leaves it in fuzz/artifacts/<target>/,
+# and it belongs in fuzz/regressions/<target>/ with the fix, where the
+# stable replay tests (tests/fuzz_replay.rs in matters-sync,
+# matters-sync-client and matters-relay) keep checking it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . ci/lib.sh
@@ -26,8 +28,8 @@ toolchain="$(pinned_version fuzz-nightly)"
 if [ "$all" -eq 0 ]; then
     merge_base="$(git merge-base "$base" HEAD)" \
         || cannot_run "no merge base with $base (fetch it, or set MATTERS_FUZZ_BASE)"
-    if git diff --quiet "$merge_base" -- crates/matters-sync crates/matters-sync-client/src fuzz; then
-        echo "No changes to matters-sync, the sync client or fuzz/ since $base: nothing to fuzz."
+    if git diff --quiet "$merge_base" -- crates/matters-sync crates/matters-sync-client/src crates/matters-relay fuzz; then
+        echo "No changes to matters-sync, the sync client, matters-relay or fuzz/ since $base: nothing to fuzz."
         exit 0
     fi
 fi

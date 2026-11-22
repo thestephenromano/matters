@@ -25,7 +25,7 @@ pub(crate) fn payload(route: i64, sequence: u64, generation: &[u8; 16]) -> Strin
     format!("{route}:{sequence}:{generation}")
 }
 
-fn parse(payload: &str) -> Option<Hint> {
+pub(crate) fn parse(payload: &str) -> Option<Hint> {
     let mut parts = payload.split(':');
     let route = parts.next()?.parse().ok()?;
     let sequence = parts.next()?.parse().ok()?;

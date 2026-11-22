@@ -10,6 +10,9 @@ description = "The durable encrypted sync relay (#38, docs/SYNC_SERVICE_CONTRACT
 [features]
 # Crash points for the conformance runner (src/fault.rs). Tests only.
 fault-injection = []
+# The fuzz targets' bodies (fuzz/, src/fuzzing.rs), for cargo-fuzz and the
+# replay test.
+fuzzing = []
 
 [dependencies]
 matters-sync = { path = "../matters-sync" }
@@ -46,5 +49,5 @@ futures-util = "0.3"
 serde_json = "1"
 tempfile = "3.13"
 # The conformance runner needs the crash points.
-matters-relay = { path = ".", features = ["fault-injection"] }
+matters-relay = { path = ".", features = ["fault-injection", "fuzzing"] }
 uuid = { version = "1", features = ["v4"] }

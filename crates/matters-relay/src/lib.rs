@@ -27,6 +27,9 @@ pub mod api;
 mod cbor;
 mod export;
 mod fault;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 pub mod hints;
 pub mod metrics;
 pub mod server;
