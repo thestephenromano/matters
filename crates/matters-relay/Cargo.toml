@@ -27,6 +27,9 @@ hyper-util = { version = "0.1.21", default-features = false, features = ["server
 base64 = "0.22"
 minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
+# Session challenges and tokens: 256 bits from the OS. Already in the graph
+# through uuid. MIT OR Apache-2.0.
+getrandom = "0.4.3"
 thiserror = "2.0"
 # Redacted operational metrics (#44, decided 2026-11-21): the Prometheus
 # project's own client, OpenMetrics text exposition, Apache-2.0.

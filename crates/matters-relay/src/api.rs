@@ -272,7 +272,7 @@ pub fn status(error: &RelayError) -> StatusCode {
         }
         RelayError::QuotaExhausted => StatusCode::INSUFFICIENT_STORAGE,
         RelayError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
-        RelayError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        RelayError::Unavailable(_) | RelayError::Entropy => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -665,7 +665,10 @@ async fn get_records(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let (after, limit) = page_query(query)?;
-    authenticated(&api, &route, &headers).await?;
+    // The root's session reads records too: a recovery closes earlier
+    // generations' writers at what the recovering device holds. Whoever
+    // holds it has the recovery words, and so every key anyway.
+    authenticated_as(&api, &route, &headers, true).await?;
     Ok(page_response(
         api.relay.records(&route, after.as_ref(), limit).await?,
     ))
@@ -710,7 +713,8 @@ async fn get_snapshots(
             _ => return Err(malformed()),
         }
     }
-    authenticated(&api, &route, &headers).await?;
+    // As for records, the root's session may read them.
+    authenticated_as(&api, &route, &headers, true).await?;
     let found = api
         .relay
         .snapshots(&route, limit.unwrap_or(MAX_PAGE))

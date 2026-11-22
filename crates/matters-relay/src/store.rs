@@ -58,6 +58,8 @@ pub enum RelayError {
     Authority(authority::Error),
     #[error("the database is unavailable: {0}")]
     Unavailable(#[from] sqlx::Error),
+    #[error("the system's random source failed")]
+    Entropy,
 }
 
 impl RelayError {
@@ -79,13 +81,16 @@ impl RelayError {
             Self::QuotaExhausted => "quota-exhausted",
             Self::UnknownInvitation => "unknown-invitation",
             Self::RateLimited { .. } => "rate-limited",
-            Self::Unavailable(_) => "unavailable",
+            Self::Unavailable(_) | Self::Entropy => "unavailable",
         }
     }
 
     /// Whether the client may retry the same request unchanged.
     pub fn retry(&self) -> bool {
-        matches!(self, Self::Unavailable(_) | Self::RateLimited { .. })
+        matches!(
+            self,
+            Self::Unavailable(_) | Self::Entropy | Self::RateLimited { .. }
+        )
     }
 }
 

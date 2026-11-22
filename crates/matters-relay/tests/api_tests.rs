@@ -812,15 +812,45 @@ async fn the_roots_session_reads_the_authority_log_and_publishes_only_a_recovery
     )
     .await;
     assert_eq!(log.status, StatusCode::OK);
-    // Nothing else: no records or mailbox, and no other kind of authority
-    // object.
+    // It reads the records and checkpoint parts too: a recovery closes
+    // earlier writers at what the recovering device holds.
+    let id = fresh();
+    db.relay
+        .append(
+            &route(),
+            &c.admin.id(),
+            &id,
+            &record(&c.admin, id, b"before the loss", &route()),
+        )
+        .await
+        .unwrap();
     for path in [
         format!("/v0/routes/{r}/records"),
-        format!("/v0/routes/{r}/enrollments/{}", hex(&[1; 16])),
+        format!("/v0/routes/{r}/snapshots"),
     ] {
-        let refused = call(&app, Method::GET, &path, Some(&token), vec![]).await;
-        assert_eq!(refused.code(), "not-a-member", "{path}");
+        let read = call(&app, Method::GET, &path, Some(&token), vec![]).await;
+        assert_eq!(read.status, StatusCode::OK, "{path}");
     }
+    let records = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/records"),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(records.uint("high-water"), 1);
+    // Nothing else: no mailbox, no uploads of records, and no other kind of
+    // authority object.
+    let refused = call(
+        &app,
+        Method::GET,
+        &format!("/v0/routes/{r}/enrollments/{}", hex(&[1; 16])),
+        Some(&token),
+        vec![],
+    )
+    .await;
+    assert_eq!(refused.code(), "not-a-member");
     let id = fresh();
     let put = call(
         &app,

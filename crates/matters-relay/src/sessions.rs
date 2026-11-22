@@ -25,11 +25,12 @@ pub struct Session {
     pub generation: [u8; 16],
 }
 
-fn random32() -> [u8; 32] {
+/// 256 bits from the operating system's random source, for challenges and
+/// tokens. (Two UUIDv4s carry only 244.)
+fn random32() -> Result<[u8; 32]> {
     let mut out = [0; 32];
-    out[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-    out[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-    out
+    getrandom::fill(&mut out).map_err(|_| RelayError::Entropy)?;
+    Ok(out)
 }
 
 fn ms(value: u64) -> i64 {
@@ -62,7 +63,7 @@ impl Relay {
             .bind(ms(now))
             .execute(&mut *tx)
             .await?;
-        let challenge = random32();
+        let challenge = random32()?;
         let expires = now + CHALLENGE_MS;
         sqlx::query(
             "INSERT INTO challenges (challenge, route, device, expires_at) VALUES ($1, $2, $3, $4)",
@@ -125,7 +126,7 @@ impl Relay {
                 RelayError::Unauthenticated
             });
         }
-        let token = random32();
+        let token = random32()?;
         let expires = now + SESSION_MS;
         sqlx::query(
             "INSERT INTO sessions (token_hash, route, device, expires_at) VALUES ($1, $2, $3, $4)",
@@ -151,7 +152,7 @@ impl Relay {
     }
 
     /// As [`Self::authenticate`], also accepting the route's root, whose
-    /// sessions only read the authority log and publish a root recovery.
+    /// sessions only read the logs and publish a root recovery and envelopes.
     pub async fn authenticate_as(
         &self,
         route: &Route,
