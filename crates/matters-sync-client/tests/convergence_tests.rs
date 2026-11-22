@@ -1,9 +1,11 @@
 //! Convergence under recorded schedules (#39): three Matters devices edit
 //! offline and sync through the real relay in fixed, seeded interleavings.
 //! The schedules include concurrent edits of one task, lost
-//! acknowledgements, process restarts, checkpoints and a relay restore. After a final round of syncing,
+//! acknowledgements, process restarts, checkpoints, emptied trash and a relay
+//! restore. After a final round of syncing,
 //! every device must hold the same tasks, field for field, and nothing
-//! may be left pending or have refused an honest checkpoint.
+//! may be left pending or have refused an honest checkpoint. A task any device
+//! purged stays absent everywhere (ADR 0001, C09); no other task goes missing.
 //!
 //! Each seed is a recorded schedule: a failure names its seed and step, and
 //! rerunning that seed replays it exactly. See client_tests.rs for the
@@ -196,6 +198,9 @@ async fn run_schedule(seed: u64, steps: usize) {
     let Some(mut w) = world().await else { return };
     let mut rng = Rng(seed);
     let mut created: u128 = 0;
+    // Tasks some device emptied from its trash: permanently absent
+    // everywhere, whatever happened to them concurrently (ADR 0001, C09).
+    let mut purged = std::collections::BTreeSet::new();
     for step in 0..steps {
         let d = rng.below(3) as usize;
         let db = &w.devices[d].clone();
@@ -225,7 +230,18 @@ async fn run_schedule(seed: u64, steps: usize) {
                         .unwrap_or_else(|e| panic!("{context}: notes: {e}"));
                 }
             }
-            55..=62 if created > 0 => {
+            // Trashed and the trash emptied, at once.
+            60..=62 if created > 0 => {
+                let n = 1 + rng.below(created as u64) as u128;
+                if db.get_task(&id(n)).unwrap().is_some() {
+                    db.trash_task(&id(n))
+                        .unwrap_or_else(|e| panic!("{context}: trash: {e}"));
+                    db.empty_trash()
+                        .unwrap_or_else(|e| panic!("{context}: empty trash: {e}"));
+                    purged.insert(n);
+                }
+            }
+            55..=59 if created > 0 => {
                 let n = 1 + rng.below(created as u64) as u128;
                 if let Some(t) = db.get_task(&id(n)).unwrap() {
                     if t.completed_at.is_some() {
@@ -273,10 +289,18 @@ async fn run_schedule(seed: u64, steps: usize) {
             "seed {seed}: device {d} differs from device 0"
         );
     }
-    assert!(
-        views[0].iter().all(|line| line != "absent"),
-        "seed {seed}: a created task is missing everywhere"
-    );
+    // Nothing purged comes back, and nothing else goes missing.
+    for (i, line) in views[0].iter().enumerate() {
+        let n = i as u128 + 1;
+        if purged.contains(&n) {
+            assert_eq!(line, "absent", "seed {seed}: purged task {n} came back");
+        } else {
+            assert_ne!(
+                line, "absent",
+                "seed {seed}: task {n} went missing everywhere"
+            );
+        }
+    }
     for (d, db) in w.devices.iter().enumerate() {
         assert!(
             db.pending_records().unwrap().is_empty(),
@@ -303,9 +327,19 @@ async fn run_schedule(seed: u64, steps: usize) {
     w.finish().await;
 }
 
+/// The recorded seeds every change runs. The weekly suite runs many more:
+/// `MATTERS_CONVERGENCE_SEEDS=<n>` runs seeds 1 to n, and
+/// `MATTERS_CONVERGENCE_STEPS` sets the steps of each (default 60).
 #[tokio::test(flavor = "multi_thread")]
 async fn recorded_schedules_converge() {
-    for seed in [1, 2, 3, 5, 8, 13, 21, 34] {
-        run_schedule(seed, 60).await;
+    let seeds: Vec<u64> = match std::env::var("MATTERS_CONVERGENCE_SEEDS") {
+        Ok(n) => (1..=n.parse::<u64>().expect("a seed count")).collect(),
+        Err(_) => vec![1, 2, 3, 5, 8, 13, 21, 34],
+    };
+    let steps = std::env::var("MATTERS_CONVERGENCE_STEPS")
+        .map(|s| s.parse().expect("a step count"))
+        .unwrap_or(60);
+    for seed in seeds {
+        run_schedule(seed, steps).await;
     }
 }
