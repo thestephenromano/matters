@@ -66,8 +66,15 @@ Each crash test kills a child process at a named crash point, then reopens the d
 - **Fresh record IDs.**
   - Every seal draws a fresh record ID, so no key and nonce are ever reused.
   - Copies, reopens and concurrent handles never share one (`sealing_tests.rs`).
-  - Each open is a new writer incarnation.
-- **Parsers under fuzzing.** Every parser of outside input has a cargo-fuzz target: records, controls, invitations, typed words and codes, and checkpoint parts. The targets are seeded from independent golden vectors, and the corpora are replayed on stable in the ordinary suite (`fuzz_replay.rs`). CI fuzzes any change to matters-sync for 60 s per target, and the weekly campaign for 600 s.
+  - Each open is a new writer incarnation. An older handle on the same database is fenced: its writes are refused with `Superseded`, not sealed under a closed writer (`revocation_tests.rs`).
+- **Parsers under fuzzing.** Each of these has a cargo-fuzz target (`fuzz/README.md` lists what each one checks):
+  - the sync codecs: records, controls, invitations, typed words and codes, and checkpoint parts;
+  - structure-aware targets that sign with fixture keys, so they reach past the signature: records, controls and checkpoints;
+  - the engine's imports, and a stateful sequence of receives and controls into a joined database;
+  - the client's parsers of relay pages and snapshot lists;
+  - the relay's request bodies, page cursors, export files and commit hints.
+
+  The targets are seeded from independent golden vectors, and the corpora are replayed on stable in the ordinary suite (each crate's `fuzz_replay` test). CI fuzzes any change to matters-sync, the sync client, the relay, receiving in matters-core, or `fuzz/`, for 60 s per target. The weekly campaign runs 600 s per target.
 - **Independent oracles.** Python encoders check the record contract, key distribution, invitations and checkpoints byte for byte, as do the golden vectors. The invitation and checkpoint oracles (`crates/matters-sync/tests/vectors/`) use only Python's standard library. The record-contract and key-distribution generators (`experiments/sync-prototype/tests/vectors/`) use `cbor2` for CBOR, and the record contract's also uses pyca/cryptography for AES-GCM, HKDF and HMAC. Those two are independent of the Rust implementation, but not of those libraries.
 - **Isolation.** Uploads must match their route and session (`store_tests.rs`, `appends_are_idempotent_conflicts_permanent_and_routing_checked`). Cross-route reads and writes are refused (the conformance scenarios), and export and import keep routes apart.
 

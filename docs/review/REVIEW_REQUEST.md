@@ -4,7 +4,7 @@ Status: a draft for the maintainer to adapt and send ([#45](https://github.com/t
 
 ---
 
-**Subject:** Independent security review of an end-to-end encrypted, post-quantum sync protocol and its implementation (Rust, about 13,000 lines)
+**Subject:** Independent security review of an end-to-end encrypted, post-quantum sync protocol and its implementation (Rust, about 18,500 lines)
 
 Dear [reviewer],
 
@@ -20,16 +20,18 @@ I maintain [Matters](https://github.com/thestephenromano/matters), a personal ta
 
 ## What I ask you to review
 
-The exact source revision is [revision, to be tagged at the start, e.g. `sync-review-1` at `e0c9b7f`]. The scope is:
+The exact source revision is [revision, to be tagged at the start, e.g. `sync-review-1`]. The scope is:
 
 | Part | Where | Size |
 | --- | --- | --- |
-| Codecs, cryptography, authority, checkpoints | `crates/matters-sync` | about 4,300 lines |
-| Sealing, receive, membership, enrollment, checkpoints and migration on the device | `crates/matters-core/src/storage` (the sync modules) | about 4,700 lines |
-| The client | `crates/matters-sync-client` | about 1,100 lines |
-| The relay | `crates/matters-relay` | about 2,500 lines |
-| The app's sync session | `crates/matters-sync-app` | about 700 lines |
-| The protocol as specified | `docs/SYNC_*.md`, `docs/protocol/*.cddl` | about 13,000 words |
+| Codecs, cryptography, authority, checkpoints | `crates/matters-sync` | about 5,000 lines |
+| Sealing, receive, membership, enrollment, checkpoints and the engine on the device | `crates/matters-core/src/storage/{sealing,sync_store,receive,enrollment,membership,checkpoint,sync}.rs` and `crates/matters-core/src/crdt/` | about 7,300 lines |
+| Sync's schema, migration and database plumbing on the device | the sync parts of `crates/matters-core/src/storage/{db,schema,import}.rs` | part of about 2,700 lines |
+| Device keys at rest | `crates/matters-keyring` (the Secret Service, or the portal's file keyring under Flatpak) | about 100 lines |
+| The client, and the headless sync daemon | `crates/matters-sync-client`, `crates/matters-syncd` | about 1,700 lines |
+| The relay | `crates/matters-relay` | about 3,700 lines |
+| The app's sync session | `crates/matters-sync-app` | about 800 lines |
+| The protocol as specified | `docs/SYNC_*.md`, `docs/protocol/*.cddl` | about 30,000 words |
 
 The review packet, `docs/review/SYNC_REVIEW_PACKET.md`, lists every document and artifact, and the questions I most need answered. In short:
 - Does the record transcript bind everything a receiver relies on, and can a key or nonce ever be reused?
@@ -45,7 +47,7 @@ Out of scope, unless you think otherwise: the task-management features, the desk
 - `ci/check.sh` reproduces the per-change gates. The relay's tests need the PostgreSQL setup in `docs/SYNC_VERIFICATION.md`; without it they stop the script. The weekly suite (longer fuzzing and the full set of convergence schedules) runs separately, as `docs/SYNC_VERIFICATION.md` describes.
 - `docs/SYNC_VERIFICATION.md` maps each claimed property to the test that checks it, and lists what is not claimed.
 - Independent Python encoders check the wire formats byte for byte. The invitation and checkpoint oracles use only the standard library; the record-contract and key-distribution generators use `cbor2`, and the record contract's also uses pyca/cryptography.
-- Fuzz targets cover every parser of outside input.
+- Fuzz targets cover the sync codecs (records, controls, invitations, typed words, checkpoint parts), structure-aware signed records, controls and checkpoints, the engine's imports, a stateful sequence of receives, the client's parsers of relay responses, and the relay's request bodies, cursors, export files and commit hints. `fuzz/README.md` lists each target and what it checks.
 - Recorded convergence schedules run three devices through the real relay, with restarts, lost acknowledgements and restores.
 - Measurements are recorded under `docs/evidence/`.
 

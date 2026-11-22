@@ -16,11 +16,13 @@ The relay stores only what clients have already encrypted and signed: records, a
 | `relay` | built from `packaging/relay/Containerfile` | The relay, distroless and unprivileged, on the private network only. API on 8484, metrics on 9484. |
 | `caddy` | `caddy:2.11` | TLS in front, with certificates from a public CA, or its own CA with `internal`. It publishes 443 and 80, and forwards only `/v0/*`, `/healthz` and `/readyz`, except export (`/v0/routes/*/export`), which it answers `404`. |
 
-The image build is reproducible from source:
+The image build pins its inputs, so that the same source can build the same binary:
 - base images are pinned by digest;
 - `cargo build --locked`;
 - a fixed `SOURCE_DATE_EPOCH`;
 - remapped paths.
+
+No gate yet builds the image twice and compares the results, so reproducibility is the aim of these pins, not a checked property.
 
 CI's `self-hosted relay image` job (`ci/relay-image.sh`) runs whenever the relay, matters-sync or the packaging changes. It builds the image and brings the stack up, then checks that:
 - the relay is ready over TLS through Caddy, on HTTP/2;

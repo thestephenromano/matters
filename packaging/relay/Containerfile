@@ -3,8 +3,8 @@
 #   docker build -f packaging/relay/Containerfile -t matters-relay .
 #
 # Base images are pinned by digest and the build is --locked, with a fixed
-# SOURCE_DATE_EPOCH and the checkout path remapped. The same source then
-# builds the same binary. The runtime is distroless: no shell or package
+# SOURCE_DATE_EPOCH and the checkout path remapped, so that the same source
+# can build the same binary (no gate compares two builds yet). The runtime is distroless: no shell or package
 # manager, running as an unprivileged user.
 
 # rust:1.100.0-slim-trixie, the toolchain rust-toolchain.toml names.
