@@ -1,6 +1,6 @@
 # Encrypted sync: independent review packet
 
-Status: prepared for [#45](https://github.com/thestephenromano/matters/issues/45). The packet is a draft for the maintainer to send to a reviewer they choose. Nothing in it records a review, a finding or a release decision.
+Status: prepared for [#45](https://github.com/thestephenromano/matters/issues/45). A draft request to a reviewer is in [REVIEW_REQUEST.md](REVIEW_REQUEST.md). The packet is a draft for the maintainer to send to a reviewer they choose. Nothing in it records a review, a finding or a release decision.
 
 This packet gives an independent reviewer what to review, where it is, and what we need answered. The review must assess the **pinned** protocol and implementation at one source revision, which the maintainer fixes when the review starts.
 
