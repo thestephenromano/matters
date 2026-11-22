@@ -141,7 +141,7 @@ Item {
         }
 
         function look(where) {
-            wait(view.reduceMotion ? 30 : 260);
+            Sweep.settle(testCase, view);
             const words = localeWords().concat(userTitles());
             const texts = [];
             for (const e of JSON.parse(probe.report()).elements)

@@ -14,7 +14,7 @@
 //! platform theme is ignored.
 //! Extra arguments go to Qt Quick Test, e.g. `-- -functions` or `-- tst_x`.
 
-use matters_core::calendar::{Calendar, Event, FakeCalendarSource};
+use matters_core::calendar::{Calendar, CalendarSource, Event, FakeCalendarSource};
 
 /// Two calendars, with events today and in the coming days.
 fn fake_calendar() -> FakeCalendarSource {
@@ -57,6 +57,25 @@ fn fake_calendar() -> FakeCalendarSource {
     }
 }
 
+/// The fake calendar placed around today as each read finds it, not as it
+/// was when the tests started: a run that crosses midnight still finds the
+/// events where the tests, computing today again, look for them (#238).
+struct TodaysCalendar;
+
+impl CalendarSource for TodaysCalendar {
+    fn calendars(&mut self) -> Result<Vec<Calendar>, matters_core::calendar::Unavailable> {
+        fake_calendar().calendars()
+    }
+
+    fn events(
+        &mut self,
+        from: jiff::civil::Date,
+        until: jiff::civil::Date,
+    ) -> Result<Vec<Event>, matters_core::calendar::Unavailable> {
+        fake_calendar().events(from, until)
+    }
+}
+
 fn main() {
     let platform = std::env::var("MATTERS_UI_TEST_PLATFORM").unwrap_or_else(|_| "offscreen".into());
     std::env::set_var("QT_QPA_PLATFORM", platform);
@@ -78,7 +97,7 @@ fn main() {
     matters_ui::install_settings(None, None);
     // A fake calendar, read at once rather than on a worker (#62). The tests
     // start with events hidden (`init()`), and those about events show them.
-    matters_ui::install_calendar_source(Box::new(fake_calendar()), false);
+    matters_ui::install_calendar_source(Box::new(TodaysCalendar), false);
     // Reminders are kept, never shown on the desktop (#60).
     matters_ui::install_notifier(Box::new(matters_ui::notify::RecordingNotifier::default()));
     // The pseudo-translations the translation tests switch to (#75).

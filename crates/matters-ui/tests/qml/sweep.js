@@ -6,6 +6,16 @@
 // and every dialog, popover and menu. `run` calls `look(where)` in each;
 // `name(text)` makes the titles of the data it creates.
 
+// Wait until the window has stopped moving, before looking at it. The fixed
+// delay lets popups and transitions start. Then the task list must have
+// finished: rows a view change removed fade out and stay in the list (and
+// the accessibility tree) until their transition ends, which on a slow
+// machine outlasts any fixed delay (#238).
+function settle(t, view) {
+    t.wait(view.reduceMotion ? 30 : 260);
+    t.tryVerify(() => !view.taskListMoving, 5000, "the task list has finished moving");
+}
+
 // The data the states need, made once per test file.
 function setup(t, view, name) {
     const controller = view.appController;
@@ -127,6 +137,8 @@ function run(t, view, look, name) {
     look("area");
     menu("areaMenu", "containerMenuButton");
 
+    // Today's events as of now, even after midnight (#238).
+    controller.refreshCalendars();
     controller.chooseShowEvents(true);
     controller.selectView("today");
     look("today with events");
