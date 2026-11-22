@@ -620,7 +620,8 @@ impl Database {
 
     /// Accept a signed membership transition, root recovery or writer claim
     /// received for this collection, with this device's key envelope for
-    /// the new epoch when a transition keeps it a member. A key envelope
+    /// the new epoch when a transition keeps it a member (`EnvelopeMissing`
+    /// without one, or when the one given does not open). A key envelope
     /// addressed to this device (a later history envelope) is stored;
     /// anyone else's is ignored. The control, the envelope and the device's
     /// standing commit together; sealing then continues under the new
@@ -678,7 +679,14 @@ impl Database {
                 // a writer claim changes no epoch.
                 if standing == SyncStanding::Active && before.manifest() != manifest {
                     let envelope = envelope.ok_or(MattersError::EnvelopeMissing)?;
-                    joined.authority.unwrap_key(envelope, &joined.device)?;
+                    // The transition itself verified. An envelope that does
+                    // not open is the relay's to answer for, not the
+                    // transition's: it waits for a genuine one, and is
+                    // never skipped as refused.
+                    joined
+                        .authority
+                        .unwrap_key(envelope, &joined.device)
+                        .map_err(|_| MattersError::EnvelopeMissing)?;
                     tx.execute(
                         "INSERT OR REPLACE INTO sync_envelopes (manifest, bytes) VALUES (?1, ?2)",
                         params![manifest.as_slice(), envelope],
