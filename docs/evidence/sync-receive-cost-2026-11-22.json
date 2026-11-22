@@ -1,0 +1,69 @@
+{
+  "date": "2026-11-22",
+  "issue": 241,
+  "what": "Same-host cost of a new device receiving every record of a collection, before and after receiving in pages with one rebuild of the rows per page and a lazily rebuilt engine index",
+  "source_commit": "948900bd908ce8eb30471ca8a40a53dde783ecfc (branch core/batch-receive; the measured code is unchanged in what merges)",
+  "baseline": "docs/evidence/sync-checkpoint-cost-2026-11-21.json, replay_every_record_ms: one record at a time, a full projection rebuild and an engine reindex per record",
+  "command": [
+    "cargo",
+    "run",
+    "--release",
+    "-p",
+    "matters-core",
+    "--features",
+    "test-support",
+    "--example",
+    "checkpoint_cost",
+    "--",
+    "target/receive-cost",
+    "250",
+    "1000",
+    "2000"
+  ],
+  "host": {
+    "name": "betelgeuse",
+    "cpu": "Intel(R) Core(TM) i9-10920X CPU @ 3.50GHz",
+    "logical_cpus": 23,
+    "memory_kb": 65529560,
+    "kernel": "Linux 7.3.4-200.fc44.x86_64",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "filesystem": "btrfs on /dev/nvme0n1p3 (/home)",
+    "sqlite": "bundled, WAL, synchronous=FULL as the app opens it",
+    "conditions": "shared development host with other sessions; no CPU pinning; one run per workload"
+  },
+  "workload": "the checkpoint cost example's: n tasks with 1 KiB notes, a rename of every second and a completion of every tenth, each edit its own sealed record (1.6 n records), received by a new device in pages of 256 as the sync client hands them over",
+  "runs": [
+    {
+      "tasks": 250,
+      "records": 400,
+      "before_ms": 8480,
+      "pages_only_ms": 841,
+      "after_ms": 652
+    },
+    {
+      "tasks": 1000,
+      "records": 1600,
+      "before_ms": 104158,
+      "pages_only_ms": 5893,
+      "after_ms": 2579
+    },
+    {
+      "tasks": 2000,
+      "records": 3200,
+      "before_ms": 422249,
+      "pages_only_ms": 23611,
+      "after_ms": 6077
+    }
+  ],
+  "findings": [
+    "Receiving every record is 13 to 69 times faster on these workloads.",
+    "Doubling the records now takes about 2.4 times as long, against about 4 times before: the remaining growth is one rebuild of the rows per page of 256.",
+    "pages_only_ms shows the rows rebuilt once per page but the index still rebuilt per record: the index was the larger share of the remaining cost."
+  ],
+  "limits": [
+    "One host, one run per workload.",
+    "Relay transfer time is not included: the device reads local bytes.",
+    "One writer; the receive work per record also authenticates its ML-DSA-65 signature, which is linear."
+  ],
+  "source_note": "crates/matters-core/examples/checkpoint_cost.rs; the receiving device is checked to hold the same tasks as the source."
+}

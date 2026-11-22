@@ -143,5 +143,5 @@ Measured on one shared development host ([evidence record](evidence/sync-checkpo
 
 - **Size.** A checkpoint is about 4.7% of the retained history at each size.
 - **History growth.** History grows by about 4.8 KB per edit, mostly the record's ML-DSA-65 signature.
-- **Starting a device.** Starting from a checkpoint grows with the collection's size. Receiving every record grows quadratically, which is tracked in #241.
+- **Starting a device.** Starting from a checkpoint grows with the collection's size. Receiving every record grew quadratically in this measurement. Since #241 a device receives a page at a time, with one rebuild of the rows and a lazily rebuilt index, and the same workloads take 0.65 s, 2.6 s and 6.1 s ([record](evidence/sync-receive-cost-2026-11-22.json)).
 - **Retention budget.** None is set. Pruning, and any budget on bootstrap time, needs its own approval against these figures.
