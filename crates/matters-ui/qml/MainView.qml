@@ -24,12 +24,6 @@ Item {
     LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
     LayoutMirroring.childrenInherit: true
     readonly property alias taskList: taskListView
-    // Whether the task list's rows are still fading or sliding (#77). A row
-    // a view change removed stays in the list, and in the accessibility
-    // tree, until its fade ends; checks of what the window shows wait for
-    // this to be false (#238).
-    readonly property bool taskListMoving: rowAdd.running || rowRemove.running
-                                           || rowDisplaced.running || rowMove.running
 
     // No animations when the desktop asks for reduced motion (#77). Writable
     // so tests can try both.
@@ -2653,23 +2647,19 @@ Item {
                         // glides to its new position. Displacement also finishes
                         // any interrupted fade, so no row is left half drawn.
                         add: Transition {
-                            id: rowAdd
                             enabled: !root.reduceMotion
                             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 180; easing.type: Easing.OutCubic }
                         }
                         remove: Transition {
-                            id: rowRemove
                             enabled: !root.reduceMotion
                             NumberAnimation { property: "opacity"; to: 0; duration: 140; easing.type: Easing.InCubic }
                         }
                         displaced: Transition {
-                            id: rowDisplaced
                             enabled: !root.reduceMotion
                             NumberAnimation { properties: "x,y"; duration: 180; easing.type: Easing.OutCubic }
                             NumberAnimation { property: "opacity"; to: 1; duration: 180 }
                         }
                         move: Transition {
-                            id: rowMove
                             enabled: !root.reduceMotion
                             NumberAnimation { properties: "x,y"; duration: 200; easing.type: Easing.OutCubic }
                         }

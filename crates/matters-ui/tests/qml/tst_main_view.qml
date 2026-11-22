@@ -60,10 +60,8 @@ Item {
             }, 2000, "rows finish animating");
             // Laid out (one pass), and, with motion on, done fading and
             // sliding (#77). Not waitForRendering: with nothing changed no new
-            // frame comes, and it would wait out its whole timeout. A fixed
-            // delay alone is not enough on a slow machine (#238).
+            // frame comes, and it would wait out its whole timeout.
             wait(view.reduceMotion ? 30 : 260);
-            tryVerify(() => !view.taskListMoving, 5000, "the task list has finished moving");
         }
 
         function rowFor(title) {

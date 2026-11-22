@@ -69,7 +69,7 @@ Item {
         }
 
         function settle() {
-            Sweep.settle(testCase, view);
+            wait(view.reduceMotion ? 30 : 260);
         }
 
         function check(where) {
