@@ -359,7 +359,12 @@ fn an_update_that_breaks_the_projection_is_refused_and_the_page_applies() {
         None,
         &doc.export(loro::ExportMode::all_updates()).unwrap(),
     );
+    let settled = receive::settles();
     let outcomes = p.a.receive_records(&[&bad, &genuine]).unwrap();
+    assert!(
+        receive::settles() > settled,
+        "the page ran again, each update checked"
+    );
     match &outcomes[0] {
         Err(MattersError::Validation(m)) => assert!(m.contains("unreadable"), "{m}"),
         other => panic!("{other:?}"),
@@ -756,7 +761,7 @@ fn a_reversed_chain_of_two_thousand_applies_with_bounded_work() {
     // Each record is authenticated when it arrives and once more when it
     // can apply; the drain re-checks nothing else.
     assert!(
-        work <= 2 * records,
+        (records..=2 * records).contains(&work),
         "{work} authentications for {records} records"
     );
     assert!(p.b.pending_records().unwrap().is_empty());
@@ -1294,4 +1299,263 @@ fn a_covered_chain_met_again_is_walked_within_its_writer() {
     };
     assert_eq!(digest(&linked), 0, "met again, covered");
     assert_eq!(digest(&foreign), 1, "another writer's record stays");
+}
+
+#[test]
+fn the_budgets_are_those_the_contract_states() {
+    // docs/SYNC_DURABLE_RECEIVE.md, "Budgets".
+    const MIB: i64 = 1 << 20;
+    assert_eq!(receive::UNAUTHENTICATED_ROWS, 64);
+    assert_eq!(receive::UNAUTHENTICATED_BYTES, 8 * MIB);
+    assert_eq!(receive::REVOKED_ROWS_PER_AUTHOR, 256);
+    assert_eq!(receive::REVOKED_BYTES_PER_AUTHOR, 16 * MIB);
+    assert_eq!(receive::QUARANTINE_ROWS, 1024);
+    assert_eq!(receive::QUARANTINE_BYTES, 32 * MIB);
+}
+
+#[test]
+fn a_page_that_projects_checks_no_update_on_its_own() {
+    let p = pair();
+    let sent = records(&p.a);
+    let borrowed: Vec<&[u8]> = sent.iter().map(Vec::as_slice).collect();
+    let settled = receive::settles();
+    for outcome in p.b.receive_records(&borrowed).unwrap() {
+        assert_eq!(outcome.unwrap(), Received::Applied);
+    }
+    assert_eq!(receive::settles(), settled, "rows rebuilt once, at the end");
+}
+
+/// `record` with one byte of its signed body changed.
+fn forged(record: &[u8]) -> Vec<u8> {
+    let mut out = record.to_vec();
+    let at = out.len() - 3400;
+    out[at] ^= 1;
+    out
+}
+
+#[test]
+fn a_forged_record_out_of_order_is_refused_on_arrival() {
+    let p = pair();
+    let sent = records(&p.a);
+    // The second record, its predecessor not yet here, its bytes changed.
+    let bad = forged(&sent[1]);
+    assert!(p.b.receive_record(&bad).is_err(), "not kept to wait");
+    assert!(p.b.pending_records().unwrap().is_empty());
+    assert!(quarantined(&p.b, &bad).is_some());
+}
+
+/// A reopened on the same file: a new writer incarnation, which B has not
+/// heard of.
+fn reopened(p: &Pair) -> Database {
+    let a = Database::open(p.dir.path().join("a.db")).unwrap();
+    a.resume_sync(&p.a_keys).unwrap();
+    a
+}
+
+#[test]
+fn kept_records_still_out_of_order_are_not_authenticated_again() {
+    let p = pair();
+    for r in records(&p.a) {
+        assert_eq!(p.b.receive_record(&r).unwrap(), Received::Applied);
+    }
+    let a = reopened(&p);
+    let incarnation = a.writer_incarnation().unwrap();
+    for n in 0..3 {
+        a.add_task(&mut Task::new(id(10 + n), "reopened", n as f64))
+            .unwrap();
+    }
+    let document = p.b.sync_membership().unwrap().document;
+    let mut chain: Vec<Vec<u8>> = records(&a)
+        .into_iter()
+        .filter(|r| {
+            wire::parse(r, route().content(&document))
+                .unwrap()
+                .header
+                .incarnation
+                == &incarnation
+        })
+        .collect();
+    assert_eq!(chain.len(), 3);
+    chain.reverse();
+    for r in &chain {
+        assert_eq!(
+            p.b.receive_record(r).unwrap(),
+            Received::Pending(Waiting::Writer)
+        );
+    }
+    // The writer is admitted: each kept record is tried again, and those
+    // still out of order wait without a second signature check.
+    let before = receive::authentications();
+    deliver_controls(&a, &p.b);
+    assert_eq!(
+        receive::authentications() - before,
+        3,
+        "once each, to apply"
+    );
+    assert!(p.b.pending_records().unwrap().is_empty());
+    assert_eq!(title(&p.b, 12).as_deref(), Some("reopened"));
+}
+
+#[test]
+fn another_record_under_a_held_id_from_a_new_writer_is_refused_once_admitted() {
+    let p = pair();
+    let sent = records(&p.a);
+    for r in &sent {
+        assert_eq!(p.b.receive_record(r).unwrap(), Received::Applied);
+    }
+    let document = p.b.sync_membership().unwrap().document;
+    let held = *wire::parse(&sent[0], route().content(&document))
+        .unwrap()
+        .header
+        .record_id;
+    let a = reopened(&p);
+    let a_dev = keys(&p.a_keys);
+    // Under the new writer, out of order, and under a record ID B holds.
+    let reused = sealed(
+        &a,
+        &a_dev,
+        wire::Kind::Data,
+        a.writer_incarnation().unwrap(),
+        Some([0x5A; 48]),
+        held,
+        b"x",
+    );
+    assert_eq!(
+        p.b.receive_record(&reused).unwrap(),
+        Received::Pending(Waiting::Writer)
+    );
+    deliver_controls(&a, &p.b);
+    assert!(p.b.pending_records().unwrap().is_empty());
+    let (reason, signed) = quarantined(&p.b, &reused).expect("refused");
+    assert!(reason.contains("record ID this device holds"), "{reason}");
+    assert!(signed);
+}
+
+#[test]
+fn a_forged_record_under_a_manifest_still_unknown_is_refused_once_it_arrives() {
+    let p = pair();
+    for r in records(&p.a) {
+        p.b.receive_record(&r).unwrap();
+    }
+    p.a.rotate_epoch().unwrap();
+    for n in 0..2 {
+        p.a.add_task(&mut Task::new(id(10 + n), "epoch 2", n as f64))
+            .unwrap();
+    }
+    // The second of A's new records, out of order and changed, reaches B
+    // before the rotation: kept without authentication.
+    let bad = forged(&records(&p.a).pop().unwrap());
+    assert_eq!(
+        p.b.receive_record(&bad).unwrap(),
+        Received::Pending(Waiting::Key)
+    );
+    assert_eq!(p.b.unauthenticated_pending().unwrap().0, 1);
+    deliver_controls(&p.a, &p.b);
+    assert!(p.b.pending_records().unwrap().is_empty(), "not kept on");
+    assert!(quarantined(&p.b, &bad).is_some());
+}
+
+#[test]
+fn a_record_waiting_for_its_dependencies_is_tried_only_once_they_arrive() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Database::open(dir.path().join("a.db")).unwrap();
+    let a_keys = MemoryKeyStore::default();
+    a.create_collection(&a_keys, route()).unwrap();
+    let (b, _) = join(&a, &dir.path().join("b.db"));
+    let (c, _) = join(&a, &dir.path().join("c.db"));
+    deliver_controls(&a, &b);
+    for (from, to) in [(&b, &a), (&c, &a), (&b, &c), (&c, &b)] {
+        deliver_controls(from, to);
+    }
+    b.add_task(&mut Task::new(id(3), "from B", 2.0)).unwrap();
+    let from_b = records(&b).pop().unwrap();
+    assert_eq!(c.receive_record(&from_b).unwrap(), Received::Applied);
+    c.rename_task(&id(3), "renamed on C").unwrap();
+    let from_c = records(&c).pop().unwrap();
+    assert_eq!(
+        a.receive_record(&from_c).unwrap(),
+        Received::Pending(Waiting::Dependencies)
+    );
+    // It waits for one of B's engine operations, by actor and counter.
+    let awaits: Vec<u8> = a
+        .with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT awaits FROM sync_pending WHERE reason = 'dependencies'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(awaits.len(), 12);
+    assert_eq!(awaits[..8], actor(&b).to_be_bytes());
+    // A page that brings nothing it waits for does not try it again.
+    let before = receive::authentications();
+    assert!(a.receive_record(b"not a record").is_err());
+    assert_eq!(receive::authentications(), before);
+    assert_eq!(a.receive_record(&from_b).unwrap(), Received::Applied);
+    assert_eq!(title(&a, 3).as_deref(), Some("renamed on C"));
+}
+
+#[test]
+fn bytes_that_are_no_record_are_refused_with_the_reason_they_do_not_parse() {
+    let p = pair();
+    match p.b.receive_record(b"not a record") {
+        Err(MattersError::Validation(m)) => {
+            assert!(m.starts_with("record refused: "), "{m}");
+            assert_ne!(
+                m, "record refused: it does not parse",
+                "the parser's own reason"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_record_waiting_for_its_key_is_tried_again_only_once_the_key_is_here() {
+    let p = pair();
+    for r in records(&p.a) {
+        p.b.receive_record(&r).unwrap();
+    }
+    p.a.rotate_epoch().unwrap();
+    p.a.add_task(&mut Task::new(id(3), "epoch 2", 2.0)).unwrap();
+    let newest = records(&p.a).pop().unwrap();
+    // B learns of the rotation, but its envelope of the new epoch's key
+    // is withheld: the record is authenticated by the roster and waits.
+    deliver_controls(&p.a, &p.b);
+    let manifest = p.b.sync_membership().unwrap().manifest;
+    let envelope: Vec<u8> =
+        p.b.with_raw_conn(|c| {
+            let e = c.query_row(
+                "SELECT bytes FROM sync_envelopes WHERE manifest = ?1",
+                [manifest.as_slice()],
+                |r| r.get(0),
+            )?;
+            c.execute(
+                "DELETE FROM sync_envelopes WHERE manifest = ?1",
+                [manifest.as_slice()],
+            )?;
+            Ok(e)
+        })
+        .unwrap();
+    assert_eq!(
+        p.b.receive_record(&newest).unwrap(),
+        Received::Pending(Waiting::Key)
+    );
+    assert_eq!(p.b.unauthenticated_pending().unwrap().0, 0, "authenticated");
+    // A page without the key does not try it again.
+    let before = receive::authentications();
+    assert!(p.b.receive_record(b"not a record").is_err());
+    assert_eq!(receive::authentications(), before);
+    // The envelope arrives: it applies.
+    p.b.with_raw_conn(|c| {
+        Ok(c.execute(
+            "INSERT INTO sync_envelopes (manifest, bytes) VALUES (?1, ?2)",
+            rusqlite::params![manifest.as_slice(), envelope],
+        )?)
+    })
+    .unwrap();
+    let _ = p.b.receive_record(b"not a record");
+    assert!(p.b.pending_records().unwrap().is_empty());
+    assert_eq!(title(&p.b, 3).as_deref(), Some("epoch 2"));
 }

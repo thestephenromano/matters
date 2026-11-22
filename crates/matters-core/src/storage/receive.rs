@@ -138,6 +138,7 @@ fn refused(what: &str) -> MattersError {
 #[cfg(feature = "test-support")]
 thread_local! {
     static AUTHENTICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SETTLES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// One signature check of a record.
@@ -151,6 +152,21 @@ fn counted() {
 #[cfg(feature = "test-support")]
 pub fn authentications() -> u64 {
     AUTHENTICATIONS.with(std::cell::Cell::get)
+}
+
+/// One update's effect on the document checked on its own, in a careful
+/// page.
+fn settled() {
+    #[cfg(feature = "test-support")]
+    SETTLES.with(|c| c.set(c.get() + 1));
+}
+
+/// How many updates this thread has checked one by one while receiving:
+/// only a careful page does, after a page that could not be projected
+/// (#45).
+#[cfg(feature = "test-support")]
+pub fn settles() -> u64 {
+    SETTLES.with(std::cell::Cell::get)
 }
 
 /// A record's header facts, copied out of its bytes.
@@ -617,12 +633,16 @@ fn apply(
         .engine
         .as_mut()
         .ok_or_else(|| MattersError::Validation("sync is off".into()))?;
-    let mut failed = doc.merge_unindexed(update).err().map(|e| e.to_string());
-    if failed.is_none() && cx.careful {
-        if let Err(e) = doc.settle() {
-            failed = Some(format!("its update leaves the document unreadable: {e}"));
+    let failed = match doc.merge_unindexed(update) {
+        Err(e) => Some(e.to_string()),
+        Ok(()) if cx.careful => {
+            settled();
+            doc.settle()
+                .err()
+                .map(|e| format!("its update leaves the document unreadable: {e}"))
         }
-    }
+        Ok(()) => None,
+    };
     if let Some(reason) = failed {
         // The journal holds everything applied before it.
         reload(cx.tx, &mut *cx.engine)?;
@@ -752,44 +772,51 @@ fn keep(
 /// Hold a removed author's revoked records to their budget, the oldest
 /// evicted first.
 fn evict_revoked(tx: &Connection, author: &Hash) -> Result<()> {
-    loop {
-        let (rows, bytes): (i64, i64) = tx.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(length(bytes)), 0) FROM sync_pending
-             WHERE reason = 'revoked' AND substr(awaits, 1, 48) = ?1",
-            params![author.as_slice()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if rows <= REVOKED_ROWS_PER_AUTHOR && bytes <= REVOKED_BYTES_PER_AUTHOR {
-            return Ok(());
-        }
-        tx.execute(
-            "DELETE FROM sync_pending WHERE seq = (SELECT MIN(seq) FROM sync_pending
-             WHERE reason = 'revoked' AND substr(awaits, 1, 48) = ?1)",
-            params![author.as_slice()],
-        )?;
-    }
+    tx.execute(
+        &format!(
+            "DELETE FROM sync_pending WHERE seq IN ({})",
+            beyond_budget(
+                "reason = 'revoked' AND substr(awaits, 1, 48) = ?1",
+                "?2",
+                "?3"
+            )
+        ),
+        params![
+            author.as_slice(),
+            REVOKED_ROWS_PER_AUTHOR,
+            REVOKED_BYTES_PER_AUTHOR
+        ],
+    )?;
+    Ok(())
+}
+
+/// The `seq` of the rows of `table` matching `filter` that a budget of
+/// `rows` rows and `bytes` bytes leaves out, keeping the newest: each
+/// row's rank and running total of bytes, newest first, past either
+/// limit. The same rows as evicting the oldest one at a time until both
+/// hold, in one statement.
+fn beyond_budget(filter: &str, rows: &str, bytes: &str) -> String {
+    format!(
+        "SELECT seq FROM (
+             SELECT seq, ROW_NUMBER() OVER newest AS n, SUM(length(bytes)) OVER newest AS kept
+             FROM sync_pending WHERE {filter}
+             WINDOW newest AS (ORDER BY seq DESC))
+         WHERE n > {rows} OR kept > {bytes}"
+    )
 }
 
 /// Hold the records kept without authentication to their budget, the
 /// oldest evicted first. Carried records are received again in the same
 /// transaction that kept them, so they are outside it.
 fn evict_unauthenticated(tx: &Connection) -> Result<()> {
-    loop {
-        let (rows, bytes): (i64, i64) = tx.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(length(bytes)), 0) FROM sync_pending
-             WHERE authenticated = 0 AND reason != 'carried'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if rows <= UNAUTHENTICATED_ROWS && bytes <= UNAUTHENTICATED_BYTES {
-            return Ok(());
-        }
-        tx.execute(
-            "DELETE FROM sync_pending WHERE seq = (SELECT MIN(seq) FROM sync_pending
-             WHERE authenticated = 0 AND reason != 'carried')",
-            [],
-        )?;
-    }
+    tx.execute(
+        &format!(
+            "DELETE FROM sync_pending WHERE seq IN ({})",
+            beyond_budget("authenticated = 0 AND reason != 'carried'", "?1", "?2")
+        ),
+        params![UNAUTHENTICATED_ROWS, UNAUTHENTICATED_BYTES],
+    )?;
+    Ok(())
 }
 
 /// Remember a refused record: its ID, digest and reason, and its bytes if
@@ -812,21 +839,16 @@ fn quarantine(tx: &Connection, f: &Facts, bytes: &[u8], r: &Refusal) -> Result<(
              LIMIT MAX(0, (SELECT COUNT(*) FROM sync_quarantine) - ?1))",
         params![QUARANTINE_ROWS],
     )?;
-    loop {
-        let kept: i64 = tx.query_row(
-            "SELECT COALESCE(SUM(length(bytes)), 0) FROM sync_quarantine",
-            [],
-            |r| r.get(0),
-        )?;
-        if kept <= QUARANTINE_BYTES {
-            break;
-        }
-        tx.execute(
-            "UPDATE sync_quarantine SET bytes = NULL WHERE seq =
-                 (SELECT MIN(seq) FROM sync_quarantine WHERE bytes IS NOT NULL)",
-            [],
-        )?;
-    }
+    // The oldest lose their bytes first: those whose running total, newest
+    // first, passes the budget.
+    tx.execute(
+        "UPDATE sync_quarantine SET bytes = NULL WHERE seq IN (
+             SELECT seq FROM (
+                 SELECT seq, SUM(length(bytes)) OVER (ORDER BY seq DESC) AS kept
+                 FROM sync_quarantine WHERE bytes IS NOT NULL)
+             WHERE kept > ?1)",
+        params![QUARANTINE_BYTES],
+    )?;
     unkeep(tx, f)
 }
 
@@ -1145,10 +1167,12 @@ fn run_page(
             let doc = engine
                 .as_mut()
                 .ok_or_else(|| MattersError::Validation("sync is off".into()))?;
+            // A careful page checked each update as it applied, so it is
+            // projected; one that still is not is the engine's failure,
+            // which receive_all reports.
             match doc.settle() {
                 Ok(snapshot) => rebuild_rows(&tx, &snapshot)?,
-                Err(_) if !careful => return Ok(Err(Unsettled)),
-                Err(error) => return Err(error),
+                Err(_) => return Ok(Err(Unsettled)),
             }
         }
         Ok::<_, MattersError>(Ok(outcomes))

@@ -578,3 +578,30 @@ fn a_claim_reaching_an_authority_a_membership_fork_froze_stops_it() {
         ))
     ));
 }
+
+#[test]
+fn a_device_holding_past_the_closing_head_applies_nothing_more_of_it() {
+    let t = three();
+    let c_id = device_id(&t.c_keys);
+    // B writes twice; A holds only the first, then removes B.
+    t.b.add_task(&mut Task::new(id(1), "one", 0.0)).unwrap();
+    t.b.add_task(&mut Task::new(id(2), "two", 1.0)).unwrap();
+    let chain = records(&t.b);
+    assert_eq!(chain.len(), 2);
+    assert_eq!(t.a.receive_record(&chain[0]).unwrap(), Received::Applied);
+    t.a.remove_member(&device_id(&t.b_keys)).unwrap();
+    // C held both before it learnt of the removal: its head is past the
+    // closing head A signed.
+    for r in &chain {
+        assert_eq!(t.c.receive_record(r).unwrap(), Received::Applied);
+    }
+    deliver_controls(&t.a, &t.c, &c_id);
+    t.b.add_task(&mut Task::new(id(3), "three", 2.0)).unwrap();
+    let late = records(&t.b).pop().unwrap();
+    assert_eq!(parse_previous(&late), Some(record_hash(&chain[1])));
+    assert_eq!(
+        t.c.receive_record(&late).unwrap(),
+        Received::Pending(Waiting::AfterClose)
+    );
+    assert!(!has(&t.c, 3));
+}
