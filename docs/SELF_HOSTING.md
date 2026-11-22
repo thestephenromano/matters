@@ -33,18 +33,22 @@ From the repository root:
 
 ```sh
 cp packaging/relay/relay.env.example packaging/relay/relay.env
-openssl rand -hex 32 > packaging/relay/postgres_password   # and put it in relay.env's URL
-chmod 600 packaging/relay/relay.env packaging/relay/postgres_password
+cp packaging/relay/caddy.env.example packaging/relay/caddy.env
+openssl rand -hex 32 > packaging/relay/postgres_password
+chmod 600 packaging/relay/relay.env
+# The relay runs as the image's unprivileged user (uid and gid 65532) and
+# reads the password as a secret file, so that group may read it.
+chgrp 65532 packaging/relay/postgres_password
+chmod 640 packaging/relay/postgres_password
 docker compose -f packaging/relay/compose.yaml up -d --build
 ```
 
-`relay.env` sets:
-- the public name (`MATTERS_RELAY_DOMAIN`);
-- the ACME contact address (`MATTERS_RELAY_TLS`);
-- the database URL;
-- optionally the rate limits (*Limits* below) and the export credential (`MATTERS_RELAY_OPERATOR_TOKEN`).
+Each service gets only what it needs:
+- `caddy.env`, Caddy's only configuration: the public name (`MATTERS_RELAY_DOMAIN`) and the ACME contact address (`MATTERS_RELAY_TLS`).
+- `relay.env`, the relay's only: the database URL, without a password, and optionally the limits (*Limits* below) and the export credential (`MATTERS_RELAY_OPERATOR_TOKEN`).
+- `postgres_password`, a compose secret mounted into PostgreSQL (which is initialized from it) and the relay (`MATTERS_RELAY_DATABASE_PASSWORD_FILE`), so the password is in no environment and in no file but this one.
 
-Neither secrets file is committed (`packaging/relay/.gitignore`). `MATTERS_RELAY_HTTPS_PORT` and `MATTERS_RELAY_HTTP_PORT` change the published ports.
+With rootless Docker or Podman, give the file to the uid that 65532 maps to on the host instead. None of these files is committed (`packaging/relay/.gitignore`), and none, nor any `*.dump`, is sent to an image build (`.dockerignore`). `MATTERS_RELAY_HTTPS_PORT` and `MATTERS_RELAY_HTTP_PORT` change the published ports.
 
 Provision each collection with the root key and genesis its admin device exports:
 
@@ -77,6 +81,8 @@ A backup must hold the records, authority log, envelopes and indexes **together 
 docker compose -f packaging/relay/compose.yaml exec -T postgres \
   pg_dump -U relay -Fc relay > relay-$(date -u +%Y%m%dT%H%M%SZ).dump
 ```
+
+A dump holds every stored byte. Keep it with the same care as the database, outside the repository checkout if you can; inside it, `*.dump` is ignored by git and by image builds.
 
 `pg_dump` reads one consistent snapshot. Records acknowledged after the snapshot are not in it. Restoring an older backup therefore **loses acknowledged records**. This is not zero data loss: clients re-upload what they still hold, and the relay deduplicates by record ID.
 
@@ -121,7 +127,7 @@ On the device, Matters refuses a database written by a newer Matters (`MattersEr
 
 | Credential | How to rotate it | Effect |
 | --- | --- | --- |
-| Database password | `ALTER ROLE relay PASSWORD …`, then update `postgres_password` and `relay.env`, then restart the relay | Clients see a brief unavailability and retry. |
+| Database password | `ALTER ROLE relay PASSWORD …`, then update `postgres_password`, then restart the relay | Clients see a brief unavailability and retry. |
 | Operator export token | Replace `MATTERS_RELAY_OPERATOR_TOKEN` and restart | The old token stops working at once. |
 | Device sessions | Last 15 minutes and are bound to current membership | A removed device loses access at its next request. |
 | TLS certificates | Renewed by Caddy | — |

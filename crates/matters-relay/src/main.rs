@@ -11,6 +11,8 @@
 //! ```
 //!
 //! - `MATTERS_RELAY_DATABASE_URL`: the PostgreSQL connection (required).
+//! - `MATTERS_RELAY_DATABASE_PASSWORD_FILE`: a file holding the database
+//!   password, which then overrides any in the URL (a container secret).
 //! - `MATTERS_RELAY_LISTEN`: where `serve` listens (default 127.0.0.1:8484).
 //!   It speaks HTTP/1.1 and cleartext HTTP/2; TLS terminates at a proxy.
 //! - `MATTERS_RELAY_RATE`: `<per-second>/<burst>` per route and device,
@@ -114,7 +116,18 @@ async fn main() -> ExitCode {
         eprintln!("matters-relay: set MATTERS_RELAY_DATABASE_URL");
         return ExitCode::from(2);
     };
-    let relay = match Relay::connect(&url).await {
+    let mut options = match url.parse::<sqlx::postgres::PgConnectOptions>() {
+        Ok(options) => options,
+        Err(_) => return fail("MATTERS_RELAY_DATABASE_URL is not a PostgreSQL URL"),
+    };
+    // The password from a secret file, so it is in no environment.
+    if let Ok(file) = std::env::var("MATTERS_RELAY_DATABASE_PASSWORD_FILE") {
+        match std::fs::read_to_string(&file) {
+            Ok(password) => options = options.password(password.trim_end_matches(['\r', '\n'])),
+            Err(error) => return fail(format!("cannot read {file}: {error}")),
+        }
+    }
+    let relay = match Relay::connect_with(options).await {
         Ok(relay) => relay,
         Err(error) => return fail(error),
     };

@@ -1,2 +1,4 @@
 relay.env
 postgres_password
+caddy.env
+*.dump

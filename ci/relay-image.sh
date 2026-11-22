@@ -38,16 +38,19 @@ port="${MATTERS_IMAGE_HTTPS_PORT:-58443}"
 cleanup() {
     docker compose -f "$dir/compose.yaml" -p "$project" logs --no-color > target/relay-image.log 2>&1 || true
     docker compose -f "$dir/compose.yaml" -p "$project" down -v > /dev/null 2>&1 || true
-    rm -f "$dir/relay.env" "$dir/postgres_password"
+    rm -f "$dir/relay.env" "$dir/caddy.env" "$dir/postgres_password"
 }
 trap cleanup EXIT
 mkdir -p target
-password="$(openssl rand -hex 16)"
-printf '%s' "$password" > "$dir/postgres_password"
+# The relay's unprivileged user reads the password as a secret file.
+openssl rand -hex 16 > "$dir/postgres_password"
+chmod 0644 "$dir/postgres_password"
 cat > "$dir/relay.env" <<ENV
+MATTERS_RELAY_DATABASE_URL=postgres://relay@postgres:5432/relay
+ENV
+cat > "$dir/caddy.env" <<ENV
 MATTERS_RELAY_DOMAIN=localhost
 MATTERS_RELAY_TLS=internal
-MATTERS_RELAY_DATABASE_URL=postgres://relay:$password@postgres:5432/relay
 ENV
 
 group "build the image and start the stack"
@@ -75,5 +78,8 @@ export_status="$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:$por
 docker compose -f "$dir/compose.yaml" -p "$project" exec -T caddy \
     wget -qO- http://relay:9484/metrics | grep -q '^matters_relay_routes ' \
     || refuse "metrics are not served on the private network"
+docker compose -f "$dir/compose.yaml" -p "$project" exec -T caddy env \
+    | grep -q -e MATTERS_RELAY_DATABASE -e MATTERS_RELAY_OPERATOR_TOKEN \
+    && refuse "Caddy's environment holds a relay credential"
 endgroup
 echo "The self-hosted stack came up and answered as configured."

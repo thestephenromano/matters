@@ -1049,3 +1049,42 @@ async fn a_database_outage_answers_unavailable_and_acknowledges_nothing() {
     world.inspect().await;
     world.finish().await;
 }
+
+/// The database password can come from a secret file instead of the URL
+/// (packaging/relay/compose.yaml), and a wrong one keeps the relay down.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_database_password_is_read_from_a_secret_file() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let url = db.url();
+    let (scheme, rest) = url.split_once("://").unwrap();
+    let (credentials, host) = rest.split_once('@').unwrap();
+    let (user, password) = credentials.split_once(':').unwrap();
+    let bare = format!("{scheme}://{user}@{host}");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("postgres_password");
+    std::fs::write(&file, format!("{password}\n")).unwrap();
+    let mut relay = start(
+        &bare,
+        &[(
+            "MATTERS_RELAY_DATABASE_PASSWORD_FILE",
+            file.to_str().unwrap(),
+        )],
+    );
+    let ready = http(&relay.addr, "GET", "/readyz", None, b"")
+        .await
+        .unwrap();
+    assert_eq!(ready.status, 200);
+    relay.kill();
+    std::fs::write(&file, "not-the-password").unwrap();
+    let status = Command::new(BIN)
+        .env("MATTERS_RELAY_DATABASE_URL", &bare)
+        .env("MATTERS_RELAY_DATABASE_PASSWORD_FILE", &file)
+        .env("MATTERS_RELAY_LISTEN", "127.0.0.1:0")
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(!status.success(), "a wrong password keeps it down");
+    db.finish().await;
+}

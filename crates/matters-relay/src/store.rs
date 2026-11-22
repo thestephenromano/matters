@@ -3,7 +3,7 @@ use matters_sync::control_signature::verify_signature;
 use matters_sync::record::record_hash;
 use matters_sync::{wire, VerificationKey};
 use minicbor::{Decoder, Encoder};
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -331,12 +331,17 @@ pub(crate) fn sequence(value: i64) -> u64 {
 impl Relay {
     /// Connect to `url` and bring the schema up to date.
     pub async fn connect(url: &str) -> Result<Self> {
+        Self::connect_with(url.parse::<PgConnectOptions>()?).await
+    }
+
+    /// Connect with `options` and bring the schema up to date.
+    pub async fn connect_with(options: PgConnectOptions) -> Result<Self> {
         // A request waits at most 5 s for a connection, then answers
         // `unavailable`, which clients retry with backoff.
         let pool = PgPoolOptions::new()
             .max_connections(16)
             .acquire_timeout(std::time::Duration::from_secs(5))
-            .connect(url)
+            .connect_with(options)
             .await?;
         MIGRATOR
             .run(&pool)

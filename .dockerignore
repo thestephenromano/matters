@@ -6,3 +6,8 @@ target/
 experiments/sync-prototype/target/
 fuzz/target/
 fuzz/artifacts/
+# Operator secrets and backups next to the stack: never in a build context.
+packaging/relay/relay.env
+packaging/relay/caddy.env
+packaging/relay/postgres_password
+*.dump
