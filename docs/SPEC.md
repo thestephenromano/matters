@@ -190,8 +190,8 @@ On a schedule, the dates are those on or after the start that match. A month wit
 
 Matters checks for occurrences due when it starts and every minute. The rules are `matters_core::repeat` (checked against python-dateutil's RFC 5545 dates); the rows, `matters_core::storage::repeats`.
 
-### Goals (planned, #202)
-Goals live in a separate Goals app (#223), not in Matters. A Matters project or repeating task can say which goal it serves, and Matters shows that goal while the user works. [ADR 0004](decisions/0004-goal-references.md) has the design.
+### Goals (deferred, #202)
+Goals live in a separate Goals app (#223), not in Matters. Linking the two is deferred (2026-11-22): Matters has no interface to the Goals app and shows no goals. The reference below is stored and synced, but nothing sets or shows it; [ADR 0004](decisions/0004-goal-references.md) has the design, kept for when the link resumes.
 
 * **One goal at most:**
   * a project, or a repeating series, serves at most one goal;
