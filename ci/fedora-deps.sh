@@ -15,6 +15,8 @@ packages=(
     gtk4-devel libadwaita-devel
     mesa-dri-drivers dejavu-sans-fonts
     ShellCheck tar gzip
+    # A private bus for the single-instance and activation tests (#203).
+    dbus-daemon
 )
 if [ "${1:-}" = "--desktop-themes" ]; then
     packages+=(cutecosmic-qt6 kf6-qqc2-desktop-style)

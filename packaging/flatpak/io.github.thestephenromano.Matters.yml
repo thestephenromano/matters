@@ -47,6 +47,9 @@ modules:
       - cargo build --release --locked --offline -p matters-ui
       - install -Dm755 target/release/matters-ui /app/bin/matters-ui
       - install -Dm644 packaging/linux/${FLATPAK_ID}.desktop /app/share/applications/${FLATPAK_ID}.desktop
+      # D-Bus activation (#203): a call while Matters is closed starts it
+      # with no window. Flatpak points Exec at the sandboxed app on export.
+      - install -Dm644 packaging/linux/${FLATPAK_ID}.service /app/share/dbus-1/services/${FLATPAK_ID}.service
       - install -Dm644 packaging/linux/${FLATPAK_ID}.metainfo.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
       - install -Dm644 packaging/linux/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg /app/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
       - install -Dm644 packaging/linux/icons/hicolor/symbolic/apps/${FLATPAK_ID}-symbolic.svg /app/share/icons/hicolor/symbolic/apps/${FLATPAK_ID}-symbolic.svg

@@ -37,6 +37,8 @@ cxx = "1.0"
 cxx-qt = "0.10.0"
 cxx-qt-lib = { version = "0.10.0", features = ["qt_gui", "qt_qml", "qt_quickcontrols"] }
 matters-core = { path = "../matters-core" }
+# The automation interface (#203), served on the session bus.
+matters-automation = { path = "../matters-automation" }
 # Sync (#42): the app's sync session, and this device's keys in the keyring.
 matters-sync-app = { path = "../matters-sync-app" }
 matters-keyring = { path = "../matters-keyring" }

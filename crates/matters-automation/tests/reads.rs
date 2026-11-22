@@ -14,6 +14,9 @@ use zbus::{connection, proxy, Connection};
 
 const TODAY: Date = date(2026, 11, 22);
 
+/// Calls seen by every fixture's activity hook.
+static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[proxy(
     interface = "io.github.thestephenromano.Matters.Automation1",
     default_service = "io.github.thestephenromano.Matters",
@@ -102,7 +105,10 @@ fn fixture() -> Fixture {
     });
     let automation = Automation::new(db.clone(), clients.clone())
         .with_today(|| TODAY)
-        .with_events(events);
+        .with_events(events)
+        .with_activity(|| {
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
     let (a, b) = UnixStream::pair().unwrap();
     let guid = zbus::Guid::generate();
     let (service, client) = zbus::block_on(async {
@@ -172,6 +178,16 @@ fn error_name<T: std::fmt::Debug>(result: zbus::Result<T>) -> String {
 }
 
 const ERROR: &str = "io.github.thestephenromano.Matters.Automation1.Error";
+
+#[test]
+fn every_call_counts_as_activity_even_when_refused() {
+    let f = fixture();
+    let before = CALLS.load(std::sync::atomic::Ordering::SeqCst);
+    let p = f.proxy();
+    zbus::block_on(p.get_view(&f.reader, "inbox")).unwrap();
+    let _ = zbus::block_on(p.get_view("", "inbox"));
+    assert!(CALLS.load(std::sync::atomic::Ordering::SeqCst) >= before + 2);
+}
 
 #[test]
 fn names_follow_the_app_id() {

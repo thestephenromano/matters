@@ -24,6 +24,7 @@ pub struct Automation {
     clients: Arc<dyn Clients>,
     today: Box<dyn Fn() -> Date + Send + Sync>,
     events: Option<TodayEvents>,
+    activity: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Automation {
@@ -33,6 +34,7 @@ impl Automation {
             clients,
             today: Box::new(matters_core::local_today),
             events: None,
+            activity: None,
         }
     }
 
@@ -47,8 +49,18 @@ impl Automation {
         self
     }
 
+    /// Called at the start of every method call, refused or not: the app
+    /// uses it to stay running while it is being used.
+    pub fn with_activity(mut self, activity: impl Fn() + Send + Sync + 'static) -> Self {
+        self.activity = Some(Box::new(activity));
+        self
+    }
+
     /// The client presenting `token`, if it may do `needs`.
     fn authorise(&self, token: &str, needs: Permission) -> Result<Client> {
+        if let Some(activity) = &self.activity {
+            activity();
+        }
         let unknown = || Error::UnknownToken("no client has this token".into());
         let verifier = verifier_of_presented(token).ok_or_else(unknown)?;
         let client = self.clients.by_verifier(&verifier).ok_or_else(unknown)?;
