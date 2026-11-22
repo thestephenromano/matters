@@ -9,3 +9,4 @@ Terminal=false
 Categories=Office;ProjectManagement;Qt;
 Keywords=tasks;todo;to-do;gtd;getting things done;projects;planner;
 StartupNotify=true
+DBusActivatable=true

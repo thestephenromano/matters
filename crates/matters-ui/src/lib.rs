@@ -19,6 +19,7 @@ pub mod notify;
 mod qml_lint;
 pub mod reminders;
 pub mod repeat_words;
+pub mod service;
 // One declaration a line, as lupdate reads them (it trips on rustfmt's
 // trailing commas).
 #[rustfmt::skip]

@@ -2,7 +2,7 @@
 
 Everything outside the app reaches Matters through one versioned D-Bus interface on the session bus. That includes the command line, `matters://` links, global capture and the MCP server (#197). The design and how it was chosen are recorded on [#203](https://github.com/thestephenromano/matters/issues/203). The code is the `matters-automation` crate, which either front end serves over its own database.
 
-This document describes what is built so far: names, client tokens and the read methods. Writes and batches, activation, and the front ends' hook-up follow, as the order of work on #203 sets out.
+This document describes what is built so far: names, client tokens, the read methods, and how the Qt app serves them. Writes and batches follow, as the order of work on #203 sets out.
 
 ## Names
 
@@ -14,6 +14,28 @@ This document describes what is built so far: names, client tokens and the read 
 | Errors | `io.github.thestephenromano.Matters.Automation1.Error.<Name>` |
 
 The version is part of the interface's name. A change that breaks callers gets a new interface (`Automation2`), and the old one keeps working for at least one release. Adding a method, or a key to an item, does not break callers and stays within `Automation1`.
+
+## Starting and stopping
+
+The Qt app owns the bus name, so only one instance runs (`crates/matters-ui/src/service.rs`). It also serves the standard `org.freedesktop.Application` interface at `/io/github/thestephenromano/Matters`:
+
+| Method | Does |
+|---|---|
+| `Activate` | Shows and raises the window |
+| `Open` | The same, until `matters://` links arrive (#69) |
+| `ActivateAction` | Refused with `NotSupported`: Matters has no actions |
+
+**Starting Matters while it runs.** The new process asks the running one to `Activate`, then exits.
+
+**A call while Matters is closed.** D-Bus activation starts Matters with `--gapplication-service` and no window. The desktop entry sets `DBusActivatable=true`, and the Flatpak installs the service file `packaging/linux/io.github.thestephenromano.Matters.service`.
+
+**Stopping.** An instance started with no window quits once nothing has called either interface for five minutes. It keeps running while a window is open or sync is on. The five minutes means a burst of calls, such as an agent planning the day, starts Qt only once, while Matters doesn't hold a Qt process all day. Closing a window that is showing quits Matters as before.
+
+**Without a session bus.** Matters runs as before, alone, and other programs can't reach it.
+
+**Access on a new install.** Agent access is off: no client is allowed until the preferences page for clients exists (#200). Until then, every call is refused with `UnknownToken`.
+
+**Not yet included.** Today's calendar events aren't in `GetView("today")` when the app serves it. The app's calendar reader isn't connected to the interface yet.
 
 ## Clients and tokens
 
@@ -110,6 +132,14 @@ Return the open projects and the areas that aren't trashed, in sidebar order.
 | `Failed` | Matters couldn't complete the call, for example because its database failed |
 
 ## Tests
+
+`matters-ui`'s `service` tests start a private `dbus-daemon`. They check that:
+- a second start hands over and the running instance is asked to activate;
+- a background start hands over without showing a window;
+- the automation interface answers on the bus name and refuses a client a new install doesn't know;
+- calls count as activity;
+- an idle instance quits only after the idle period, and never while sync is on.
+
 
 `crates/matters-automation/tests/reads.rs` serves the interface to a client over a socket pair, so no bus daemon is needed. The tests cover:
 - every view;

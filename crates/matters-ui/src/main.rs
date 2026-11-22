@@ -6,6 +6,16 @@ fn main() {
     // Read before the application starts: the user's explicit style choice.
     let explicit_style = std::env::var_os("QT_QUICK_CONTROLS_STYLE");
 
+    // One instance on the session bus (#203). A start while Matters runs
+    // hands over to it, and it shows its window; a D-Bus call while Matters
+    // is closed starts it with no window.
+    let background = std::env::args().any(|arg| arg == matters_ui::service::SERVICE_FLAG);
+    matters_ui::service::set_started_in_background(background);
+    let bus = match matters_ui::service::claim(background) {
+        matters_ui::service::Claim::Running => return,
+        matters_ui::service::Claim::Primary(bus) => bus,
+    };
+
     // Open the user's database before the UI exists. If it cannot be opened,
     // refuse to start rather than run against a store that would not persist.
     let db = match Database::open_default() {
@@ -19,6 +29,12 @@ fn main() {
         }
     };
     matters_ui::install_database(db.clone());
+    // The automation interface (#203), over the same database.
+    if let Some(bus) = &bus {
+        if let Err(err) = matters_ui::service::serve_automation(bus, db.clone()) {
+            eprintln!("matters: the automation interface is unavailable: {err}");
+        }
+    }
     // This device's settings (#72). An unreadable file gives the defaults,
     // and the app says so once it is up.
     match SettingsFile::in_config_dir() {
@@ -80,4 +96,6 @@ fn main() {
     if let Some(app) = app.as_mut() {
         app.exec();
     }
+    // Held until the app quits: dropping it releases the bus name.
+    drop(bus);
 }

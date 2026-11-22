@@ -10,6 +10,8 @@ import matters
 // window or embedded directly in a test.
 Item {
     id: root
+    // The window reaches the controller for activation and idle exit (#203).
+    property alias controller: controller
 
     // The open list's name: a fixed view's in the user's language, or the
     // project's or area's own.

@@ -3295,6 +3295,7 @@ dependencies = [
  "cxx-qt-lib",
  "futures-core",
  "jiff",
+ "matters-automation",
  "matters-core",
  "matters-keyring",
  "matters-sync-app",

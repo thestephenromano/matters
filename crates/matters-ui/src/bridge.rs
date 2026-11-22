@@ -485,6 +485,18 @@ pub mod qobject {
         /// a reminder of several (an empty id).
         #[qsignal]
         fn reminder_opened(self: Pin<&mut AppController>, task_id: QString);
+        /// Show and raise the window: another start of Matters, or the
+        /// desktop, asked over D-Bus (#203).
+        #[qsignal]
+        fn activate_requested(self: Pin<&mut AppController>);
+        /// Matters was started by a D-Bus call, so its window starts hidden
+        /// (#203).
+        #[qinvokable]
+        fn started_in_background(self: &AppController) -> bool;
+        /// With no window shown: whether to quit now, idle and with sync
+        /// off (#203).
+        #[qinvokable]
+        fn idle_expired(self: &AppController) -> bool;
         /// Set a task's deadline from typed text; false, changing nothing,
         /// when the text is refused.
         #[qinvokable]
@@ -1148,6 +1160,11 @@ impl cxx_qt::Initialize for qobject::AppController {
             let _ = thread.queue(|controller| controller.sync_changed());
         }));
         self.as_mut().sync_changed();
+        // Activation over D-Bus (#203), on this thread.
+        let thread = self.qt_thread();
+        crate::service::on_activate(Box::new(move || {
+            let _ = thread.queue(|controller| controller.activate_requested());
+        }));
         let problem = settings().problem.clone();
         if let Some(problem) = problem {
             self.report(problem.message());
@@ -1156,6 +1173,14 @@ impl cxx_qt::Initialize for qobject::AppController {
 }
 
 impl qobject::AppController {
+    pub fn started_in_background(&self) -> bool {
+        crate::service::started_in_background()
+    }
+
+    pub fn idle_expired(&self) -> bool {
+        crate::service::idle_expired(self.sync_phase().to_string() != "off")
+    }
+
     pub fn choose_log_policy(mut self: Pin<&mut Self>, policy: &QString) {
         let Some(policy) = LogPolicy::from_key(&String::from(policy)) else {
             return self.report(format!("unknown Logbook policy '{policy}'"));
