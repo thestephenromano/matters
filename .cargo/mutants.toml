@@ -8,8 +8,10 @@
 # mutants at once, so builds overlap test runs, and tests that write SQLite
 # files to disk slowed past that limit: mutants that every test catches
 # within seconds when run alone (all of undo.rs on #180) were reported as
-# timeouts. A real hang still fails, after two minutes.
-minimum_test_timeout = 120
+# timeouts. Since then the unmutated core suite itself takes 90 to 113 s in
+# CI (#245's run, with sync's tests), so at 120 s mutants every test caught
+# were reported as hung. A real hang still fails, after four minutes.
+minimum_test_timeout = 240
 
 exclude_re = [
     # Schedule::parse_typed answers "" and "today" itself, as Matters' own

@@ -108,8 +108,8 @@ jobs:
     name: core mutants in the diff
     runs-on: ubuntu-24.04
     container: fedora:44
-    # ci/mutants.sh's 75-minute budget, with time to set up and report.
-    timeout-minutes: 85
+    # ci/mutants.sh's 120-minute budget, with time to set up and report.
+    timeout-minutes: 135
     steps:
       - run: dnf -y install --setopt=install_weak_deps=False git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
