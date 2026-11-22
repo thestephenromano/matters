@@ -1094,3 +1094,57 @@ fn a_removed_devices_records_are_kept_as_revoked_within_their_budget() {
     );
     assert_eq!(c.unauthenticated_pending().unwrap().0, 0, "all signed");
 }
+
+#[test]
+fn a_checkpoint_is_judged_against_records_received_before_positions_were_kept() {
+    let p = pair();
+    let mut chain = records(&p.a);
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    let parts = checkpoint_parts(&p.a);
+    // A writes on; B holds A's whole chain, past the checkpoint's head,
+    // in rows from before v19 (no positions).
+    p.a.add_task(&mut Task::new(id(3), "from A, three", 2.0))
+        .unwrap();
+    chain.extend(records(&p.a));
+    for r in &chain {
+        assert_eq!(p.b.receive_record(r).unwrap(), Received::Applied);
+    }
+    p.b.with_raw_conn(|c| Ok(c.execute("UPDATE sync_received SET position = NULL", [])?))
+        .unwrap();
+    // The checkpoint's head is found in the chain B holds: an honest
+    // checkpoint, accepted.
+    match p.b.receive_record(&parts[0]).unwrap() {
+        Received::Checkpoint(Checkpointed::Accepted) => {}
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn records_kept_before_v19_are_received_again_once() {
+    let p = pair();
+    let rs = records(&p.a);
+    assert!(rs.len() >= 2);
+    for r in &rs[1..] {
+        assert!(matches!(
+            p.b.receive_record(r).unwrap(),
+            Received::Pending(_)
+        ));
+    }
+    // As a v16 database left them: in the old table, not yet authenticated.
+    p.b.with_raw_conn(|c| {
+        Ok(c.execute_batch(
+            "INSERT INTO sync_pending_v16 (record_id, bytes, reason, seq)
+                 SELECT record_id, bytes, reason, seq FROM sync_pending;
+             DELETE FROM sync_pending;",
+        )?)
+    })
+    .unwrap();
+    assert_eq!(p.b.receive_record(&rs[0]).unwrap(), Received::Applied);
+    assert!(title(&p.b, 1).is_some() && title(&p.b, 2).is_some());
+    let left: i64 = p
+        .b
+        .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM sync_pending_v16", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(left, 0, "each received again once");
+}
