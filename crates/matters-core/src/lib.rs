@@ -3,6 +3,8 @@ pub mod clock;
 pub mod crdt;
 pub mod domain;
 pub mod error;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 pub mod list_diff;
 pub mod ordering;
 pub mod query;

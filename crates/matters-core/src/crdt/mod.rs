@@ -305,23 +305,42 @@ pub fn encode_frontiers(frontiers: &loro::Frontiers) -> Vec<u8> {
 /// canonical form, read from its own engine. Anything else (updates, a
 /// shallow snapshot) is refused.
 pub fn snapshot_version(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
-    let meta = LoroDoc::decode_import_blob_meta(snapshot, true).map_err(engine)?;
+    let meta = guarded("decoding a snapshot", || {
+        LoroDoc::decode_import_blob_meta(snapshot, true).map_err(engine)
+    })?;
     if !matches!(meta.mode, loro::EncodedBlobMode::Snapshot) {
         return Err(invalid("not a full-history snapshot"));
     }
-    let doc = LoroDoc::new();
-    doc.import(snapshot).map_err(engine)?;
-    Ok((
-        encode_version(&doc.oplog_vv()),
-        encode_frontiers(&doc.oplog_frontiers()),
-    ))
+    guarded("importing a snapshot", || {
+        let doc = LoroDoc::new();
+        let status = doc.import(snapshot).map_err(engine)?;
+        if status.pending.is_some() {
+            return Err(invalid("a snapshot that waits for operations it lacks"));
+        }
+        Ok((
+            encode_version(&doc.oplog_vv()),
+            encode_frontiers(&doc.oplog_frontiers()),
+        ))
+    })
+}
+
+/// Run `f`, which decodes or imports member-authored engine bytes, turning
+/// a panic inside the engine into an error. The engine is a dependency
+/// whose decoder sees bytes another device chose; a panic there must
+/// refuse those bytes, not take the application down (#45). A document
+/// whose import panicked may be half-changed: the caller rebuilds it.
+pub(crate) fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|_| Err(MattersError::Engine(format!("the engine panicked {what}"))))
 }
 
 /// The engine actors whose operations an update carries, so a receiver
 /// can check them against the writer the update's record was signed by.
 /// Only an updates blob qualifies: a snapshot carries other actors' history.
 pub fn update_peers(update: &[u8]) -> Result<BTreeSet<u64>> {
-    let meta = LoroDoc::decode_import_blob_meta(update, true).map_err(engine)?;
+    let meta = guarded("decoding an update", || {
+        LoroDoc::decode_import_blob_meta(update, true).map_err(engine)
+    })?;
     if !matches!(meta.mode, loro::EncodedBlobMode::Updates) {
         return Err(invalid("not an engine update"));
     }
@@ -341,6 +360,10 @@ pub struct Document {
     /// The index lags the engine: updates were imported without
     /// reindexing, and `apply` reindexes first (#241).
     stale: bool,
+    /// The engine holds imported operations whose dependencies it lacks
+    /// (Loro keeps them aside as pending). Receiving never leaves it so
+    /// (#45); a document that is so makes no checkpoint.
+    pending: bool,
 }
 
 impl Document {
@@ -354,6 +377,7 @@ impl Document {
             foreign: BTreeSet::new(),
             tags: BTreeMap::new(),
             stale: false,
+            pending: false,
         })
     }
 
@@ -373,16 +397,26 @@ impl Document {
     ) -> Result<Self> {
         let mut document = Self::new(peer)?;
         for bytes in updates {
-            document.doc.import(bytes).map_err(engine)?;
+            document.import_guarded(bytes)?;
         }
         document.reindex()?;
         Ok(document)
     }
 
+    /// Import `bytes`, a panic in the engine becoming an error.
+    fn import_guarded(&mut self, bytes: &[u8]) -> Result<()> {
+        let doc = &self.doc;
+        let status = guarded("importing", || doc.import(bytes).map_err(engine))?;
+        if status.pending.is_some() {
+            self.pending = true;
+        }
+        Ok(())
+    }
+
     /// Import updates or a snapshot from another replica, then rebuild the
     /// index.
     pub fn merge(&mut self, bytes: &[u8]) -> Result<()> {
-        self.doc.import(bytes).map_err(engine)?;
+        self.import_guarded(bytes)?;
         self.reindex()
     }
 
@@ -391,10 +425,76 @@ impl Document {
     /// command next needs it. Rebuilding it after every record made
     /// receiving quadratic in the collection's size (#241). Projection,
     /// versions and snapshots read the engine, never the index.
+    ///
+    /// An update whose dependencies the engine lacks is an error, and
+    /// leaves the document holding it aside: the caller checks
+    /// [`missing_dependency`](Self::missing_dependency) first, and rebuilds
+    /// the document after any error here.
     pub fn merge_unindexed(&mut self, bytes: &[u8]) -> Result<()> {
-        self.doc.import(bytes).map_err(engine)?;
+        self.import_guarded(bytes)?;
         self.stale = true;
+        if self.pending {
+            return Err(invalid("an update that waits for operations it lacks"));
+        }
         Ok(())
+    }
+
+    /// An engine operation `update` depends on that this document does
+    /// not hold yet, as `(actor, counter)`, or `None` when it holds every
+    /// dependency: the update's own actor's earlier operations, and every
+    /// operation of another actor its changes name (#45). Read from the
+    /// update's metadata, without importing it.
+    pub fn missing_dependency(&self, update: &[u8]) -> Result<Option<(u64, i32)>> {
+        let meta = guarded("decoding an update", || {
+            LoroDoc::decode_import_blob_meta(update, true).map_err(engine)
+        })?;
+        let held = self.doc.oplog_vv();
+        for (peer, start) in meta.partial_start_vv.iter() {
+            if held.get(peer).copied().unwrap_or(0) < *start {
+                return Ok(Some((*peer, *start - 1)));
+            }
+        }
+        for dep in meta.start_frontiers.iter() {
+            if !held.includes_id(dep) {
+                return Ok(Some((dep.peer, dep.counter)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Whether this document holds operation `counter` of `peer`.
+    pub fn holds(&self, peer: u64, counter: i32) -> bool {
+        self.doc
+            .oplog_vv()
+            .includes_id(loro::ID::new(peer, counter))
+    }
+
+    /// Edit as `peer` from now on: a document rebuilt from the journal
+    /// keeps the engine actor its writer was admitted with.
+    pub fn set_peer(&mut self, peer: u64) -> Result<()> {
+        self.doc.set_peer_id(peer).map_err(engine)
+    }
+
+    /// Whether the engine holds operations aside for missing dependencies.
+    pub fn has_pending(&self) -> bool {
+        self.pending
+    }
+
+    /// The merged state as application rows, with the index rebuilt if it
+    /// lagged: what a page of received records must leave valid before it
+    /// commits. A panic in either becomes an error (#45).
+    pub fn settle(&mut self) -> Result<Snapshot> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if self.stale {
+                self.reindex()?;
+            }
+            self.project()
+        }))
+        .unwrap_or_else(|_| {
+            Err(MattersError::Engine(
+                "the engine panicked projecting".into(),
+            ))
+        })
     }
 
     fn reindex(&mut self) -> Result<()> {

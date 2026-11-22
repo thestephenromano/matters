@@ -145,4 +145,29 @@ write("relay-export", "records", canonical_cbor([
 ]))
 write("relay-hint", "hint", b"7:42:" + b"ab" * 16)
 write("relay-hint", "first", b"1:1:" + b"00" * 16)
+
+
+# Structure-aware targets (#45): they sign what they are given, so their
+# seeds are the choices they read, not signed bytes.
+part0 = bytes.fromhex(answers["small-part0"].strip())
+write("signed_record", "data", b"\x00" + b"an update's plaintext")
+write("signed_record", "data-after", b"\x02" + bytes(range(48)) + b"after a predecessor")
+write("signed_record", "part", b"\x01" + part0)
+write("signed_record", "part-after", b"\x03" + bytes(48) + part0)
+for i, v in enumerate(controls["vectors"]):
+    write("signed_control", f"{i}-{v['kind']}", bytes.fromhex(v["wire_hex"]))
+writer = bytes([2]) + bytes([1] * 48) + bytes([2] * 32) + bytes([3] * 48)
+write("built_checkpoint", "no-writers", b"\x00\x00" + b"a snapshot's bytes")
+write("built_checkpoint", "one-writer", b"\x01" + writer + b"\x01" + b"a snapshot's bytes")
+
+
+def op(code, payload=b""):
+    return bytes([code]) + len(payload).to_bytes(2, "big") + payload
+
+
+# receive: sealed records, engine edits, a part, a control, page breaks.
+write("receive", "edits", op(2, b"\x01\x01\x00\x05") + op(5) + op(2, b"\x01\x02\x04\x03"))
+write("receive", "chain", op(1, b"\x00data") + op(1, b"\x01after") + op(5))
+write("receive", "broken-node", op(2, b"\x02\x00") + op(2, b"\x01\x07"))
+write("receive", "part-and-raw", op(3, part0) + op(0, b"\xff" * 32) + op(4, b"\x00"))
 print("seeded", sum(1 for _ in CORPUS.rglob("*") if _.is_file()), "inputs")

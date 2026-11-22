@@ -413,6 +413,18 @@ fn a_cloned_device_freezes_its_writer_lineage_and_its_records_wait() {
         Received::Pending(Waiting::Frozen)
     );
     assert!(!titles(&p.a).contains(&"from the clone".to_owned()));
+    // Its signature was checked: kept as signed evidence, not in the
+    // budget of records nobody could authenticate.
+    let authenticated: bool =
+        p.a.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT authenticated FROM sync_pending WHERE digest = ?1",
+                [record_hash(&from_clone).as_slice()],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert!(authenticated);
 }
 
 #[test]

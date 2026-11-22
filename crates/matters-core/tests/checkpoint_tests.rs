@@ -422,6 +422,7 @@ fn sealed_by(a: &Database, device: &DeviceKeys, c: &Checkpoint) -> Vec<Vec<u8>> 
 #[test]
 fn dishonest_and_wrong_epoch_checkpoints_are_refused_and_kept() {
     let p = pair();
+    let first = record_hash(&records(&p.a)[0]);
     acknowledge_all(&p.a);
     p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
     let a_dev = keys(&p.a_keys);
@@ -440,10 +441,15 @@ fn dishonest_and_wrong_epoch_checkpoints_are_refused_and_kept() {
     let mut c = honest.clone();
     c.coverage.writers[0].author = [8; 48];
     cases.push(("another author", c));
-    // More records than the counter shows.
+    // Fewer records, at their true head, than the counter shows.
     let mut c = honest.clone();
     c.coverage.writers[0].records = 1;
+    c.coverage.writers[0].head = first;
     cases.push(("counter disagrees", c));
+    // A claimed head that B holds, but at another position (#45).
+    let mut c = honest.clone();
+    c.coverage.writers[0].records = 1;
+    cases.push(("another head", c));
     // Coverage naming another epoch than its records.
     let mut c = honest.clone();
     c.coverage.epoch = 7;
@@ -473,9 +479,19 @@ fn dishonest_and_wrong_epoch_checkpoints_are_refused_and_kept() {
         }
         assert_eq!(view(&p.b), before, "{why}: nothing imported");
     }
+    // Each is kept as evidence under its ID, but for the wrong epoch: that
+    // is its author's sealing, not the checkpoint's, so its parts are
+    // quarantined instead, and another member's parts of the same
+    // checkpoint would still stand (#45).
     let kept = p.b.checkpoints().unwrap();
-    assert_eq!(kept.len(), cases.len());
+    assert_eq!(kept.len(), cases.len() - 1);
     assert!(kept.iter().all(|(_, state, _)| state == "refused"));
+    assert!(p
+        .b
+        .quarantined_records()
+        .unwrap()
+        .iter()
+        .any(|(_, (reason, _))| reason.contains("epoch")));
     assert!(p.b.latest_checkpoint().unwrap().is_none());
     // The honest one is still accepted afterwards.
     assert_eq!(
@@ -494,6 +510,8 @@ fn an_older_checkpoint_never_replaces_a_newer_one() {
         p.a.acknowledge_checkpoint_part(&id).unwrap();
     }
     p.a.add_task(&mut Task::new(id(5), "later", 4.0)).unwrap();
+    // B holds what the newer one covers, so it can verify it.
+    p.b.receive_record(&records(&p.a).pop().unwrap()).unwrap();
     acknowledge_all(&p.a);
     let newer = p.a.create_checkpoint(cursor(4)).unwrap().unwrap();
     let newer_parts = parts(&p.a);
@@ -885,5 +903,65 @@ fn a_checkpoint_naming_another_head_of_a_devices_own_chain_is_a_fork() {
     assert_eq!(
         outcome(p.b.receive_record(&parts(&p.a)[0]).unwrap()),
         Checkpointed::Accepted
+    );
+}
+
+#[test]
+fn covered_records_met_again_in_chain_order_keep_their_positions() {
+    let p = pair();
+    let from_a = records(&p.a);
+    assert_eq!(from_a.len(), 2);
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    let (c, _) = join(&p.a, &p.dir.path().join("c.db"));
+    assert!(c.start_from_checkpoint(&parts(&p.a), GENERATION).unwrap());
+    // The first record waits; the covered head then walks back to it.
+    let _ = c.receive_record(&from_a[0]).unwrap();
+    let _ = c.receive_record(&from_a[1]).unwrap();
+    assert!(c.pending_records().unwrap().is_empty(), "both recognised");
+    let positions: Vec<(Vec<u8>, i64)> = c
+        .with_conn(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT digest, position FROM sync_covered ORDER BY position")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    let expected: Vec<(Vec<u8>, i64)> = from_a
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (record_hash(r).to_vec(), i as i64 + 1))
+        .collect();
+    assert_eq!(positions, expected);
+}
+
+#[test]
+fn a_checkpoint_carries_at_most_its_budget_of_pending_records() {
+    let p = pair();
+    acknowledge_all(&p.a);
+    let carry = |n: usize| {
+        p.a.with_raw_conn(|c| {
+            c.execute("DELETE FROM sync_pending", [])?;
+            Ok(c.execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+                 INSERT INTO sync_pending (record_id, digest, bytes, reason, authenticated)
+                     SELECT randomblob(32), randomblob(48), randomblob(24), 'carried', 1 FROM n",
+                [n as i64],
+            )?)
+        })
+        .unwrap()
+    };
+    carry(checkpoint::MAX_PENDING);
+    let id = p.a.create_checkpoint(cursor(2)).unwrap();
+    assert!(id.is_some(), "exactly the budget is carried");
+    assert_eq!(
+        p.a.latest_checkpoint().unwrap().unwrap().pending.len(),
+        checkpoint::MAX_PENDING
+    );
+    carry(checkpoint::MAX_PENDING + 1);
+    assert_eq!(
+        p.a.create_checkpoint(cursor(3)).unwrap(),
+        None,
+        "past it, none"
     );
 }

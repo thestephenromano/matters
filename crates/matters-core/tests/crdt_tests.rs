@@ -1,7 +1,9 @@
 //! The engine document (#35): typed commands, concurrent merges and the
 //! rows read back. Case names follow ADR 0001's concurrency fixtures.
 
-use matters_core::crdt::{Anchor, Command, Document, Kind, LinkKind, Snapshot};
+use matters_core::crdt::{
+    decode_version, encode_version, Anchor, Command, Document, Kind, LinkKind, Snapshot,
+};
 use matters_core::{MattersError, Status};
 
 fn id(n: u128) -> String {
@@ -1251,4 +1253,47 @@ fn a_kind_that_is_not_a_json_string_is_a_damaged_document() {
         Err(MattersError::Validation(_))
     ));
     assert!(matches!(a.project(), Err(MattersError::Validation(_))));
+}
+
+fn rename(doc: &mut Document, title: &str, at: i64) {
+    doc.apply(
+        &[Command::Rename {
+            id: id(TASK),
+            title: title.into(),
+        }],
+        at,
+    )
+    .unwrap();
+}
+
+/// The counter of `peer`'s next operation in `doc`.
+fn next_counter(doc: &Document, peer: u64) -> i32 {
+    let held = decode_version(&encode_version(&doc.version())).unwrap();
+    held.get(&peer).copied().unwrap_or(0)
+}
+
+#[test]
+fn an_update_names_the_first_operation_it_waits_for() {
+    let (mut a, mut b) = pair();
+    let genesis = a.version();
+    let held = next_counter(&b, 1);
+    assert!(held > 0 && b.holds(1, held - 1), "B holds A's genesis");
+    rename(&mut a, "Dig deep", 20);
+    let first = a.version();
+    let start = next_counter(&a, 1);
+    rename(&mut a, "Dig deeper", 30);
+    let second = a.updates_since(&first).unwrap();
+
+    // The second rename continues A's operations past what B holds.
+    assert!(start > held);
+    assert!(!b.holds(1, start - 1), "B lacks the first rename");
+    assert_eq!(b.missing_dependency(&second).unwrap(), Some((1, start - 1)));
+
+    b.merge(&a.updates_since(&genesis).unwrap()).unwrap();
+    assert!(b.holds(1, start - 1));
+    assert_eq!(
+        b.missing_dependency(&second).unwrap(),
+        None,
+        "an update B already holds waits for nothing"
+    );
 }

@@ -3,7 +3,7 @@ name = "matters-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "cargo-fuzz targets for the sync parsers (#36), the client's parsers of relay responses and the relay's parsers (#45); run by ci/fuzz.sh"
+description = "cargo-fuzz targets for the sync parsers (#36), receiving, the client's parsers of relay responses and the relay's parsers (#45); run by ci/fuzz.sh"
 
 [package.metadata]
 cargo-fuzz = true
@@ -13,6 +13,7 @@ libfuzzer-sys = "=0.4.13"
 matters-sync = { path = "../crates/matters-sync", features = ["fuzzing"] }
 matters-sync-client = { path = "../crates/matters-sync-client", features = ["fuzzing"] }
 matters-relay = { path = "../crates/matters-relay", features = ["fuzzing"] }
+matters-core = { path = "../crates/matters-core", features = ["fuzzing"] }
 
 # Its own workspace: built only on the pinned nightly, by ci/fuzz.sh.
 [workspace]
@@ -91,6 +92,41 @@ bench = false
 [[bin]]
 name = "relay_snapshots"
 path = "fuzz_targets/relay_snapshots.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signed_record"
+path = "fuzz_targets/signed_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signed_control"
+path = "fuzz_targets/signed_control.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "built_checkpoint"
+path = "fuzz_targets/built_checkpoint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "engine_import"
+path = "fuzz_targets/engine_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "receive"
+path = "fuzz_targets/receive.rs"
 test = false
 doc = false
 bench = false

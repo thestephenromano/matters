@@ -28,8 +28,10 @@ toolchain="$(pinned_version fuzz-nightly)"
 if [ "$all" -eq 0 ]; then
     merge_base="$(git merge-base "$base" HEAD)" \
         || cannot_run "no merge base with $base (fetch it, or set MATTERS_FUZZ_BASE)"
-    if git diff --quiet "$merge_base" -- crates/matters-sync crates/matters-sync-client/src crates/matters-relay fuzz; then
-        echo "No changes to matters-sync, the sync client, matters-relay or fuzz/ since $base: nothing to fuzz."
+    if git diff --quiet "$merge_base" -- crates/matters-sync crates/matters-sync-client/src \
+        crates/matters-relay crates/matters-core/src/storage crates/matters-core/src/crdt \
+        crates/matters-core/src/fuzzing.rs fuzz; then
+        echo "No changes to matters-sync, the sync client, matters-relay, receiving or fuzz/ since $base: nothing to fuzz."
         exit 0
     fi
 fi

@@ -34,8 +34,11 @@ zeroize = "1"
 # Raw read-write SQL for tests that stage states the typed operations
 # never produce (`Database::with_raw_conn`). Never enabled by an app.
 test-support = []
+# The bodies of the receive fuzz targets in fuzz/ (#45). Never enabled by an
+# app.
+fuzzing = ["test-support"]
 
 [dev-dependencies]
 tempfile = "3.13"
 # The integration tests use `test-support`.
-matters-core = { path = ".", features = ["test-support"] }
+matters-core = { path = ".", features = ["test-support", "fuzzing"] }
