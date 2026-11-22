@@ -2,9 +2,10 @@
 
 Status: design for [#40](https://github.com/thestephenromano/matters/issues/40), delivered in steps.
 - The encoding, assembly and comparison rules are implemented in `matters_sync::checkpoint`.
-- Creating, receiving and bootstrapping from checkpoints follow in matters-core, the relay and the client.
+- Creating, receiving, judging and bootstrapping from checkpoints are implemented in `matters_core::storage::checkpoint`.
+- The relay's snapshot index and the client's use of it follow.
 
-Until the receiver rules below are implemented, a `snapshot` record is never imported as state (SYNC_RECORD_CONTRACT.md).
+A device with history never imports a checkpoint. Only a device that holds nothing yet imports one, through `Database::start_from_checkpoint`, after the checks below.
 
 ## Adopted components
 
@@ -13,7 +14,7 @@ Until the receiver rules below are implemented, a `snapshot` record is never imp
 | The snapshot | Loro's full-history snapshot (`ExportMode::Snapshot`), the engine already adopted (ADR 0001) | It holds the whole operation log as well as the state, so later updates from any writer still merge. [Loro export modes](https://loro.dev/docs/tutorial/encoding) |
 | Carrier, sealing, signatures | The record contract's `snapshot` kind, sealed under the current epoch with the author's writer key | Already specified with its own signature context. No second cipher or framing. |
 | Encoding | Deterministic CBOR through minicbor, as for every other sync object | One canonical encoding, checked by re-encoding. |
-| Relay storage | The existing record log, plus one index of snapshot records (step 3) | The relay can already read a record's kind. It never sees inside. |
+| Relay storage | The existing record log, plus one index of snapshot records (`GET …/snapshots`, SYNC_SERVICE_CONTRACT.md) | The relay can already read a record's kind. It never sees inside. |
 
 Shallow snapshots (`ExportMode::ShallowSnapshot`) are not used. They drop history that an old device's edits may still depend on (SYNC_DESIGN.md, "Checkpoints and retention").
 
@@ -71,7 +72,7 @@ A device that already holds everything a checkpoint covers records it as its lat
 
 ## Bootstrapping a fresh device
 
-A device that has just joined asks the relay for the newest snapshot records (step 3). It assembles the newest complete checkpoint that passes the checks it can make, then commits in one transaction:
+A device that has just joined asks the relay for the newest snapshot records (`GET …/snapshots`). It assembles the newest complete checkpoint that passes the checks it can make, then commits in one transaction:
 - the imported snapshot and its projection;
 - each listed writer's head and record count, as its receive head;
 - the carried pending records, as pending input;
@@ -81,7 +82,9 @@ It then reads the log from the cursor. Every record after it is tail: it either 
 
 **Limit.** A fresh device holds no history, so the relay is its only source of freshness. It can check a checkpoint's structure, signatures and internal consistency. It cannot tell whether a newer checkpoint, or later records, are being withheld. Only an authorized writer can author a checkpoint. Its signature identifies that writer, but does not prove the snapshot matches the records it lists. A malicious member can author a dishonest checkpoint (SYNC_DESIGN.md threat model). Devices with history detect a contradiction at check 2 or 3. A fresh device cannot.
 
-When the cursor's generation is not the relay's current one (the relay was restored), the device does not use the cursor. It reads the whole log and lets covered records count as duplicates by their chains.
+When the cursor's generation is not the relay's current one (the relay was restored), the device does not use the checkpoint. It reads the whole log instead.
+
+A device that started from a checkpoint knows each covered chain only by its length and head. If it meets covered records again, for example after a later relay restore, it recognises them by walking each chain back from its covered head, by hash, through its pending records. Each one found is recorded as held and is no longer pending.
 
 ## Old offline devices
 
@@ -104,6 +107,21 @@ The policy must be based on measured checkpoint size, bootstrap latency and hist
 
 ## Evidence
 
+`crates/matters-core/tests/checkpoint_tests.rs` covers:
+- a checkpoint waiting for the device's own records to be acknowledged, and not made twice for the same state;
+- a member with history accepting one and importing nothing;
+- a fresh device starting from one and following the tail from both writers;
+- a checkpoint from another relay generation starting nothing;
+- pending records travelling with a checkpoint and applying later;
+- a deletion travelling with a checkpoint, with a stale edit from another device after it merging the same on the source and on the device that started from it;
+- covered records met again after a relay restore, recognised by their chains;
+- dishonest checkpoints refused and kept as evidence: another head, a version the snapshot does not hold, another author, a counter that disagrees, another epoch;
+- an older checkpoint never replacing a newer one;
+- publication surviving a restart and a relay restore with the same bytes;
+- a crash while creating a checkpoint leaving nothing and losing nothing.
+
+`authority_tests.rs` checks that snapshot records authenticate only as snapshots, and only without a predecessor.
+
 `crates/matters-sync/tests/checkpoint_tests.rs` covers:
 - one-part and multi-part round trips, in any delivery order and with duplicates;
 - refusal of parts that disagree, tampered chunks and statements, and wrong epochs;
@@ -112,3 +130,18 @@ The policy must be based on measured checkpoint size, bootstrap latency and hist
 - byte-exact agreement with an independent encoder (`tests/vectors/checkpoint_kat.py`, Python standard library).
 
 The `checkpoint` fuzz target runs the part and statement parsers, and assembly. It is seeded from that encoder, and its corpus is replayed on stable by `tests/fuzz_replay.rs`.
+
+## Measured
+
+Measured on one shared development host ([evidence record](evidence/sync-checkpoint-cost-2026-11-21.json): i9-10920X, btrfs on NVMe, release build, one run each). Each workload has *n* tasks with 1 KiB notes, a rename of every second task and a completion of every tenth, each edit its own sealed record. There is one writer and nothing is pruned.
+
+| Tasks | Records | Retained history | Checkpoint | Create | Start from it | Receive every record |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 250 | 400 | 1.9 MB | 92 KB, 1 part | 22 ms | 23 ms | 8.5 s |
+| 1,000 | 1,600 | 7.7 MB | 354 KB, 1 part | 57 ms | 99 ms | 104 s |
+| 2,000 | 3,200 | 15.4 MB | 708 KB, 2 parts | 106 ms | 208 ms | 422 s |
+
+- **Size.** A checkpoint is about 4.7% of the retained history at each size.
+- **History growth.** History grows by about 4.8 KB per edit, mostly the record's ML-DSA-65 signature.
+- **Starting a device.** Starting from a checkpoint grows with the collection's size. Receiving every record grows quadratically, which is tracked in #241.
+- **Retention budget.** None is set. Pruning, and any budget on bootstrap time, needs its own approval against these figures.

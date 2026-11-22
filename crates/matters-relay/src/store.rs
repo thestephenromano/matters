@@ -176,6 +176,13 @@ pub const MAX_ENROLLMENTS: i64 = 16;
 /// minutes.
 pub const ENROLLMENT_TTL_SECONDS: u64 = 3600;
 
+/// The route's newest snapshot records, newest first.
+#[derive(Debug)]
+pub struct Snapshots {
+    pub generation: [u8; 16],
+    pub entries: Vec<(u64, Vec<u8>)>,
+}
+
 /// The relay's store.
 #[derive(Clone)]
 pub struct Relay {
@@ -434,14 +441,15 @@ impl Relay {
         .await?;
         let seq = seq.ok_or(RelayError::QuotaExhausted)?;
         sqlx::query(
-            "INSERT INTO records (route, sequence, record_id, digest, bytes)
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO records (route, sequence, record_id, digest, bytes, snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(row.id)
         .bind(seq)
         .bind(record_id.as_slice())
         .bind(digest.as_slice())
         .bind(bytes)
+        .bind(parsed.header.kind == wire::Kind::Snapshot)
         .execute(&mut *tx)
         .await?;
         // Delivered by PostgreSQL only when this transaction commits, so a
@@ -620,6 +628,44 @@ impl Relay {
     /// `None`), at most `limit` (1 to [`MAX_PAGE`]).
     pub async fn records(&self, route: &Route, after: Option<&Cursor>, limit: u32) -> Result<Page> {
         self.page(route, after, limit, Log::Records).await
+    }
+
+    /// The route's newest `snapshot` records (checkpoint parts), newest
+    /// first, at most `limit` (1 to [`MAX_PAGE`]), with the generation they
+    /// are in.
+    pub async fn snapshots(&self, route: &Route, limit: u32) -> Result<Snapshots> {
+        if !(1..=MAX_PAGE).contains(&limit) {
+            return Err(RelayError::Malformed);
+        }
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT id, generation FROM routes
+             WHERE application = $1 AND tenant = $2 AND collection = $3",
+        )
+        .bind(route.application.as_slice())
+        .bind(route.tenant.as_slice())
+        .bind(route.collection.as_slice())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(RelayError::UnknownRoute)?;
+        let id: i64 = row.get("id");
+        let generation = generation_of(row.get("generation"))?;
+        let rows = sqlx::query(
+            "SELECT sequence, bytes FROM records WHERE route = $1 AND snapshot
+             ORDER BY sequence DESC LIMIT $2",
+        )
+        .bind(id)
+        .bind(i64::from(limit))
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Snapshots {
+            generation,
+            entries: rows
+                .iter()
+                .map(|r| (sequence(r.get("sequence")), r.get("bytes")))
+                .collect(),
+        })
     }
 
     /// A page of the route's authority objects, as for [`Self::records`].

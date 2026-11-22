@@ -311,3 +311,52 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
     cursor BLOB NOT NULL
 );
 "#;
+
+/// v18: checkpoints (#40, docs/SYNC_CHECKPOINTS.md). Parts this device
+/// made wait in `sync_checkpoint_out` until the relay acknowledges them;
+/// parts received wait in `sync_checkpoint_parts` until their checkpoint
+/// is complete. `sync_checkpoints` keeps every complete checkpoint's
+/// coverage with what became of it, refused ones as evidence. A device
+/// that started from a checkpoint knows each covered chain only by its
+/// length and head (`sync_receive_base`). `reach` is the earliest covered
+/// record met again since, walking back from the head by hash, and each one
+/// met again is kept in `sync_covered`. New tables only, so the migration
+/// can run again over a database that already has them.
+pub const MIGRATION_V18: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_checkpoint_out (
+    record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
+    checkpoint BLOB NOT NULL CHECK (length(checkpoint) = 48),
+    part INTEGER NOT NULL,
+    bytes BLOB NOT NULL,
+    acked INTEGER NOT NULL DEFAULT 0 CHECK (acked IN (0, 1))
+);
+CREATE TABLE IF NOT EXISTS sync_checkpoint_parts (
+    record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
+    checkpoint BLOB NOT NULL CHECK (length(checkpoint) = 48),
+    author BLOB NOT NULL CHECK (length(author) = 48),
+    incarnation BLOB NOT NULL CHECK (length(incarnation) = 32),
+    epoch INTEGER NOT NULL,
+    plaintext BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_checkpoints (
+    seq INTEGER PRIMARY KEY,
+    id BLOB NOT NULL UNIQUE CHECK (length(id) = 48),
+    coverage BLOB NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('accepted', 'superseded', 'refused')),
+    reason TEXT,
+    -- How many engine updates this device had journalled when it accepted
+    -- the checkpoint, to space its own checkpoints.
+    journal INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sync_receive_base (
+    incarnation BLOB PRIMARY KEY CHECK (length(incarnation) = 32),
+    base INTEGER NOT NULL CHECK (base > 0),
+    base_head BLOB NOT NULL CHECK (length(base_head) = 48),
+    reach BLOB CHECK (reach IS NULL OR length(reach) = 48)
+);
+CREATE TABLE IF NOT EXISTS sync_covered (
+    record_id BLOB PRIMARY KEY CHECK (length(record_id) = 32),
+    incarnation BLOB NOT NULL CHECK (length(incarnation) = 32),
+    digest BLOB NOT NULL CHECK (length(digest) = 48)
+);
+"#;

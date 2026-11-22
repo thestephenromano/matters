@@ -100,6 +100,17 @@ The relay checks only that the bytes are an enrollment request for this route. T
 
 The `GET` needs a session, and only the route's current admin is given the request; anyone else, and an expired or absent request, gets `404`. The admin's device verifies the request against its invitation before signing anything. The joining device then becomes a member through the published transition and reads the authority log as any device does.
 
+### Checkpoint parts
+
+```text
+GET /v0/routes/{route}/snapshots?limit={1..256}
+→ 200 {"generation": h'…', "records": [[57, h'<record>'], [41, h'<record>'], …]}
+```
+
+This returns the route's newest `snapshot` records, newest first, with their sequences. A new device uses it to start from the newest checkpoint instead of reading the whole log (SYNC_CHECKPOINTS.md).
+
+The relay tells these records apart only by their clear kind. It cannot see which checkpoint a part belongs to, or whether a checkpoint is complete. The client groups the parts and checks them. The same records also appear in the ordinary record log. An empty list means the relay holds no checkpoint, not that none was ever made.
+
 ### Authority objects
 
 ```text

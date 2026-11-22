@@ -103,6 +103,19 @@ pub struct Cursor {
     pub sequence: u64,
 }
 
+impl Cursor {
+    /// The relay cursor that reads on from this one: `CBOR([generation,
+    /// sequence])` (sync-relay-v0.cddl).
+    pub fn relay_cursor(&self) -> Vec<u8> {
+        let mut e = Encoder::new(Vec::new());
+        e.array(2)
+            .and_then(|e| e.bytes(&self.generation))
+            .and_then(|e| e.u64(self.sequence))
+            .expect("writing to a Vec cannot fail");
+        e.into_writer()
+    }
+}
+
 /// What a checkpoint holds. Its canonical encoding's SHA-384 is the
 /// checkpoint's ID.
 #[derive(Clone, Debug, PartialEq, Eq)]

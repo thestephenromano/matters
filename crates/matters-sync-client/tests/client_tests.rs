@@ -541,3 +541,56 @@ async fn a_relay_restored_from_a_backup_loses_nothing_its_devices_still_hold() {
     .await
     .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_device_starts_from_the_newest_checkpoint() {
+    let Some(relayed) = relay().await else { return };
+    let d = devices(&relayed).await;
+    // A makes a checkpoint whenever it is up to date and has made an
+    // update since: here, on its first round.
+    let a = Client::new(&relayed.endpoint, d.a.clone())
+        .unwrap()
+        .with_checkpoint_interval(1);
+    let first = a.sync_once().await.unwrap();
+    assert!(first.made_checkpoint, "{first:?}");
+    assert!(!a.sync_once().await.unwrap().made_checkpoint, "not again");
+    // C joins after it.
+    let c_path = d._dir.path().join("c.db");
+    let c_db = Database::open(&c_path).unwrap();
+    let c_keys = MemoryKeyStore::default();
+    let shown = d.a.invite().unwrap();
+    let request = c_db.start_enrollment(&c_keys, &shown).unwrap();
+    let c_id = parse(&request).unwrap().message.signer;
+    d.a.admit(&request, &shown).unwrap();
+    let envelopes: Vec<Vec<u8>> =
+        d.a.outgoing_controls()
+            .unwrap()
+            .into_iter()
+            .filter(|o| {
+                matches!(parse(&o.bytes).unwrap().message.body,
+                Body::KeyEnvelope(ref k) if k.recipient == c_id)
+            })
+            .map(|o| o.bytes)
+            .collect();
+    assert_eq!(
+        c_db.finish_enrollment(&c_keys, &d.a.sync_controls().unwrap(), &envelopes)
+            .unwrap(),
+        SyncStanding::Active
+    );
+    a.sync_once().await.unwrap();
+    let c_db = Arc::new(c_db);
+    let c = Client::new(&relayed.endpoint, c_db.clone()).unwrap();
+    let started = c.sync_once().await.unwrap();
+    assert!(started.started_from_checkpoint, "{started:?}");
+    assert_eq!(titles(&c_db), titles(&d.a));
+    // Only what came after the checkpoint's cursor was read: its own parts.
+    assert_eq!(started.received_records, 1, "{started:?}");
+    // It follows on as usual.
+    d.a.add_task(&mut Task::new(id(7), "after C joined", 6.0))
+        .unwrap();
+    a.sync_once().await.unwrap();
+    c.sync_once().await.unwrap();
+    assert_eq!(titles(&c_db), titles(&d.a));
+    assert!(c_db.pending_records().unwrap().is_empty());
+    relayed.finish().await;
+}

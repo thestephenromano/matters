@@ -398,3 +398,35 @@ fn a_shared_key_store_is_the_store_it_shares() {
     assert_eq!(loaded.to_bytes(), seeds.to_bytes());
     assert!(KeyStore::load(&shared, "other").unwrap().is_none());
 }
+
+#[test]
+fn a_checkpoint_is_made_through_the_store_only_when_due() {
+    use matters_sync::checkpoint::Cursor;
+    let p = pair();
+    let a = store(&p.a);
+    for (seq, _) in a.outgoing_controls().unwrap() {
+        a.acknowledge_control(seq).unwrap();
+    }
+    for (id, _) in a.outgoing_records().unwrap() {
+        a.acknowledge_record(&id).unwrap();
+    }
+    let at = || Cursor {
+        generation: [1; 16],
+        sequence: 1,
+    };
+    // Not due: one update, and a checkpoint every hundred.
+    assert!(!a.make_checkpoint(at(), 100).unwrap());
+    assert!(p.a.outgoing_checkpoint_parts().unwrap().is_empty());
+    // Due: made, and its parts are outgoing records.
+    assert!(a.make_checkpoint(at(), 1).unwrap());
+    let parts = p.a.outgoing_checkpoint_parts().unwrap();
+    assert_eq!(parts.len(), 1);
+    assert!(a
+        .outgoing_records()
+        .unwrap()
+        .iter()
+        .any(|(id, _)| *id == parts[0].0));
+    // Made just now: not due again.
+    assert!(!a.make_checkpoint(at(), 1).unwrap());
+    assert!(!a.wants_checkpoint().unwrap(), "it holds the collection");
+}

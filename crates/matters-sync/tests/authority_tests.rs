@@ -2172,3 +2172,55 @@ fn records_authenticate_at_their_own_epoch_after_rotation_and_removal() {
         Err(Error::Unauthorized)
     );
 }
+
+#[test]
+fn snapshot_records_authenticate_outside_their_writers_chain() {
+    let mut s = setup();
+    let inc = fresh();
+    let start = writer(&s.authority, &s.b, inc, 82, None);
+    s.authority
+        .admit_writer(&signed(&start, s.b.signing_key()), DOC)
+        .unwrap();
+    let envelope = wrap(&s.authority, &s.a, s.b.id(), &epoch_key(0)).unwrap();
+    let key = s.authority.unwrap_key(&envelope, &s.b).unwrap();
+    let (author, manifest) = (s.b.id(), s.authority.manifest());
+    let (part, data, chained) = (fresh(), fresh(), fresh());
+    let mut h = header(&s.authority, &author, &inc, &part, &manifest);
+    h.kind = wire::Kind::Snapshot;
+    h.previous = None;
+    let snapshot = seal_as(h, &epoch_key(0), PLAINTEXT, &s.b);
+    let read = s
+        .authority
+        .authenticate_snapshot_at(&snapshot, &key, &DOC)
+        .unwrap();
+    assert_eq!(read.actor(), 82);
+    assert_eq!(read.open().unwrap(), PLAINTEXT);
+    // Each path takes only its own kind.
+    assert_eq!(
+        s.authority
+            .authenticate_at(&snapshot, &key, &DOC)
+            .map(|_| ()),
+        Err(Error::Unsupported)
+    );
+    let mut h = header(&s.authority, &author, &inc, &data, &manifest);
+    h.previous = None;
+    let record = seal_as(h, &epoch_key(0), PLAINTEXT, &s.b);
+    assert_eq!(
+        s.authority
+            .authenticate_snapshot_at(&record, &key, &DOC)
+            .map(|_| ()),
+        Err(Error::Unsupported)
+    );
+    // A snapshot record naming a predecessor is malformed.
+    let previous = [6; 48];
+    let mut h = header(&s.authority, &author, &inc, &chained, &manifest);
+    h.kind = wire::Kind::Snapshot;
+    h.previous = Some(&previous);
+    let chained = seal_as(h, &epoch_key(0), PLAINTEXT, &s.b);
+    assert_eq!(
+        s.authority
+            .authenticate_snapshot_at(&chained, &key, &DOC)
+            .map(|_| ()),
+        Err(Error::Format)
+    );
+}

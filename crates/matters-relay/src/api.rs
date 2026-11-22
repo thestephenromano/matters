@@ -97,6 +97,10 @@ pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
             "/v0/routes/{route}/enrollments/{lookup}",
             put(put_enrollment).get(get_enrollment),
         )
+        .route(
+            "/v0/routes/{route}/snapshots",
+            axum::routing::get(get_snapshots),
+        )
         .route("/v0/routes/{route}/hints", axum::routing::get(hints))
         .route("/v0/routes/{route}/export", axum::routing::get(export))
         .route("/healthz", axum::routing::get(healthz))
@@ -498,6 +502,43 @@ async fn get_authority(
         api.relay
             .authority_objects(&route, after.as_ref(), limit)
             .await?,
+    ))
+}
+
+/// `GET /v0/routes/{route}/snapshots?limit=`: the newest checkpoint parts,
+/// newest first, so a new device can start from a checkpoint (#40).
+async fn get_snapshots(
+    State(api): State<Api>,
+    Path(route): Path<String>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> Result<Response> {
+    let route = path_route(&route)?;
+    let mut limit = None;
+    for pair in query
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .filter(|p| !p.is_empty())
+    {
+        match pair.split_once('=') {
+            Some(("limit", value)) if limit.is_none() => {
+                limit = Some(value.parse::<u32>().map_err(|_| malformed())?);
+            }
+            _ => return Err(malformed()),
+        }
+    }
+    authenticated(&api, &route, &headers).await?;
+    let found = api
+        .relay
+        .snapshots(&route, limit.unwrap_or(MAX_PAGE))
+        .await?;
+    Ok(cbor_response(
+        StatusCode::OK,
+        cbor::map(vec![
+            ("generation", Value::Bytes(&found.generation)),
+            ("records", Value::Entries(&found.entries)),
+        ]),
     ))
 }
 

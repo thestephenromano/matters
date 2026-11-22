@@ -247,6 +247,76 @@ pub(super) fn kind_of(stored: &str) -> Result<Option<Kind>> {
     Ok(serde_json::from_value(serde_json::Value::String(name)).ok())
 }
 
+/// A version vector in canonical form: `(actor, counter end)` pairs in
+/// ascending actor order, 8 + 4 bytes big-endian each. The engine's own
+/// encoding serializes a hash map, whose order depends on how the vector
+/// was built, so two documents in the same state may encode it differently.
+/// Checkpoint coverage compares bytes, so it uses this form.
+pub fn encode_version(vv: &VersionVector) -> Vec<u8> {
+    let sorted: BTreeMap<u64, i32> = vv.iter().map(|(peer, counter)| (*peer, *counter)).collect();
+    sorted
+        .into_iter()
+        .flat_map(|(peer, counter)| {
+            peer.to_be_bytes()
+                .into_iter()
+                .chain(counter.to_be_bytes())
+                .collect::<Vec<u8>>()
+        })
+        .collect()
+}
+
+/// Decode [`encode_version`]'s form: whole pairs, actors strictly
+/// ascending.
+pub fn decode_version(bytes: &[u8]) -> Result<BTreeMap<u64, i32>> {
+    if !bytes.len().is_multiple_of(12) {
+        return Err(invalid("a version vector of partial entries"));
+    }
+    let mut out = BTreeMap::new();
+    let mut last = None;
+    for entry in bytes.as_chunks::<12>().0 {
+        let peer = u64::from_be_bytes(entry[..8].try_into().expect("8 bytes"));
+        let counter = i32::from_be_bytes(entry[8..].try_into().expect("4 bytes"));
+        if last.is_some_and(|l| l >= peer) {
+            return Err(invalid("a version vector out of order"));
+        }
+        last = Some(peer);
+        out.insert(peer, counter);
+    }
+    Ok(out)
+}
+
+/// A frontier in canonical form: its operation IDs `(actor, counter)` in
+/// ascending order, 8 + 4 bytes big-endian each, for the same reason as
+/// [`encode_version`].
+pub fn encode_frontiers(frontiers: &loro::Frontiers) -> Vec<u8> {
+    let mut ids: Vec<(u64, i32)> = frontiers.iter().map(|id| (id.peer, id.counter)).collect();
+    ids.sort_unstable();
+    ids.into_iter()
+        .flat_map(|(peer, counter)| {
+            peer.to_be_bytes()
+                .into_iter()
+                .chain(counter.to_be_bytes())
+                .collect::<Vec<u8>>()
+        })
+        .collect()
+}
+
+/// The version vector and frontier a full-history snapshot holds, in
+/// canonical form, read from its own engine. Anything else (updates, a
+/// shallow snapshot) is refused.
+pub fn snapshot_version(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    let meta = LoroDoc::decode_import_blob_meta(snapshot, true).map_err(engine)?;
+    if !matches!(meta.mode, loro::EncodedBlobMode::Snapshot) {
+        return Err(invalid("not a full-history snapshot"));
+    }
+    let doc = LoroDoc::new();
+    doc.import(snapshot).map_err(engine)?;
+    Ok((
+        encode_version(&doc.oplog_vv()),
+        encode_frontiers(&doc.oplog_frontiers()),
+    ))
+}
+
 /// The engine actors whose operations an update carries, so a receiver
 /// can check them against the writer the update's record was signed by.
 /// Only an updates blob qualifies: a snapshot carries other actors' history.
@@ -366,6 +436,12 @@ impl Document {
     /// The version this document has seen.
     pub fn version(&self) -> VersionVector {
         self.doc.oplog_vv()
+    }
+
+    /// The frontier of everything this document has seen, in canonical
+    /// form ([`encode_frontiers`]).
+    pub fn frontiers(&self) -> Vec<u8> {
+        encode_frontiers(&self.doc.oplog_frontiers())
     }
 
     /// Everything the document holds, for a new replica or a checkpoint.

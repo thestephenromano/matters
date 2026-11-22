@@ -117,6 +117,34 @@ pub fn collection() -> Collection {
     }
 }
 
+/// A `snapshot` record (a checkpoint part) sealed by `author`.
+pub fn snapshot_record(
+    author: &DeviceKeys,
+    record_id: [u8; 32],
+    plaintext: &[u8],
+    route: &Route,
+) -> Vec<u8> {
+    let header = wire::Header {
+        context: route.content(&[4; 16]),
+        kind: wire::Kind::Snapshot,
+        epoch: 0,
+        manifest: &[5; 48],
+        author: &author.id(),
+        incarnation: &[7; 32],
+        record_id: &record_id,
+        logical_batch: &[8; 32],
+        previous: None,
+    };
+    seal(
+        header,
+        &ContentKey::new([4; 32]),
+        plaintext,
+        author.signing_key(),
+        fresh(),
+    )
+    .unwrap()
+}
+
 /// A record sealed by `author` under `record_id`, with `plaintext`.
 pub fn record(
     author: &DeviceKeys,

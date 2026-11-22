@@ -127,14 +127,15 @@ impl Relay {
                 wire::parse_for_route(bytes, &route.application, &route.tenant, &route.collection)?;
             let seq = i64::try_from(n + 1).map_err(|_| RelayError::TooLarge)?;
             sqlx::query(
-                "INSERT INTO records (route, sequence, record_id, digest, bytes)
-                 VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO records (route, sequence, record_id, digest, bytes, snapshot)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(id)
             .bind(seq)
             .bind(record.header.record_id.as_slice())
             .bind(record_hash(bytes).as_slice())
             .bind(bytes.as_slice())
+            .bind(record.header.kind == wire::Kind::Snapshot)
             .execute(&mut *tx)
             .await?;
             used += i64::try_from(bytes.len()).map_err(|_| RelayError::TooLarge)?;

@@ -1,6 +1,7 @@
 //! Matters' database as a sync client's local store (#39).
 
 use matters_sync::authority::{self, Hash, Route};
+use matters_sync::checkpoint::Cursor;
 use matters_sync::store::{
     ControlOutcome, JoiningStore, LocalStore, Log, RecoveringStore, StoreResult,
 };
@@ -70,7 +71,8 @@ impl Database {
     }
 
     /// The relay's storage generation changed: forget the cursors and
-    /// queue every sealed record and published control for upload again.
+    /// queue every sealed record, checkpoint part and published control
+    /// for upload again.
     /// The relay deduplicates what it still holds.
     pub fn sync_generation_changed(&self) -> Result<()> {
         self.with_sealing(|conn, _, _| {
@@ -78,6 +80,7 @@ impl Database {
             tx.execute("DELETE FROM sync_cursors", [])?;
             tx.execute("UPDATE sync_records SET acked = 0", [])?;
             tx.execute("UPDATE sync_publish SET acked = 0", [])?;
+            tx.execute("UPDATE sync_checkpoint_out SET acked = 0", [])?;
             tx.commit()?;
             Ok(())
         })
@@ -108,14 +111,20 @@ impl LocalStore for Database {
         Ok(Database::acknowledge_control(self, seq)?)
     }
 
+    /// Sealed records, then checkpoint parts.
     fn outgoing_records(&self) -> StoreResult<Vec<([u8; 32], Vec<u8>)>> {
-        Ok(Database::outgoing_records(self)?
+        let mut out: Vec<([u8; 32], Vec<u8>)> = Database::outgoing_records(self)?
             .into_iter()
             .map(|r| (r.record_id, r.bytes))
-            .collect())
+            .collect();
+        out.extend(self.outgoing_checkpoint_parts()?);
+        Ok(out)
     }
 
     fn acknowledge_record(&self, record_id: &[u8; 32]) -> StoreResult<()> {
+        if self.acknowledge_checkpoint_part(record_id)? {
+            return Ok(());
+        }
         Ok(Database::acknowledge_record(self, record_id)?)
     }
 
@@ -153,6 +162,18 @@ impl LocalStore for Database {
 
     fn generation_changed(&self) -> StoreResult<()> {
         Ok(self.sync_generation_changed()?)
+    }
+
+    fn wants_checkpoint(&self) -> StoreResult<bool> {
+        Ok(self.holds_nothing_synced()?)
+    }
+
+    fn start_from_checkpoint(&self, parts: &[Vec<u8>], generation: [u8; 16]) -> StoreResult<bool> {
+        Ok(Database::start_from_checkpoint(self, parts, generation)?)
+    }
+
+    fn make_checkpoint(&self, at: Cursor, every: u64) -> StoreResult<bool> {
+        Ok(self.checkpoint_due(every)? && self.create_checkpoint(Some(at))?.is_some())
     }
 }
 

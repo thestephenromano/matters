@@ -212,7 +212,12 @@ async fn export_and_import_keep_every_byte_under_a_new_generation() {
     let mut sent = Vec::new();
     for i in 0..3u8 {
         let id = fresh();
-        let bytes = record(&c.admin, id, &[i; 9], &route());
+        // The middle one is a checkpoint part.
+        let bytes = if i == 1 {
+            snapshot_record(&c.admin, id, &[i; 9], &route())
+        } else {
+            record(&c.admin, id, &[i; 9], &route())
+        };
         source
             .relay
             .append(&route(), &c.admin.id(), &id, &bytes)
@@ -258,6 +263,13 @@ async fn export_and_import_keep_every_byte_under_a_new_generation() {
     assert!(
         target.relay.is_member(&route(), &b.id()).await.unwrap(),
         "membership travels"
+    );
+    let snapshots = target.relay.snapshots(&route(), 10).await.unwrap();
+    assert_eq!(snapshots.generation, generation);
+    assert_eq!(
+        snapshots.entries,
+        [(2, sent[1].clone())],
+        "the snapshot index travels"
     );
     // Twice, truncated, or for a route that exists: refused, nothing changed.
     assert!(matches!(
