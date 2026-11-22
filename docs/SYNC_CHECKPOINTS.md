@@ -48,6 +48,11 @@ Only a fully synced member makes a checkpoint, in one SQLite transaction. "Fully
 
 Every record at or before its cursor's sequence is then either in the snapshot or carried pending. Everything after the cursor is its tail. This is what lets a fresh device start reading at the cursor.
 
+It carries only pending records whose signature it checked (`sync_pending.authenticated`); records kept unauthenticated never travel. It makes none, and returns `None`, while:
+- its engine holds operations aside for missing dependencies, which no snapshot's version would show;
+- more authenticated records wait than a checkpoint carries (`MAX_PENDING`, 1,024);
+- another open of the same database has replaced its writer (`sealing::fence`, an error).
+
 The parts are kept, and resent byte for byte, until the relay acknowledges them, as data records are. A restart during creation leaves no parts, or all of them, because the transaction commits as a whole. A restart during publication resends the same bytes. Records written concurrently are simply later than the cursor and arrive through the log as usual. Nothing already acknowledged is ever removed.
 
 ## Receiving one
@@ -57,26 +62,39 @@ A receiver authenticates each part as it does a data record:
 - the signature verifies;
 - the epoch key opens it.
 
-It then keeps the part until all parts are present. `assemble` refuses:
+It then keeps the part until all parts are present.
+
+**Parts are grouped by checkpoint and author.** One member's parts never spoil another member's parts of the same checkpoint. An author's parts are held to one checkpoint's worth (`MAX_PARTS`, 512); more refuses the part and drops the author's parts of that checkpoint. A part of an author's newer checkpoint drops that author's parts of earlier, undecided ones, and a refused checkpoint's parts are kept until then, as evidence. A checkpoint is assembled once, when its last part arrives (part 0 states how many there are).
+
+`assemble` refuses:
 - parts that disagree on the checkpoint, the writer, the epoch or the chunking (`Inconsistent`);
 - a statement whose epoch is not the records' (`Epoch`);
 - a payload that does not hash to the statement, or that carries other pending records than it lists (`Digest`).
 
-A device with history then checks the statement against what it holds:
-1. **The snapshot.** Imported into an empty engine, it must have exactly the stated version vector and frontier.
-2. **Each listed writer.** Where the device holds at least `records` records of that chain, the record at that position must be `head`. A different head is evidence of a fork (`Fork`), and the checkpoint is refused.
-3. **Each writer's frontier.** For each listed writer whose actor the device knows, the version vector must equal the counter end of that writer's record at `records`.
-4. **The previous checkpoint.** The statement must cover at least the last checkpoint the device accepted (`Coverage::follows`): the same or a later epoch, every writer with at least as many records, the same head where the counts are equal, and no earlier cursor in the same relay generation. A relay that offers an older checkpoint instead of a newer one is refused as `Behind`.
+Those refusals are the author's sealing, not the checkpoint's content: the parts' records are quarantined and nothing is recorded under the checkpoint's ID.
 
-A device that already holds everything a checkpoint covers records it as its latest accepted checkpoint and imports nothing. Its history is a superset.
+A device with history then checks the statement against what it holds:
+1. **Each listed writer** must be admitted here, under its listed author. A writer not admitted yet makes the checkpoint wait, before its snapshot is imported. The wait is recorded (`sync_checkpoint_waits`), and the checkpoint is judged again only once that writer is admitted.
+2. **The snapshot.** Imported into an empty engine, it must have exactly the stated version vector and frontier, and every actor in the version must be a listed writer's.
+3. **Each listed chain.** Where the device holds at least `records` records of that chain, the record at position `records` must be `head` (positions are kept since schema v19). A different head is evidence of a fork, and the checkpoint is refused.
+4. **Each writer's counter** must agree with the chain lengths: equal where the device holds the chain as far, lower where it holds more, higher where it holds less.
+5. **The previous checkpoint.** The statement must cover at least the latest checkpoint the device accepted and verified (`Coverage::follows`): the same or a later epoch, every writer with at least as many records, the same head where the counts are equal, and no earlier cursor in the same relay generation. A relay that offers an older checkpoint instead of a newer one gets it superseded (`Behind`), and one that contradicts it is refused.
+
+A checkpoint that lists some chain further than this device holds it passes checks 3 and 4 on claims nothing here can refute. It is accepted **unverified**: it never becomes the latest verified checkpoint, so it never supersedes or refutes a checkpoint this device can verify. `latest_checkpoint` reports the latest verified checkpoint, or, while there is none, the latest accepted.
+
+A device that already holds everything a checkpoint covers records it as accepted and imports nothing. Its history is a superset.
+
+Refused, superseded and unverified checkpoints are kept, newest first, up to `KEEP_DECIDED` (32), and as many verified accepted ones besides; older ones are pruned.
 
 ## Bootstrapping a fresh device
 
 A device that has just joined asks the relay for the newest snapshot records (`GET …/snapshots`). It assembles the newest complete checkpoint that passes the checks it can make, then commits in one transaction:
 - the imported snapshot and its projection;
 - each listed writer's head and record count, as its receive head;
-- the carried pending records, as pending input;
+- the carried pending records, as pending input to receive again;
 - the relay cursor, when its generation is the relay's current one.
+
+The drain that follows receives each carried record as if fresh, so it is authenticated on this device before it applies or waits.
 
 It then reads the log from the cursor. Every record after it is tail: it either names a covered head as its predecessor, or it starts a later chain.
 
@@ -84,7 +102,7 @@ It then reads the log from the cursor. Every record after it is tail: it either 
 
 When the cursor's generation is not the relay's current one (the relay was restored), the device does not use the checkpoint. It reads the whole log instead.
 
-A device that started from a checkpoint knows each covered chain only by its length and head. If it meets covered records again, for example after a later relay restore, it recognises them by walking each chain back from its covered head, by hash, through its pending records. Each one found is recorded as held and is no longer pending.
+A device that started from a checkpoint knows each covered chain only by its length and head. If it meets covered records again, for example after a later relay restore, it recognises them by walking each chain back from its covered head, by hash, through its pending records, looked up by digest. Each one found is recorded as held, with its predecessor and position, and is no longer pending.
 
 ## Old offline devices
 
@@ -105,6 +123,12 @@ Pruning history needs its own approved policy, which must name:
 
 The policy must be based on measured checkpoint size, bootstrap latency and history growth for named workloads (#40, #43).
 
+## Limits
+
+- **Snapshot decompression.** Judging a complete checkpoint imports its snapshot into an empty Loro document, and starting from one imports it into the device's engine. Loro decompresses the snapshot's LZ4 blocks (`loro-kv-store`) with no output bound, and exposes no setting for one. The input is bounded by the checkpoint's payload limit (`MAX_PARTS` × `CHUNK_BYTES`, 256 MiB), so the memory it can take is bounded only by that times LZ4's expansion ratio. This is a residual risk from a member's dishonest checkpoint. The `engine_import` fuzz target runs under libFuzzer's 2 GiB memory limit. A panic in the import refuses the checkpoint rather than taking the application down.
+- **A fresh device** cannot verify a checkpoint against history it does not hold (above).
+- **Retention.** Pruning keeps the latest decided checkpoints only; a re-delivered pruned one is judged again.
+
 ## Evidence
 
 `crates/matters-core/tests/checkpoint_tests.rs` covers:
@@ -115,10 +139,12 @@ The policy must be based on measured checkpoint size, bootstrap latency and hist
 - pending records travelling with a checkpoint and applying later;
 - a deletion travelling with a checkpoint, with a stale edit from another device after it merging the same on the source and on the device that started from it;
 - covered records met again after a relay restore, recognised by their chains;
-- dishonest checkpoints refused and kept as evidence: another head, a version the snapshot does not hold, another author, a counter that disagrees, another epoch;
-- an older checkpoint never replacing a newer one;
+- dishonest checkpoints refused and kept as evidence: another head, a head held at another position, a version the snapshot does not hold, another author, a counter that disagrees; and parts sealed under another epoch quarantined;
+- an older checkpoint never replacing a newer one the device verified;
 - publication surviving a restart and a relay restore with the same bytes;
 - a crash while creating a checkpoint leaving nothing and losing nothing.
+
+`crates/matters-core/tests/receive_review_tests.rs` covers another member's parts leaving an honest checkpoint to be judged on its own, an author's parts capped and superseded by its newer checkpoint, an unverifiable checkpoint never overriding one the device can verify, a dependency-waiting record carried pending, and unauthenticated records never carried.
 
 `authority_tests.rs` checks that snapshot records authenticate only as snapshots, and only without a predecessor.
 
@@ -129,7 +155,7 @@ The policy must be based on measured checkpoint size, bootstrap latency and hist
 - each `Behind` and `Fork` case of the comparison;
 - byte-exact agreement with an independent encoder (`tests/vectors/checkpoint_kat.py`, Python standard library).
 
-The `checkpoint` fuzz target runs the part and statement parsers, and assembly. It is seeded from that encoder, and its corpus is replayed on stable by `tests/fuzz_replay.rs`.
+The `checkpoint` fuzz target runs the part and statement parsers, and assembly. It is seeded from that encoder, and its corpus is replayed on stable by `tests/fuzz_replay.rs`. The `built_checkpoint` target builds checkpoints from fuzzed fields and checks that each assembles from its own parts into itself, follows itself and is refused under another epoch; `signed_record` seals fuzzed parts as the fixture's admitted writer, so assembly runs after authentication.
 
 ## Measured
 
