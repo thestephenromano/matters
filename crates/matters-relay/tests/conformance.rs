@@ -374,6 +374,19 @@ impl World {
         bytes
     }
 
+    /// A named invitation into the collection, and its lookup ID.
+    fn invitation(&self, name: &str) -> (matters_sync::authority::Invitation, [u8; 16]) {
+        let mut secret = [0; 16];
+        secret[..name.len()].copy_from_slice(name.as_bytes());
+        let invitation = self
+            .collection
+            .authority
+            .invite(matters_sync::authority::InvitationSecret::new(secret))
+            .unwrap();
+        let lookup = invitation.secret.lookup(&route()).unwrap();
+        (invitation, lookup)
+    }
+
     fn device(&self, name: &str) -> &DeviceKeys {
         match name {
             "A" => &self.collection.admin,
@@ -728,6 +741,43 @@ impl World {
             self.check(response.as_ref(), expect, context);
             return;
         }
+        if let Some(name) = step["register_invitation"].as_str() {
+            let lookup = self.invitation(name).1;
+            let token = self.token(&device, &route(), false).await;
+            let path = format!(
+                "/v0/routes/{}/invitations/{}",
+                route_hex(&route()),
+                hex(&lookup)
+            );
+            let response = http(&self.relay.addr.clone(), "PUT", &path, Some(&token), b"").await;
+            self.check(response.as_ref(), expect, context);
+            return;
+        }
+        if let Some(name) = step["enroll"].as_str() {
+            let (invitation, lookup) = self.invitation(name);
+            let key = format!("{name}-request{}", step["other_bytes"] == true);
+            let request = match self.controls.get(&key) {
+                Some(bytes) => bytes.clone(),
+                None => {
+                    let bytes = matters_sync::authority::request_enrollment(
+                        &invitation,
+                        self.device(&device),
+                        fresh(),
+                    )
+                    .unwrap();
+                    self.controls.insert(key, bytes.clone());
+                    bytes
+                }
+            };
+            let path = format!(
+                "/v0/routes/{}/enrollments/{}",
+                route_hex(&route()),
+                hex(&lookup)
+            );
+            let response = http(&self.relay.addr.clone(), "PUT", &path, None, &request).await;
+            self.check(response.as_ref(), expect, context);
+            return;
+        }
         if let Some(path) = step["raw_path"].as_str() {
             let path = path.replace("{route}", &route_hex(&route()));
             let token = self.token(&device, &route(), false).await;
@@ -919,7 +969,7 @@ async fn every_conformance_scenario_passes_against_the_real_binary() {
         return;
     }
     let all = scenarios();
-    assert_eq!(all.len(), 14, "every scenario of the fixture");
+    assert_eq!(all.len(), 15, "every scenario of the fixture");
     for scenario in all {
         let name = scenario["name"].as_str().unwrap().to_owned();
         let wants_hints = scenario["steps"]

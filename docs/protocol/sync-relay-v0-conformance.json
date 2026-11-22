@@ -132,6 +132,19 @@
       "note": "C was admitted after the backup. It holds the signed transition that admitted it and re-publishes it without a session, which the relay verifies against the authority it has; writer claims and envelopes still need one."
     },
     {
+      "name": "the-mailbox-takes-requests-only-under-registered-invitations",
+      "steps": [
+        {"as": "C", "enroll": "i1", "expect": {"status": 404, "code": "unknown-invitation"}},
+        {"as": "B", "register_invitation": "i1", "expect": {"status": 403, "code": "not-a-member"}},
+        {"as": "A", "register_invitation": "i1", "expect": {"status": 201}},
+        {"as": "A", "register_invitation": "i1", "expect": {"status": 200}},
+        {"as": "C", "enroll": "i1", "expect": {"status": 201}},
+        {"as": "C", "enroll": "i1", "expect": {"status": 200}},
+        {"as": "C", "enroll": "i1", "other_bytes": true, "expect": {"status": 409, "code": "record-conflict"}}
+      ],
+      "note": "Only the admin (A) registers an invitation's lookup, with its session; the joining device (C) leaves one request under it without a session."
+    },
+    {
       "name": "quota-and-rate-limits-are-distinct",
       "config": {"max_records_per_route": 1, "rate_limit": "configured"},
       "steps": [

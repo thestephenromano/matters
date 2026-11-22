@@ -207,6 +207,10 @@ pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
             put(put_enrollment).get(get_enrollment),
         )
         .route(
+            "/v0/routes/{route}/invitations/{lookup}",
+            put(put_invitation),
+        )
+        .route(
             "/v0/routes/{route}/snapshots",
             axum::routing::get(get_snapshots),
         )
@@ -259,7 +263,7 @@ pub fn status(error: &RelayError) -> StatusCode {
         RelayError::Malformed | RelayError::Authority(_) => StatusCode::BAD_REQUEST,
         RelayError::Unauthenticated | RelayError::SessionExpired => StatusCode::UNAUTHORIZED,
         RelayError::NotAMember | RelayError::Revoked => StatusCode::FORBIDDEN,
-        RelayError::UnknownRoute => StatusCode::NOT_FOUND,
+        RelayError::UnknownRoute | RelayError::UnknownInvitation => StatusCode::NOT_FOUND,
         RelayError::RecordConflict { .. } | RelayError::RouteExists => StatusCode::CONFLICT,
         RelayError::GenerationChanged { .. } => StatusCode::GONE,
         RelayError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -541,8 +545,32 @@ async fn put_authority(
     ))
 }
 
+/// `PUT /v0/routes/{route}/invitations/{lookup}`: the route's admin
+/// registers an invitation before showing it (#45), so the mailbox takes a
+/// request under its lookup. No body.
+async fn put_invitation(
+    State(api): State<Api>,
+    Path((route, lookup)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response> {
+    let route = path_route(&route)?;
+    let lookup: [u8; 16] = hex(&lookup)?;
+    let device = authenticated(&api, &route, &headers).await?;
+    let created = api
+        .relay
+        .register_invitation(&route, &device, &lookup)
+        .await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok(status.into_response())
+}
+
 /// `PUT /v0/routes/{route}/enrollments/{lookup}`: a joining device leaves
-/// its enrollment request (#42). No session: it is not a member yet.
+/// its enrollment request (#42). No session: it is not a member yet, but
+/// the lookup must be a registered invitation's.
 async fn put_enrollment(
     State(api): State<Api>,
     Path((route, lookup)): Path<(String, String)>,

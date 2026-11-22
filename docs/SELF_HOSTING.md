@@ -108,7 +108,7 @@ The drill shows what the recovery point means in practice. An edit acknowledged 
 
 | | Relay at the same `/v0` | Relay rolled back to an older build |
 | --- | --- | --- |
-| **Client, same `/v0`** | Works. Additive endpoints, such as `/snapshots` and `/enrollments`, are used where present | The older relay refuses the newer database (above). Restore the backup taken before the upgrade, with a new generation |
+| **Client, same `/v0`** | Works. Additive endpoints, such as `/snapshots`, `/enrollments` and `/invitations`, are used where present. A client from before `/invitations` cannot add devices through a relay that requires them (`404 unknown-invitation`) | The older relay refuses the newer database (above). Restore the backup taken before the upgrade, with a new generation |
 | **Client too old for the relay's `/v0` additions** | Works without them. A device that can't start from a checkpoint reads the whole log | Works |
 | **A future `/v1`** | Unknown paths answer `unsupported-version`, and the client asks for attention | — |
 

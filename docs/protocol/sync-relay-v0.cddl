@@ -35,6 +35,10 @@ snapshots = {"generation": id16, "records": [* [seq, bstr]]}
 
 hint = {"generation": id16, "sequence": seq}
 
+; PUT /v0/routes/{route}/invitations/{lookup}: no body, admin session; the
+; mailbox's PUT /v0/routes/{route}/enrollments/{lookup} then takes one
+; enrollment_request (sync-key-distribution-v0.cddl) under that lookup.
+
 error = {
   "code": error-code,
   "retry": bool,
@@ -45,7 +49,7 @@ error = {
 error-code = "malformed" / "session-expired" / "unauthenticated" / "not-a-member"
   / "revoked" / "unknown-route" / "unsupported-version" / "record-conflict"
   / "generation-changed" / "too-large" / "context-mismatch" / "unsupported-suite"
-  / "rate-limited" / "unavailable" / "quota-exhausted"
+  / "rate-limited" / "unavailable" / "quota-exhausted" / "unknown-invitation"
 
 export = ["matters-sync-export", 0, route, generation: id16,
           authority: [* bstr], records: [* [seq, bstr]]]

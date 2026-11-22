@@ -50,6 +50,8 @@ pub enum RelayError {
     GenerationChanged { generation: [u8; 16] },
     #[error("the route's storage quota is exhausted")]
     QuotaExhausted,
+    #[error("no registered, unexpired invitation has this lookup")]
+    UnknownInvitation,
     #[error("too many requests; retry after {retry_after_ms} ms")]
     RateLimited { retry_after_ms: u64 },
     #[error("the authority object was refused: {0}")]
@@ -75,6 +77,7 @@ impl RelayError {
             Self::TooLarge => "too-large",
             Self::GenerationChanged { .. } => "generation-changed",
             Self::QuotaExhausted => "quota-exhausted",
+            Self::UnknownInvitation => "unknown-invitation",
             Self::RateLimited { .. } => "rate-limited",
             Self::Unavailable(_) => "unavailable",
         }
@@ -178,10 +181,10 @@ pub struct Page {
     pub complete: bool,
 }
 
-/// Unexpired enrollment requests a route keeps at once.
+/// Unexpired invitations, and enrollment requests, a route keeps at once.
 pub const MAX_ENROLLMENTS: i64 = 16;
-/// How long an enrollment request is kept: an invitation is used within
-/// minutes.
+/// How long a registered invitation, and an enrollment request, is kept:
+/// an invitation is used within minutes.
 pub const ENROLLMENT_TTL_SECONDS: u64 = 3600;
 
 /// The route's newest snapshot records, newest first.
@@ -774,10 +777,63 @@ impl Relay {
         self.put_authority_as(route, None, digest, bytes).await
     }
 
+    /// Register an invitation's `lookup` for `device`, which must be the
+    /// route's current admin (#45): the mailbox then takes one enrollment
+    /// request under it, for [`ENROLLMENT_TTL_SECONDS`] from now. A route
+    /// keeps at most [`MAX_ENROLLMENTS`] unexpired invitations. The same
+    /// lookup again returns `false` and keeps its first expiry.
+    pub async fn register_invitation(
+        &self,
+        route: &Route,
+        device: &Hash,
+        lookup: &[u8; 16],
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let row = route_row(&mut tx, route, true).await?;
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        if replayed.authority.admin().ok() != Some(*device) {
+            return Err(RelayError::NotAMember);
+        }
+        sqlx::query(
+            "DELETE FROM invitations WHERE route = $1
+             AND registered_at < now() - ($2::BIGINT * interval '1 second')",
+        )
+        .bind(row.id)
+        .bind(ENROLLMENT_TTL_SECONDS as i64)
+        .execute(&mut *tx)
+        .await?;
+        let known: Option<i32> =
+            sqlx::query_scalar("SELECT 1 FROM invitations WHERE route = $1 AND lookup = $2")
+                .bind(row.id)
+                .bind(lookup.as_slice())
+                .fetch_optional(&mut *tx)
+                .await?;
+        if known.is_some() {
+            tx.commit().await?;
+            return Ok(false);
+        }
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invitations WHERE route = $1")
+            .bind(row.id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if pending >= MAX_ENROLLMENTS {
+            return Err(RelayError::QuotaExhausted);
+        }
+        sqlx::query("INSERT INTO invitations (route, lookup) VALUES ($1, $2)")
+            .bind(row.id)
+            .bind(lookup.as_slice())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     /// Leave a joining device's enrollment request under `lookup` (#42).
-    /// No session is needed: the device is not a member yet. The relay checks
-    /// that the bytes are an enrollment request for this route, and keeps at
-    /// most [`MAX_ENROLLMENTS`] unexpired ones per route, each for
+    /// No session is needed: the device is not a member yet. The lookup
+    /// must be a registered, unexpired invitation's
+    /// ([`Self::register_invitation`]), which takes one request. The relay
+    /// checks that the bytes are an enrollment request for this route, and
+    /// keeps at most [`MAX_ENROLLMENTS`] unexpired ones per route, each for
     /// [`ENROLLMENT_TTL_SECONDS`].
     ///
     /// The same bytes again return `false`. Other bytes under the same
@@ -797,6 +853,18 @@ impl Relay {
         }
         let mut tx = self.pool.begin().await?;
         let row = route_row(&mut tx, route, true).await?;
+        let invited: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM invitations WHERE route = $1 AND lookup = $2
+             AND registered_at >= now() - ($3::BIGINT * interval '1 second')",
+        )
+        .bind(row.id)
+        .bind(lookup.as_slice())
+        .bind(ENROLLMENT_TTL_SECONDS as i64)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if invited.is_none() {
+            return Err(RelayError::UnknownInvitation);
+        }
         sqlx::query(
             "DELETE FROM enrollments WHERE route = $1
              AND received_at < now() - ($2::BIGINT * interval '1 second')",

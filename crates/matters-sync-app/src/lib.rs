@@ -525,6 +525,12 @@ impl SyncApp {
             .secret
             .lookup(&invitation.route)
             .map_err(|e| self.fail(e))?;
+        // The relay takes a joining device's request only under an
+        // invitation its admin registered, so register it before showing it.
+        self.inner
+            .runtime
+            .block_on(client.register_invitation(&lookup))
+            .map_err(|e| self.fail(e))?;
         let attempt = self.next_attempt();
         let shown = text.clone();
         self.update(|v| {

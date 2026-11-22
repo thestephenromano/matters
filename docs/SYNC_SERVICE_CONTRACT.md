@@ -92,13 +92,16 @@ A cursor from another generation gets `410 generation-changed` with the current 
 ### Enrollment mailbox
 
 ```text
+PUT /v0/routes/{route}/invitations/{lookup-hex}     (admin session, no body) → 201 | 200
 PUT /v0/routes/{route}/enrollments/{lookup-hex}     <exact signed enrollment_request, at most 65,536 bytes>
 GET /v0/routes/{route}/enrollments/{lookup-hex}     → 200 <the request bytes> | 404
 ```
 
-A device joining through an invitation is not a member yet, so it has no session. It leaves its signed `enrollment_request` (SYNC_KEY_DISTRIBUTION.md) under the invitation's 16-byte lookup ID, which is derived from the invitation secret the relay never sees. The `PUT` needs no session.
+Before showing an invitation, the admin's device registers its 16-byte lookup ID, which is derived from the invitation secret the relay never sees. That `PUT` needs the route's current admin's session; anyone else gets `403 not-a-member`. A registration lasts an hour, the same lookup again returns `200` and keeps its first expiry, and a route keeps at most 16 unexpired registrations; a seventeenth gets `507 quota-exhausted`.
 
-The relay checks only that the bytes are an enrollment request for this route. The same bytes again return `200`, and other bytes under the same lookup get `409 record-conflict`. A route keeps at most 16 unexpired requests, each for an hour; a seventeenth gets `507 quota-exhausted`.
+A device joining through an invitation is not a member yet, so it has no session. It leaves its signed `enrollment_request` (SYNC_KEY_DISTRIBUTION.md) under the invitation's lookup ID. That `PUT` needs no session, but the lookup must be registered and unexpired, or it gets `404 unknown-invitation`; so nobody who merely knows the route can fill the mailbox.
+
+The relay checks only that the bytes are an enrollment request for this route. A lookup takes one request: the same bytes again return `200`, and other bytes under the same lookup get `409 record-conflict`. A request is kept for an hour.
 
 The `GET` needs a session, and only the route's current admin is given the request; anyone else, and an expired or absent request, gets `404`. The admin's device verifies the request against its invitation before signing anything. The joining device then becomes a member through the published transition and reads the authority log as any device does.
 
@@ -166,6 +169,7 @@ Every error body is `{"code": text, "retry": bool, ? "retry-after-ms": uint}`.
 | 401 | `session-expired`, `unauthenticated` | after a new session | Re-authenticate; local work untouched |
 | 403 | `not-a-member`, `revoked` | no | Stop uploading to this route; keep local work for recovery (#37) |
 | 404 | `unknown-route`, `unsupported-version` | no | Configuration error |
+| 404 | `unknown-invitation` | no | The invitation was never registered or has expired: ask for a new one |
 | 409 | `record-conflict` | no | Retain both as evidence; never overwrite or re-sign |
 | 410 | `generation-changed` | after resync | See *Restore* |
 | 413 | `too-large` | no | Cannot happen for valid records; report |
