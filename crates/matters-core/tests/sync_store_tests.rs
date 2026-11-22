@@ -179,7 +179,9 @@ fn received_controls_map_to_what_the_client_does_next() {
         b.receive_control(&transition, Some(&envelope)).unwrap(),
         ControlOutcome::Done
     );
-    // B's removal: it stops.
+    // B's removal: it stops, and its own authority no longer holds it a
+    // member.
+    assert!(b.is_current_member().unwrap());
     p.a.remove_member(&b_id).unwrap();
     let removal =
         p.a.outgoing_controls()
@@ -192,6 +194,8 @@ fn received_controls_map_to_what_the_client_does_next() {
         b.receive_control(&removal.bytes, None).unwrap(),
         ControlOutcome::Stopped
     );
+    assert!(!b.is_current_member().unwrap());
+    assert!(store(&p.a).is_current_member().unwrap());
 }
 
 #[test]
