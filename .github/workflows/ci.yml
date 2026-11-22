@@ -16,7 +16,7 @@ env:
   CARGO_TERM_COLOR: always
 
 # Each job runs a gate script from ci/; ci/check.sh runs them all locally.
-# Qt 6.8+ and current GTK/libadwaita come from Fedora's packages, the same
+# Qt 6.8+ comes from Fedora's packages, the same
 # system the app is developed on. git is installed before checkout so the
 # checkout keeps .git (the hygiene gate reads the index).
 jobs:

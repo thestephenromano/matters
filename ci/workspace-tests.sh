@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Core tests, the QML lint against the generated bridge types, and the GTK
-# widget tests on a headless Broadway display.
+# The workspace tests, including the QML lint against the generated bridge
+# types.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . ci/lib.sh
