@@ -127,6 +127,8 @@ function run(t, view, look, name) {
     look("area");
     menu("areaMenu", "containerMenuButton");
 
+    // Today's events as of now, even after midnight (#238).
+    controller.refreshCalendars();
     controller.chooseShowEvents(true);
     controller.selectView("today");
     look("today with events");

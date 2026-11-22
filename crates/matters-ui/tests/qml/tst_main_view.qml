@@ -3433,6 +3433,10 @@ Item {
         }
 
         function showEvents() {
+            // Read the calendar for today as it is now, as the app's minute
+            // check does: a run that crossed midnight would otherwise show
+            // the day it started on (#238).
+            controller.refreshCalendars();
             controller.chooseShowEvents(true);
             compare(controller.showEvents, true);
         }

@@ -92,6 +92,14 @@ Item {
                 if (row && row.title !== undefined)
                     out.push(row.title);
             }
+            // And every row still on screen, the model's or not: with motion
+            // on, rows a view change removed fade out, still drawn and in the
+            // accessibility tree, and a slow machine outlasts any fixed wait
+            // (#238). A row's title is the user's whichever view it was in.
+            for (const item of list.contentItem.children) {
+                if (item.title !== undefined && typeof item.title === "string")
+                    out.push(item.title);
+            }
             if (list.count > 0 && list.model.idAt(0) !== "") {
                 for (const d of parse(controller.moveDestinations(list.model.idAt(0))))
                     out.push(d.title);
