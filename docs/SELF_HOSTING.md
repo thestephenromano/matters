@@ -50,6 +50,8 @@ Each service gets only what it needs:
 
 With rootless Docker or Podman, give the file to the uid that 65532 maps to on the host instead. None of these files is committed (`packaging/relay/.gitignore`), and none, nor any `*.dump`, is sent to an image build (`.dockerignore`). `MATTERS_RELAY_HTTPS_PORT` and `MATTERS_RELAY_HTTP_PORT` change the published ports.
 
+**A database elsewhere.** The stack's PostgreSQL is on the stack's private network, so its URL needs no TLS. A database on any other host must be reached with `sslmode=verify-full`, which encrypts the connection and checks the server's certificate and name: `postgres://relay@db.example.org:5432/relay?sslmode=verify-full`. The relay trusts the operating system's roots; for a private CA, add `&sslrootcert=/path/to/ca.pem` and mount that file. `sslmode=require` encrypts without checking who answers, and `prefer` (the default) silently falls back to cleartext, so use neither across a network.
+
 Provision each collection with the root key and genesis its admin device exports:
 
 ```sh

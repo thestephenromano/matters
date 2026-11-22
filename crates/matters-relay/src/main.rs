@@ -11,6 +11,8 @@
 //! ```
 //!
 //! - `MATTERS_RELAY_DATABASE_URL`: the PostgreSQL connection (required).
+//!   TLS is on rustls with the system's roots: a database on another host
+//!   must use `sslmode=verify-full` (with `sslrootcert=` for a private CA).
 //! - `MATTERS_RELAY_DATABASE_PASSWORD_FILE`: a file holding the database
 //!   password, which then overrides any in the URL (a container secret).
 //! - `MATTERS_RELAY_LISTEN`: where `serve` listens (default 127.0.0.1:8484).

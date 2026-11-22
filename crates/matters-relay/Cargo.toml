@@ -14,9 +14,11 @@ fault-injection = []
 [dependencies]
 matters-sync = { path = "../matters-sync" }
 # ADR 0003 (approved 2026-11-20): PostgreSQL through sqlx 0.9, Tokio runtime.
-# No TLS feature yet: the relay talks to its database on the same host or a
-# private network; a TLS option comes with self-hosting (#44).
-sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros"] }
+# TLS to the database (#45) on rustls with ring, the provider the sync
+# client uses (#39), trusting the operating system's roots
+# (rustls-native-certs, already in the graph), so that sslmode=require and
+# verify-full work; without a TLS feature they silently could not.
+sqlx = { version = "=0.9.1", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros", "tls-rustls-ring-native-roots"] }
 tokio = { version = "1.54", features = ["sync", "rt-multi-thread", "net", "macros", "signal", "time"] }
 # ADR 0003: axum on hyper 1 over HTTP/1.1 and HTTP/2 (TLS terminates at a
 # proxy in front, #44); `ws` for commit hints.
