@@ -2,6 +2,7 @@
 members = [
     "crates/matters-core",
     "crates/matters-ui",
+    "crates/matters-automation",
     "crates/matters-gtk",
     "crates/matters-sync",
     "crates/matters-keyring",
