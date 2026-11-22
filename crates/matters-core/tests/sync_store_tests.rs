@@ -179,7 +179,9 @@ fn received_controls_map_to_what_the_client_does_next() {
         b.receive_control(&transition, Some(&envelope)).unwrap(),
         ControlOutcome::Done
     );
-    // B's removal: it stops.
+    // B's removal: it stops, and its own authority no longer holds it a
+    // member.
+    assert!(b.is_current_member().unwrap());
     p.a.remove_member(&b_id).unwrap();
     let removal =
         p.a.outgoing_controls()
@@ -192,6 +194,8 @@ fn received_controls_map_to_what_the_client_does_next() {
         b.receive_control(&removal.bytes, None).unwrap(),
         ControlOutcome::Stopped
     );
+    assert!(!b.is_current_member().unwrap());
+    assert!(store(&p.a).is_current_member().unwrap());
 }
 
 #[test]
@@ -325,7 +329,7 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
     let recovering = Recovering {
         db: r.clone(),
         keys: MemoryKeyStore::default(),
-        words: words.clone(),
+        words: words.clone().into(),
         route: route(),
     };
     assert_eq!(recovering.route().unwrap(), route());
@@ -372,14 +376,15 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
         keys: MemoryKeyStore::default(),
         words: matters_sync::authority::RecoverySecret::new([3; 32])
             .words()
-            .unwrap(),
+            .unwrap()
+            .into(),
         route: route(),
     };
     assert_ne!(wrong.root().unwrap(), root);
     assert!(Recovering {
         db: r,
         keys: MemoryKeyStore::default(),
-        words: "not words".into(),
+        words: String::from("not words").into(),
         route: route(),
     }
     .root()

@@ -51,4 +51,55 @@ kat = subprocess.run(
 answers = dict(line.split(None, 1) for line in kat.splitlines() if line.strip())
 write("checkpoint", "part0", bytes.fromhex(answers["small-part0"].strip()))
 write("checkpoint", "coverage", bytes.fromhex(answers["small-coverage"].strip()))
+
+
+# The client's parsers of relay responses (#45): pages and snapshot lists,
+# in the contract's shapes (docs/SYNC_SERVICE_CONTRACT.md), carrying the
+# golden records.
+def cbor_head(major, n):
+    if n < 24:
+        return bytes([major << 5 | n])
+    for info, width in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * width):
+            return bytes([major << 5 | info]) + n.to_bytes(width, "big")
+
+
+def cbor(value):
+    if isinstance(value, bool):
+        return b"\xf5" if value else b"\xf4"
+    if isinstance(value, int):
+        return cbor_head(0, value)
+    if isinstance(value, bytes):
+        return cbor_head(2, len(value)) + value
+    if isinstance(value, str):
+        return cbor_head(3, len(value.encode())) + value.encode()
+    if isinstance(value, list):
+        return cbor_head(4, len(value)) + b"".join(cbor(v) for v in value)
+    if isinstance(value, dict):
+        return cbor_head(5, len(value)) + b"".join(
+            cbor(k) + cbor(v) for k, v in value.items())
+    raise TypeError(value)
+
+
+generation = bytes(range(16))
+wires = [bytes.fromhex(v["structural_wire_hex"]) for v in records["vectors"]]
+
+
+def page(entries, last, high_water):
+    return cbor({
+        "generation": generation,
+        "high-water": high_water,
+        "records": [[s, w] for s, w in entries],
+        "next": cbor([generation, last]),
+        "complete": last == high_water,
+    })
+
+
+write("relay_page", "complete", page(list(enumerate(wires, 1)), len(wires), len(wires)))
+write("relay_page", "partial", page([(1, wires[0])], 1, 7))
+write("relay_page", "empty", page([], 0, 0))
+write("relay_page", "refusal", cbor({"code": "rate-limited", "retry": True,
+                                     "retry-after-ms": 2 ** 64 - 1}))
+write("relay_snapshots", "one", cbor({"generation": generation, "records": [[3, wires[-1]]]}))
+write("relay_snapshots", "none", cbor({"generation": generation, "records": []}))
 print("seeded", sum(1 for _ in CORPUS.rglob("*") if _.is_file()), "inputs")

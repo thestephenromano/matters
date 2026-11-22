@@ -14,6 +14,8 @@ matters-sync-client = { path = "../matters-sync-client" }
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "sync"] }
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
+# Wipes the recovery words from memory (#45).
+zeroize = "1"
 
 [dev-dependencies]
 matters-core = { path = "../matters-core", features = ["test-support"] }

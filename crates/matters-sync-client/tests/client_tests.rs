@@ -392,7 +392,7 @@ async fn a_lost_collection_is_recovered_from_its_words_through_the_relay() {
     let recovering = Arc::new(matters_core::storage::Recovering {
         db: r.clone(),
         keys: MemoryKeyStore::default(),
-        words: words.to_string(),
+        words: words.to_string().into(),
         route: route(),
     });
     // Wrong words sign in as no one the relay knows.
@@ -401,7 +401,8 @@ async fn a_lost_collection_is_recovered_from_its_words_through_the_relay() {
         keys: MemoryKeyStore::default(),
         words: matters_sync::authority::RecoverySecret::new([9; 32])
             .words()
-            .unwrap(),
+            .unwrap()
+            .into(),
         route: route(),
     });
     assert!(

@@ -257,9 +257,12 @@ async fn run_schedule(seed: u64, steps: usize) {
                 Ok(_) => {}
                 // Before the admin's device first comes online, the relay
                 // has not seen this device's admission: it is refused a
-                // session, and tries again later.
+                // session, and tries again later. This device's own
+                // authority admits it, so it reads as the relay being
+                // behind unless the relay takes the admission from it.
                 Err(matters_sync_client::SyncError::Attention(
-                    matters_sync_client::Attention::NotAMember,
+                    matters_sync_client::Attention::NotAMember
+                    | matters_sync_client::Attention::RelayBehind,
                 )) => {}
                 Err(e) => panic!("{context}: sync: {e}"),
             },

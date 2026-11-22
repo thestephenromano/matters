@@ -3,7 +3,7 @@ name = "matters-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "cargo-fuzz targets for the sync parsers (#36); run by ci/fuzz.sh"
+description = "cargo-fuzz targets for the sync parsers (#36) and the client's parsers of relay responses (#45); run by ci/fuzz.sh"
 
 [package.metadata]
 cargo-fuzz = true
@@ -11,6 +11,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "=0.4.13"
 matters-sync = { path = "../crates/matters-sync", features = ["fuzzing"] }
+matters-sync-client = { path = "../crates/matters-sync-client", features = ["fuzzing"] }
 
 # Its own workspace: built only on the pinned nightly, by ci/fuzz.sh.
 [workspace]
@@ -47,6 +48,20 @@ bench = false
 [[bin]]
 name = "checkpoint"
 path = "fuzz_targets/checkpoint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relay_page"
+path = "fuzz_targets/relay_page.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relay_snapshots"
+path = "fuzz_targets/relay_snapshots.rs"
 test = false
 doc = false
 bench = false

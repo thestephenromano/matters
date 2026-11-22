@@ -2,7 +2,8 @@
 # Fuzz the sync parsers (#36) with cargo-fuzz (libFuzzer). Usage:
 #   ci/fuzz.sh [--all] [seconds-per-target]
 #
-# By default this runs only when matters-sync or fuzz/ changed relative to
+# By default this runs only when matters-sync, the sync client's sources
+# (whose relay response parsers are fuzzed, #45) or fuzz/ changed relative to
 # origin/main, for 60 seconds per target, starting from the committed
 # corpus (fuzz/corpus, seeded from the golden vectors). A failing input
 # refuses the change: libFuzzer leaves it in fuzz/artifacts/<target>/, and
@@ -25,8 +26,8 @@ toolchain="$(pinned_version fuzz-nightly)"
 if [ "$all" -eq 0 ]; then
     merge_base="$(git merge-base "$base" HEAD)" \
         || cannot_run "no merge base with $base (fetch it, or set MATTERS_FUZZ_BASE)"
-    if git diff --quiet "$merge_base" -- crates/matters-sync fuzz; then
-        echo "No changes to matters-sync or fuzz/ since $base: nothing to fuzz."
+    if git diff --quiet "$merge_base" -- crates/matters-sync crates/matters-sync-client/src fuzz; then
+        echo "No changes to matters-sync, the sync client or fuzz/ since $base: nothing to fuzz."
         exit 0
     fi
 fi

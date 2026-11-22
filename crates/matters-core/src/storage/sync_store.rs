@@ -7,6 +7,7 @@ use matters_sync::store::{
 };
 use matters_sync::wire::SIGNATURE_BYTES;
 use rusqlite::{params, OptionalExtension};
+use zeroize::Zeroizing;
 
 use super::db::Database;
 use super::membership::SyncStanding;
@@ -109,6 +110,14 @@ impl LocalStore for Database {
 
     fn acknowledge_control(&self, seq: i64) -> StoreResult<()> {
         Ok(Database::acknowledge_control(self, seq)?)
+    }
+
+    fn known_controls(&self) -> StoreResult<Vec<Vec<u8>>> {
+        Ok(self.sync_controls()?)
+    }
+
+    fn is_current_member(&self) -> StoreResult<bool> {
+        Ok(self.sync_membership()?.standing == SyncStanding::Active)
     }
 
     /// Sealed records, then checkpoint parts.
@@ -225,11 +234,11 @@ fn not_enrolling() -> MattersError {
 
 /// A database recovering a collection from its recovery words, as a sync
 /// client's recovering store (#42). The words are held only as long as this
-/// value lives.
+/// value lives, and wiped from memory when it is dropped.
 pub struct Recovering<K> {
     pub db: std::sync::Arc<Database>,
     pub keys: K,
-    pub words: String,
+    pub words: Zeroizing<String>,
     pub route: Route,
 }
 

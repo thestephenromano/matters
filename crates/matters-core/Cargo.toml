@@ -24,6 +24,8 @@ loro = "=1.18.0"
 serde_json = "1"
 # Sealing recorded writes into authenticated records (#36).
 matters-sync = { path = "../matters-sync" }
+# Wipes recovery words held while recovering (#45).
+zeroize = "1"
 
 [features]
 # Raw read-write SQL for tests that stage states the typed operations
