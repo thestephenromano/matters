@@ -111,6 +111,14 @@ impl LocalStore for Database {
         Ok(Database::acknowledge_control(self, seq)?)
     }
 
+    fn known_controls(&self) -> StoreResult<Vec<Vec<u8>>> {
+        Ok(self.sync_controls()?)
+    }
+
+    fn is_current_member(&self) -> StoreResult<bool> {
+        Ok(self.sync_membership()?.standing == SyncStanding::Active)
+    }
+
     /// Sealed records, then checkpoint parts.
     fn outgoing_records(&self) -> StoreResult<Vec<([u8; 32], Vec<u8>)>> {
         let mut out: Vec<([u8; 32], Vec<u8>)> = Database::outgoing_records(self)?

@@ -28,7 +28,8 @@ pub enum ControlOutcome {
     /// Applied, replayed or ignored (another device's envelope).
     Done,
     /// A transition that keeps this device a member, and its envelope of
-    /// the new epoch's key was not supplied: retry it with one.
+    /// the new epoch's key was not supplied, or the one supplied does not
+    /// open (a forgery the relay served): retry it with another.
     NeedsEnvelope,
     /// This device is no longer a current member, or its authority froze:
     /// it keeps working locally and stops uploading.
@@ -46,6 +47,24 @@ pub trait LocalStore: Send + Sync {
     /// Controls this device signed for others, oldest first: `(seq, bytes)`.
     fn outgoing_controls(&self) -> StoreResult<Vec<(i64, Vec<u8>)>>;
     fn acknowledge_control(&self, seq: i64) -> StoreResult<()>;
+    /// The relay refused this outgoing control for good: malformed, too
+    /// large, or made stale by a transition this device has not received
+    /// yet. Take it out of the queue, so the round goes on to pull; a
+    /// generation change queues it again. By default it is acknowledged.
+    fn set_aside_control(&self, seq: i64) -> StoreResult<()> {
+        self.acknowledge_control(seq)
+    }
+    /// Every control this device's authority accepted, in order, whoever
+    /// signed it: what it re-publishes to a relay that lost them (a restore
+    /// from a backup older than its own membership).
+    fn known_controls(&self) -> StoreResult<Vec<Vec<u8>>> {
+        Ok(Vec::new())
+    }
+    /// Whether this device's own authority holds it a current member, as
+    /// far as it has received.
+    fn is_current_member(&self) -> StoreResult<bool> {
+        Ok(true)
+    }
     /// Sealed records not yet acknowledged, oldest first.
     fn outgoing_records(&self) -> StoreResult<Vec<([u8; 32], Vec<u8>)>>;
     fn acknowledge_record(&self, record_id: &[u8; 32]) -> StoreResult<()>;
