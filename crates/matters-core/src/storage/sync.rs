@@ -101,6 +101,11 @@ impl Database {
                 ));
             }
             let tx = conn.transaction()?;
+            // Another open of this database took over the writer: refuse
+            // before anything is written, so the caller can reload (#45).
+            if let Some(sealing) = keys.sealing.as_ref() {
+                super::sealing::fence(&tx, sealing)?;
+            }
             let value = apply(&tx)?;
             let Some(doc) = engine.as_mut() else {
                 tx.commit()?;

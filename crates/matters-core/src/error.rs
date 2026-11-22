@@ -39,6 +39,12 @@ pub enum MattersError {
     #[error("The new epoch's key envelope is missing")]
     EnvelopeMissing,
 
+    /// Another open of this database (another window, front end or the
+    /// command line) has since become this device's writer: this handle
+    /// can no longer seal, and nothing was written. Reload (#45).
+    #[error("This database was opened again elsewhere; reload it to keep editing")]
+    Superseded,
+
     /// A sync control record, envelope or key was refused (#37). Carries
     /// no key material.
     #[error("Sync authority error: {0}")]

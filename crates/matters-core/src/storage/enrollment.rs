@@ -9,14 +9,15 @@
 //! exact bytes.
 
 use matters_sync::authority::{
-    self, Body, Hash, Invitation, InvitationSecret, Member, Membership, Message,
+    self, Authority, Body, Closing, Hash, Id, Invitation, InvitationSecret, Member, Membership,
+    Message, SignedRecord, MAX_FRONTIER,
 };
 use matters_sync::ContentKey;
-use rusqlite::params;
+use rusqlite::{params, Connection, OptionalExtension};
 
 use super::db::Database;
-use super::membership::{Joined, SyncStanding};
-use super::sealing::random32;
+use super::membership::{Joined, SyncStanding, HOME_DOCUMENT};
+use super::sealing::{random, random32};
 use crate::error::{MattersError, Result};
 
 /// A control or envelope this device signed for others, to publish.
@@ -46,9 +47,8 @@ impl Database {
         self.with_sealing(|_, _, sync| {
             let joined = sync.membership.as_ref().ok_or_else(not_resumed)?;
             joined.require_admin()?;
-            let mut secret = [0; 16];
-            secret.copy_from_slice(&random32()[..16]);
-            Ok(joined.authority.invite(InvitationSecret::new(secret))?)
+            // 128 bits, all of them from the OS.
+            Ok(joined.authority.invite(InvitationSecret::new(random()))?)
         })
     }
 
@@ -140,6 +140,14 @@ impl Database {
             roster.sort_by_key(|m| m.id);
             let a = &joined.authority;
             let device = &joined.device;
+            let leaving: Vec<Hash> = a
+                .members()?
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| !roster.iter().any(|m| m.id == *id))
+                .collect();
+            let keep: Vec<Hash> = roster.iter().map(|m| m.id).collect();
+            let frontier = closing_frontier(conn, a, &keep, &leaving, &[])?;
             let key = ContentKey::new(random32());
             let generation = a.generation()?;
             let epoch = a.epoch()?.checked_add(1).ok_or_else(exhausted)?;
@@ -154,7 +162,7 @@ impl Database {
                     admin: device.id(),
                     epoch,
                     recovery_key: a.recovery()?,
-                    frontier: vec![],
+                    frontier,
                     key_commitment: authority::key_commitment(
                         &joined.route,
                         generation,
@@ -232,6 +240,106 @@ fn own_envelopes(conn: &rusqlite::Connection) -> Result<Vec<(Hash, Vec<u8>)>> {
     Ok(out)
 }
 
+/// The closing frontier a transition to the roster `keep` signs (#45,
+/// docs/SYNC_KEY_DISTRIBUTION.md "Revocation"): each writer of a device
+/// outside `keep` that no signed prefix closes yet, closed at the exact
+/// head of the chain this device holds. A writer of a device in `leaving`
+/// (removed by this transition) is always closed, at null if nothing of it
+/// is held. Any other, a writer a recovery left open, is closed only once
+/// something of it is held, so that nothing is closed before this device
+/// has read it. Writers past the frontier budget wait for the next
+/// transition.
+pub(super) fn closing_frontier(
+    conn: &Connection,
+    authority: &Authority,
+    keep: &[Hash],
+    leaving: &[Hash],
+    records: &[Vec<u8>],
+) -> Result<Vec<Closing>> {
+    let held = held_records(conn, authority, records)?;
+    let mut frontier = Vec::new();
+    for (device, incarnation) in authority.unclosed_writers(HOME_DOCUMENT, keep) {
+        let head = held_head(conn, &held, &incarnation)?;
+        if head.is_some() || leaving.contains(&device) {
+            frontier.push(Closing {
+                device,
+                document: HOME_DOCUMENT,
+                incarnation,
+                head,
+            });
+        }
+    }
+    // Leaving devices first, so a budget overflow defers only older ones.
+    frontier.sort_by_key(|c| !leaving.contains(&c.device));
+    if frontier
+        .iter()
+        .filter(|c| leaving.contains(&c.device))
+        .count()
+        > MAX_FRONTIER
+    {
+        return Err(MattersError::Validation(
+            "too many writers to close in one transition".into(),
+        ));
+    }
+    frontier.truncate(MAX_FRONTIER);
+    frontier.sort();
+    Ok(frontier)
+}
+
+/// The signed content records this device holds but has not applied: the
+/// ones it keeps waiting, and `records` supplied by the caller (a
+/// recovering device's), each verified as signed by its author.
+fn held_records(
+    conn: &Connection,
+    authority: &Authority,
+    records: &[Vec<u8>],
+) -> Result<Vec<SignedRecord>> {
+    let mut stmt = conn.prepare("SELECT bytes FROM sync_pending")?;
+    let pending = stmt
+        .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut held: Vec<SignedRecord> = pending
+        .iter()
+        .chain(records)
+        .filter_map(|bytes| authority.verify_signed_record(bytes, &HOME_DOCUMENT).ok())
+        .collect();
+    held.sort_by_key(|r| r.hash);
+    held.dedup_by_key(|r| r.hash);
+    Ok(held)
+}
+
+/// The head of `incarnation`'s chain this device holds: what it applied
+/// (or the checkpoint it started from covered), followed through the held
+/// records while each step has exactly one signed successor.
+fn held_head(conn: &Connection, held: &[SignedRecord], incarnation: &Id) -> Result<Option<Hash>> {
+    let mut stored: Option<Vec<u8>> = None;
+    for sql in [
+        "SELECT head FROM sync_receive_heads WHERE incarnation = ?1",
+        "SELECT base_head FROM sync_receive_base WHERE incarnation = ?1",
+        "SELECT head FROM sync_writers WHERE incarnation = ?1 AND head IS NOT NULL",
+    ] {
+        stored = conn
+            .query_row(sql, params![incarnation.as_slice()], |r| r.get(0))
+            .optional()?;
+        if stored.is_some() {
+            break;
+        }
+    }
+    let mut head: Option<Hash> = stored
+        .map(|h| h.try_into())
+        .transpose()
+        .map_err(|_| MattersError::Validation("stored chain head".into()))?;
+    loop {
+        let mut next = held
+            .iter()
+            .filter(|r| &r.incarnation == incarnation && r.previous == head);
+        match (next.next(), next.next()) {
+            (Some(only), None) => head = Some(only.hash),
+            _ => return Ok(head),
+        }
+    }
+}
+
 fn not_resumed() -> MattersError {
     MattersError::Validation("sync is not resumed".into())
 }
@@ -248,9 +356,8 @@ pub use joining::Recovered;
 
 mod joining {
     use super::*;
-    use crate::storage::membership::{DeviceSeeds, KeyStore, HOME_DOCUMENT};
-    use matters_sync::authority::{Authority, Route};
-    use rusqlite::OptionalExtension;
+    use crate::storage::membership::{DeviceSeeds, KeyStore};
+    use matters_sync::authority::Route;
 
     /// What a recovery restored, and what it could not.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,13 +372,56 @@ mod joining {
     /// A stored enrollment's application, tenant, collection and device.
     type EnrollingRow = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 
-    /// A stored enrollment: application, tenant, collection, root, request.
-    type Pending = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
+    /// A stored enrollment: application, tenant, collection, root, request,
+    /// key name.
+    type Pending = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, String);
+
+    /// Whether two enrollment requests answer the same invitation: the
+    /// same manifest and binding (the binding is an HMAC under the
+    /// invitation's secret over the device's keys, so it is the same for a
+    /// re-signed request and differs for another invitation).
+    fn same_invitation(a: &[u8], b: &[u8]) -> Result<bool> {
+        let facts = |bytes: &[u8]| -> Result<(Hash, Hash)> {
+            match authority::parse(bytes)?.message.body {
+                Body::EnrollmentRequest(r) => Ok((r.manifest, r.binding)),
+                _ => Err(MattersError::Validation("stored enrollment".into())),
+            }
+        };
+        Ok(facts(a)? == facts(b)?)
+    }
+
+    /// Replay a received control log, genesis first, keeping what it
+    /// accepts; see [`replay_into`](super::super::membership::replay_into).
+    /// Returns the authority, the controls to store (genesis included) and
+    /// the manifest of each epoch in order.
+    fn replay_received(
+        mut authority: Authority,
+        controls: &[Vec<u8>],
+    ) -> (Authority, Vec<Vec<u8>>, Vec<Hash>) {
+        let mut epochs = vec![authority.manifest()];
+        let mut kept = controls[..1].to_vec();
+        for control in &controls[1..] {
+            let before = authority.manifest();
+            if !super::super::membership::replay_into(&mut authority, [control]).is_empty() {
+                kept.push(control.clone());
+            }
+            // Writer claims change no epoch; transitions do.
+            if authority.manifest() != before {
+                epochs.push(authority.manifest());
+            }
+        }
+        (authority, kept, epochs)
+    }
 
     impl Database {
         /// A new device's first step: generate its keys and sign a request
         /// to join under `invitation`, for the admin. Kept until the
-        /// admin's transition arrives; asking again returns the same bytes.
+        /// admin's transition arrives; asking again under the same
+        /// invitation returns the same bytes. A new invitation into the
+        /// same collection (another secret or manifest, say after the
+        /// first one was missed) replaces the request, under the same
+        /// device keys (#45). One into another collection is refused until
+        /// [`Self::cancel_enrollment`].
         /// The database must not sync yet and hold no rows: a device with
         /// its own data sets it aside first (`set_aside_local_data`) and
         /// imports it once joined (`import_missing_from`, #41).
@@ -286,12 +436,22 @@ mod joining {
                 }
                 let pending: Option<Pending> = conn
                     .query_row(
-                        "SELECT application, tenant, collection, root, request FROM sync_enrolling",
+                        "SELECT application, tenant, collection, root, request, key_name
+                         FROM sync_enrolling",
                         [],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                        |r| {
+                            Ok((
+                                r.get(0)?,
+                                r.get(1)?,
+                                r.get(2)?,
+                                r.get(3)?,
+                                r.get(4)?,
+                                r.get(5)?,
+                            ))
+                        },
                     )
                     .optional()?;
-                if let Some((application, tenant, collection, root, request)) = pending {
+                if let Some((application, tenant, collection, root, request, key_name)) = pending {
                     let route = &invitation.route;
                     if application != route.application
                         || tenant != route.tenant
@@ -302,7 +462,22 @@ mod joining {
                             "this device is already joining another collection".into(),
                         ));
                     }
-                    return Ok(request);
+                    let device = store
+                        .load(&key_name)?
+                        .ok_or_else(|| {
+                            MattersError::Validation(
+                                "this device's sync keys are missing from the keyring; \
+                                 cancel and enroll again"
+                                    .into(),
+                            )
+                        })?
+                        .keys()?;
+                    let fresh = authority::request_enrollment(invitation, &device, random32())?;
+                    if same_invitation(&request, &fresh)? {
+                        return Ok(request);
+                    }
+                    conn.execute("UPDATE sync_enrolling SET request = ?1", params![fresh])?;
+                    return Ok(fresh);
                 }
                 let seeds = DeviceSeeds::generate();
                 let device = seeds.keys()?;
@@ -345,36 +520,70 @@ mod joining {
             controls: &[Vec<u8>],
             recovery_envelopes: &[Vec<u8>],
         ) -> Result<Recovered> {
+            self.recover_collection_holding(store, words, route, controls, recovery_envelopes, &[])
+        }
+
+        /// As [`Self::recover_collection`], also given the content
+        /// `records` the relay holds. The root recovery then closes every
+        /// writer of the superseded generation at the exact head of the
+        /// chain those records hold (null where they hold nothing of it),
+        /// so a lost device's later records are never admitted (#45). With
+        /// no records, the recovery closes nothing yet: the old writers'
+        /// records wait until this device, as admin, signs its next
+        /// transition (`rotate_epoch`, or an admission) once it has read
+        /// them, which closes each at what it then holds.
+        ///
+        /// Controls and envelopes that fail verification are skipped, not
+        /// fatal: one forged object cannot block a recovery.
+        pub fn recover_collection_holding(
+            &self,
+            store: &dyn KeyStore,
+            words: &str,
+            route: Route,
+            controls: &[Vec<u8>],
+            recovery_envelopes: &[Vec<u8>],
+            records: &[Vec<u8>],
+        ) -> Result<Recovered> {
             self.with_sealing(|conn, engine, sync| {
                 if engine.is_some() {
                     return Err(MattersError::Validation("sync is already on".into()));
                 }
                 let keys = authority::RecoverySecret::from_words(words)?.keys(&route)?;
-                let (genesis, rest) = controls
-                    .split_first()
+                let genesis = controls
+                    .first()
                     .ok_or_else(|| MattersError::Validation("no genesis".into()))?;
-                let mut authority = Authority::bootstrap(genesis, route.clone(), keys.root_key())?;
-                let mut epochs = vec![authority.manifest()];
-                for control in rest {
-                    let before = authority.manifest();
-                    match super::super::membership::apply(&mut authority, control) {
-                        Ok(_) | Err(authority::Error::Fork) => {}
-                        Err(error) => return Err(error.into()),
-                    }
-                    // Writer claims change no epoch; transitions do.
-                    if authority.manifest() != before {
-                        epochs.push(authority.manifest());
-                    }
-                }
-                let mut recovered = Vec::new();
+                let (mut authority, kept, epochs) = replay_received(
+                    Authority::bootstrap(genesis, route.clone(), keys.root_key())?,
+                    controls,
+                );
+                // Every candidate is tried; one that does not open (forged,
+                // misaddressed or of an unknown epoch) is skipped.
+                let mut recovered: Vec<(Hash, ContentKey)> = Vec::new();
                 for envelope in recovery_envelopes {
-                    let key = authority.unwrap_recovery_key(envelope, &keys)?;
-                    recovered.push((key.manifest(), key.into_content_key()));
+                    let Ok(key) = authority.unwrap_recovery_key(envelope, &keys) else {
+                        continue;
+                    };
+                    if !recovered.iter().any(|(m, _)| *m == key.manifest()) {
+                        recovered.push((key.manifest(), key.into_content_key()));
+                    }
                 }
+                // The superseded generation's writers, closed at what this
+                // device holds of them.
+                let everyone: Vec<Hash> = if records.is_empty() {
+                    Vec::new()
+                } else {
+                    authority
+                        .unclosed_writers(HOME_DOCUMENT, &[])
+                        .into_iter()
+                        .map(|(device, _)| device)
+                        .collect()
+                };
+                let frontier = closing_frontier(conn, &authority, &[], &everyone, records)?;
                 let seeds = DeviceSeeds::generate();
                 let device = seeds.keys()?;
                 let first = ContentKey::new(random32());
-                let recovery = authority.recover(&keys, &device, &first, random32())?;
+                let recovery =
+                    authority.recover_closing(&keys, &device, &first, frontier, random32())?;
                 authority.apply_recovery(&recovery)?;
                 let manifest = authority.manifest();
                 let own = authority.wrap_key(&device, device.id(), &first, random32())?;
@@ -409,7 +618,7 @@ mod joining {
                         key_name
                     ],
                 )?;
-                for control in controls.iter().chain([&recovery]) {
+                for control in kept.iter().chain([&recovery]) {
                     tx.execute(
                         "INSERT OR IGNORE INTO sync_controls (bytes) VALUES (?1)",
                         params![control],
@@ -446,6 +655,18 @@ mod joining {
                     standing,
                     unrecoverable,
                 })
+            })
+        }
+
+        /// Give up the enrollment this device started and has not finished,
+        /// so it can join another collection. Its keyring entry is left
+        /// unused. Returns whether there was one.
+        pub fn cancel_enrollment(&self) -> Result<bool> {
+            self.with_sealing(|conn, engine, _| {
+                if engine.is_some() {
+                    return Err(MattersError::Validation("sync is already on".into()));
+                }
+                Ok(conn.execute("DELETE FROM sync_enrolling", [])? > 0)
             })
         }
 
@@ -549,16 +770,15 @@ mod joining {
                     )
                 })?;
                 let device = seeds.keys()?;
-                let (genesis, rest) = controls
-                    .split_first()
+                let genesis = controls
+                    .first()
                     .ok_or_else(|| MattersError::Validation("no genesis".into()))?;
-                let mut authority = Authority::bootstrap_by_root_id(genesis, route.clone(), root)?;
-                for control in rest {
-                    match super::super::membership::apply(&mut authority, control) {
-                        Ok(_) | Err(authority::Error::Fork) => {}
-                        Err(error) => return Err(error.into()),
-                    }
-                }
+                // A control that fails verification is skipped, not fatal:
+                // one forged claim cannot keep a device from joining.
+                let (authority, kept, _) = replay_received(
+                    Authority::bootstrap_by_root_id(genesis, route.clone(), root)?,
+                    controls,
+                );
                 if !authority
                     .members()?
                     .iter()
@@ -568,10 +788,16 @@ mod joining {
                         "the admin has not added this device yet".into(),
                     ));
                 }
-                let mut opened = Vec::new();
+                // Every candidate is tried; one that does not open for this
+                // device (forged, or another's) is skipped.
+                let mut opened: Vec<(Hash, &Vec<u8>)> = Vec::new();
                 for envelope in envelopes {
-                    let key = authority.unwrap_history_key(envelope, &device)?;
-                    opened.push((key.manifest(), envelope));
+                    let Ok(key) = authority.unwrap_history_key(envelope, &device) else {
+                        continue;
+                    };
+                    if !opened.iter().any(|(m, _)| *m == key.manifest()) {
+                        opened.push((key.manifest(), envelope));
+                    }
                 }
                 if !opened.iter().any(|(m, _)| *m == authority.manifest()) {
                     return Err(MattersError::Validation(
@@ -594,9 +820,9 @@ mod joining {
                         key_name
                     ],
                 )?;
-                for control in controls {
+                for control in &kept {
                     tx.execute(
-                        "INSERT INTO sync_controls (bytes) VALUES (?1)",
+                        "INSERT OR IGNORE INTO sync_controls (bytes) VALUES (?1)",
                         params![control],
                     )?;
                 }

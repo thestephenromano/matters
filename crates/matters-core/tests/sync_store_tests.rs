@@ -366,10 +366,17 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
         recovering.acknowledge(*seq).unwrap();
     }
     assert!(recovering.outgoing().unwrap().is_empty());
+    // The store recovers from the authority log alone, so the recovery
+    // closes none of the lost device's writers: their records are not
+    // admitted until a signed frontier names them (#45). Recovering with
+    // the relay's records (`recover_collection_holding`) reads them back.
     for record in a.outgoing_records().unwrap() {
-        r.receive_record(&record.bytes).unwrap();
+        assert!(matches!(
+            r.receive_record(&record.bytes),
+            Err(matters_core::MattersError::Validation(m)) if m.contains("removed")
+        ));
     }
-    assert_eq!(r.get_task(&id(1)).unwrap().unwrap().title, "kept");
+    assert!(r.get_task(&id(1)).unwrap().is_none());
     // Other words are another root.
     let wrong = Recovering {
         db: r.clone(),

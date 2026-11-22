@@ -242,34 +242,75 @@ fn controls(conn: &Connection) -> Result<Vec<Vec<u8>>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// The fork evidence a control could add: the authority's, or for a
+/// writer claim its lineage's.
+fn evidence(authority: &Authority, body: &Body) -> Option<(Vec<u8>, Vec<u8>)> {
+    let pair = |(a, b): (&[u8], &[u8])| (a.to_vec(), b.to_vec());
+    match body.writer_claim() {
+        Some(claim) => authority
+            .writer_fork(claim.document, claim.device)
+            .map(pair),
+        None => authority.fork_evidence().map(pair),
+    }
+}
+
 /// Apply one stored or received control to `authority`. `Ok(true)`
-/// changed it, `Ok(false)` was a replay; `Err(Fork)` froze it.
+/// changed it, `Ok(false)` was a replay or changed nothing; `Err(Fork)`
+/// froze it with new evidence, which the caller keeps. A control refused
+/// as `Fork` by an authority or lineage already frozen adds no evidence,
+/// so it is `Ok(false)` and nothing keeps it (#45): a root that signs
+/// competing recoveries again and again stores nothing more.
 pub(super) fn apply(authority: &mut Authority, bytes: &[u8]) -> authority::Result<bool> {
     let parsed = authority::parse(bytes)?;
-    match parsed.message.body {
+    let before = evidence(authority, &parsed.message.body);
+    let outcome = match parsed.message.body {
         Body::Membership(_) => authority.apply_membership(bytes),
         Body::RootRecovery(_) => authority.apply_recovery(bytes),
         Body::WriterStart(_) | Body::WriterHandoff(_) => {
             authority.admit_writer(bytes, HOME_DOCUMENT)
         }
         _ => Err(authority::Error::Unsupported),
+    };
+    match outcome {
+        Err(authority::Error::Fork)
+            if before.is_some() && evidence(authority, &parsed.message.body) == before =>
+        {
+            Ok(false)
+        }
+        other => other,
     }
 }
 
+/// Replay `controls` (genesis excluded) into `authority`, in order, and
+/// return those to keep: each that changed it or froze it with new
+/// evidence. One that fails verification or is refused is skipped, never
+/// fatal: a single forged or stale object must not block a fresh replay
+/// (#45), and the rest are judged without it.
+pub(super) fn replay_into<'a>(
+    authority: &mut Authority,
+    controls: impl IntoIterator<Item = &'a Vec<u8>>,
+) -> Vec<&'a Vec<u8>> {
+    let mut kept = Vec::new();
+    for bytes in controls {
+        match apply(authority, bytes) {
+            Ok(true) | Err(authority::Error::Fork) => kept.push(bytes),
+            Ok(false) | Err(_) => {}
+        }
+    }
+    kept
+}
+
 /// Rebuild the authority from the stored controls, in order. A stored
-/// fork's second record freezes it again.
+/// fork's second record freezes it again. A stored control that this
+/// version refuses (an earlier version accepted it, for example a removed
+/// device's later claim) is skipped rather than making the open fail.
 fn replay(conn: &Connection, route: &Route, root: authority::Hash) -> Result<Authority> {
     let controls = controls(conn)?;
     let (genesis, rest) = controls
         .split_first()
         .ok_or_else(|| MattersError::Validation("no stored genesis".into()))?;
     let mut authority = Authority::bootstrap_by_root_id(genesis, route.clone(), root)?;
-    for bytes in rest {
-        match apply(&mut authority, bytes) {
-            Ok(_) | Err(authority::Error::Fork) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
+    replay_into(&mut authority, rest);
     Ok(authority)
 }
 
