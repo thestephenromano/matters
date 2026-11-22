@@ -129,7 +129,7 @@ On the device, Matters refuses a database written by a newer Matters (`MattersEr
 matters-relay quota <route-hex> bytes <n>     # or records <n>, or none
 ```
 
-At its quota, a route refuses new records with `quota-exhausted`. Nothing stored is deleted, and clients keep the refused work locally.
+The byte quota counts records and authority objects. At its quota, a route refuses new records, writer claims and key envelopes with `quota-exhausted`. Membership transitions are still stored, so the admin can remove a device from a full route. Nothing stored is deleted, and clients keep the refused work locally.
 
 ## Ownership and retention
 

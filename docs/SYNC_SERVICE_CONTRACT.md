@@ -48,7 +48,7 @@ POST /v0/session             {"route": route, "device": device48, "challenge": b
 
 The signature covers `CBOR(["matters-sync/v0/relay-session", application, tenant, collection, device48, challenge])` with the device's signing key. The relay accepts it only if the device is in the roster of the route's latest accepted membership, verified from the stored genesis and transitions with the rules of the key-distribution contract. A challenge is single-use and expires after 60 seconds. A token lasts at most 15 minutes, is scoped to one route and one device, is sent as `Authorization: Bearer`, and is stored only as a hash. On `401 session-expired` the client starts a new session; its local work is untouched.
 
-**The root's session (#42).** A device recovering a collection after every device was lost is no member. It signs the same challenge as the collection's root, with the root key its recovery words derive, using the root's ID as `device`. The relay verifies it with the root key the route was provisioned with. That session may read the authority log, and publish only a `root_recovery` and `key_envelope`s. Every other request gets `403 not-a-member`. Once the relay accepts the recovery, the recovering device is the new generation's admin and signs in as itself.
+**The root's session (#42).** A device recovering a collection after every device was lost is no member. It signs the same challenge as the collection's root, with the root key its recovery words derive, using the root's ID as `device`. The relay verifies it with the root key the route was provisioned with. That session may read the authority log, and publish a `root_recovery` and `key_envelope`s (and, as any session may, membership transitions). Every other request gets `403 not-a-member`. Once the relay accepts the recovery, the recovering device is the new generation's admin and signs in as itself.
 
 A removed device's sessions end when the relay accepts the transition that removes it. The relay enforces upload rights (current roster, signer equals the session's device) independently of the end-to-end checks every client performs; it does not replace them.
 
@@ -118,7 +118,18 @@ PUT /v0/routes/{route}/authority/{sha384-hex}      <exact signed bytes, at most 
 GET /v0/routes/{route}/authority?after={cursor}&limit={1..256}
 ```
 
-Authority objects (membership transitions, writer starts and handoffs, key envelopes) are immutable and addressed by the SHA-384 of their bytes; the path digest must match. Storage rules match records: idempotent for identical bytes, and the address makes a conflict impossible. The relay verifies membership transitions before using them for authorization; it stores the other kinds after a structural check, for clients to verify. They are fetched with their own cursor and pagination, as above.
+Authority objects (membership transitions, root recoveries, writer starts and handoffs, key envelopes) are immutable and addressed by the SHA-384 of their bytes; the path digest must match. Storage rules match records: idempotent for identical bytes, and the address makes a conflict impossible. They are fetched with their own cursor and pagination, as above.
+
+Clients verify every object they read. The relay also checks each one before storing it, in the same transaction and under the route's lock, against the authority it has stored at that moment:
+
+| Kind | Who may upload it | What the relay checks |
+| --- | --- | --- |
+| `membership`, `root_recovery` | Any session | Accepted by the route's authority (key-distribution rules). A second valid successor of one manifest is kept once as fork evidence; membership is then frozen and further transitions get `400 malformed`. At most two recoveries per generation are kept (the accepted one and one as evidence); a third gets `507 quota-exhausted`. |
+| `writer_start`, `writer_handoff` | A member's session | Signer and claimed device are the session's device, a current member; the signature verifies with its roster key. Otherwise `422 context-mismatch`, `403 not-a-member` or `400 malformed`. |
+| `key_envelope` | A member's or the root's session | It names a known manifest and its epoch, and is signed (and names as `authority`) that manifest's admin or the current admin, verified with that admin's roster key. Otherwise `400 malformed`. |
+| `genesis`, `enrollment_request` | Nobody | Genesis is stored only by provisioning (its stored bytes again get `200`); enrollment requests go to the mailbox. `400 malformed`. |
+
+Authority bytes count toward the route's byte quota, as records do. A route keeps at most 4,096 writer claims and key envelopes together. Past either limit those kinds get `507 quota-exhausted`, refused before anything is stored. Membership transitions and recoveries are exempt from both refusals, so a full route can still remove a device; the authority's own transition limit bounds them.
 
 ### Commit hints
 
@@ -155,7 +166,7 @@ Every error body is `{"code": text, "retry": bool, ? "retry-after-ms": uint}`.
 | 422 | `context-mismatch`, `unsupported-suite` | no | Keep local intent, report |
 | 429 | `rate-limited` | yes, after `retry-after-ms` | Back off |
 | 503 | `unavailable` | yes | Back off with jitter |
-| 507 | `quota-exhausted` | no, until the operator raises it | Keep everything queued; show a recoverable condition |
+| 507 | `quota-exhausted` | no, until the operator raises it | Keep everything queued; show a recoverable condition. Also a route's authority-object or recovery limit (*Authority objects*) |
 
 No error deletes, rewrites or acknowledges a record. A quota is refused before anything is stored; a request is never partially stored.
 

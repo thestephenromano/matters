@@ -1,4 +1,5 @@
 use matters_sync::authority::{self, Authority, Body, Hash, Route};
+use matters_sync::control_signature::verify_signature;
 use matters_sync::record::record_hash;
 use matters_sync::{wire, VerificationKey};
 use minicbor::{Decoder, Encoder};
@@ -208,10 +209,44 @@ pub(crate) struct RouteRow {
     authority_head: Option<Vec<u8>>,
 }
 
-/// The route's authority, replayed from its stored log.
+/// The route's authority, replayed from its stored log, with what the
+/// relay needs to check the objects it stores without admitting them.
 pub(crate) struct Replayed {
     pub(crate) authority: Authority,
+    /// Every accepted manifest: its epoch, and its admin with the admin's
+    /// roster key. [`Authority`] keeps these to itself.
+    manifests: HashMap<Hash, Manifest>,
+    /// How many `root_recovery` objects are stored for each generation they
+    /// would start.
+    recoveries: HashMap<u64, usize>,
 }
+
+struct Manifest {
+    epoch: u64,
+    admin: Hash,
+    admin_key: VerificationKey,
+}
+
+impl Manifest {
+    fn of(epoch: u64, admin: Hash, roster: &[authority::Member]) -> Option<Self> {
+        let key = roster.iter().find(|m| m.id == admin)?.signing_key.clone();
+        Some(Self {
+            epoch,
+            admin,
+            admin_key: key,
+        })
+    }
+}
+
+/// The most writer claims and key envelopes a route stores: beyond what
+/// 16 transitions of a 16-member roster need (an envelope per member and
+/// epoch, history and recovery envelopes, writer claims), but a bound on
+/// a member that uploads without end. Bytes count toward the route's
+/// quota as well.
+pub const MAX_AUTHORITY_OBJECTS: i64 = 4096;
+/// The most `root_recovery` objects stored per generation they start: the
+/// accepted one, and one competing recovery kept as fork evidence.
+pub const MAX_RECOVERIES_PER_GENERATION: usize = 2;
 
 /// Routes whose replayed authority the relay keeps in memory.
 const CACHED_AUTHORITIES: usize = 4096;
@@ -359,7 +394,15 @@ impl Relay {
         .fetch_optional(&mut *tx)
         .await?;
         let id = id.ok_or(RelayError::RouteExists)?;
-        insert_authority(&mut tx, id, &record_hash(genesis), "genesis", genesis).await?;
+        insert_authority(
+            &mut tx,
+            id,
+            &record_hash(genesis),
+            "genesis",
+            genesis,
+            false,
+        )
+        .await?;
         tx.commit().await?;
         Ok(generation)
     }
@@ -550,14 +593,34 @@ impl Relay {
         }))
     }
 
-    /// Store an authority object under its SHA-384 `digest`. Membership
-    /// transitions and root recoveries must be accepted by the route's
-    /// authority first (a fork's competing record is kept as evidence);
-    /// other kinds are checked structurally. Identical bytes again return
-    /// the original receipt.
-    pub async fn put_authority(
+    /// Store an authority object under its SHA-384 `digest`, uploaded with
+    /// `session`'s device (`None`: no session). Identical bytes again return
+    /// the original receipt. Every check below runs in the transaction that
+    /// stores the object, under the route's lock, against the authority as
+    /// stored then.
+    ///
+    /// - `membership` and `root_recovery` must be accepted by the route's
+    ///   authority. A second valid successor of a manifest is kept as fork
+    ///   evidence, which freezes membership: further transitions are refused.
+    ///   At most [`MAX_RECOVERIES_PER_GENERATION`] recoveries are kept per
+    ///   generation. These need no session: their signatures say who may
+    ///   publish them.
+    /// - `writer_start` and `writer_handoff` must be signed by the session's
+    ///   device, a current member, with its roster key.
+    /// - `key_envelope` needs a member's or the root's session, and must be
+    ///   signed by the admin of the manifest it names, or the current admin,
+    ///   with that admin's roster key.
+    /// - `genesis` (provisioned by the operator) and `enrollment_request`
+    ///   (left in the mailbox) do not belong in the log.
+    ///
+    /// Bytes count toward the route's quota, and writer claims and
+    /// envelopes toward [`MAX_AUTHORITY_OBJECTS`]; transitions are exempt
+    /// from both refusals, so a full route can still remove a device, and are
+    /// bounded by the authority's own transition limit.
+    pub async fn put_authority_as(
         &self,
         route: &Route,
+        session: Option<&Hash>,
         digest: &Hash,
         bytes: &[u8],
     ) -> Result<Appended> {
@@ -587,28 +650,128 @@ impl Relay {
                 digest: *digest,
             }));
         }
-        match parsed.message.body {
-            Body::Membership(_) | Body::RootRecovery(_) => {
-                let mut authority = self.replayed(&mut tx, route, &row).await?.authority.clone();
-                let applied = match parsed.message.body {
-                    Body::Membership(_) => authority.apply_membership(bytes),
-                    _ => authority.apply_recovery(bytes),
-                };
-                match applied {
+        let replayed = self.replayed(&mut tx, route, &row).await?;
+        let transition = match &parsed.message.body {
+            Body::Membership(_) => {
+                // A frozen authority answers every transition with `Fork`
+                // before checking its signature: only the first competing
+                // successor, verified, is evidence.
+                if replayed.authority.is_forked() {
+                    return Err(RelayError::Authority(authority::Error::Fork));
+                }
+                let mut authority = replayed.authority.clone();
+                match authority.apply_membership(bytes) {
                     Ok(_) | Err(authority::Error::Fork) => {}
                     Err(error) => return Err(RelayError::Authority(error)),
                 }
+                true
             }
-            Body::Genesis(_) => return Err(RelayError::Authority(authority::Error::Unsupported)),
-            _ => {}
+            Body::RootRecovery(m) => {
+                let mut authority = replayed.authority.clone();
+                match authority.apply_recovery(bytes) {
+                    Ok(_) => {}
+                    Err(authority::Error::Fork) => {
+                        let stored = replayed.recoveries.get(&m.generation).copied();
+                        if stored.unwrap_or(0) >= MAX_RECOVERIES_PER_GENERATION {
+                            return Err(RelayError::QuotaExhausted);
+                        }
+                    }
+                    Err(error) => return Err(RelayError::Authority(error)),
+                }
+                true
+            }
+            Body::WriterStart(_) | Body::WriterHandoff(_) => {
+                let device = session.ok_or(RelayError::Unauthenticated)?;
+                if *device == replayed.authority.root() {
+                    return Err(RelayError::NotAMember);
+                }
+                let claim = parsed.message.body.writer_claim();
+                if parsed.message.signer != *device {
+                    return Err(RelayError::ContextMismatch);
+                }
+                if claim.map(|c| c.device) != Some(*device) {
+                    return Err(RelayError::Authority(authority::Error::Identity));
+                }
+                let member = replayed
+                    .authority
+                    .members()
+                    .ok()
+                    .and_then(|m| m.into_iter().find(|m| m.id == *device))
+                    .ok_or(RelayError::NotAMember)?;
+                verify_signature(&parsed, &member.signing_key).map_err(RelayError::Authority)?;
+                false
+            }
+            Body::KeyEnvelope(k) => {
+                let device = session.ok_or(RelayError::Unauthenticated)?;
+                if *device != replayed.authority.root() && !member(&replayed.authority, device) {
+                    return Err(RelayError::NotAMember);
+                }
+                let signer = parsed.message.signer;
+                let named = replayed
+                    .manifests
+                    .get(&k.manifest)
+                    .ok_or(RelayError::Authority(authority::Error::Stale))?;
+                if k.epoch != named.epoch {
+                    return Err(RelayError::Authority(authority::Error::Stale));
+                }
+                if k.authority != signer {
+                    return Err(RelayError::Authority(authority::Error::Unauthorized));
+                }
+                // The named epoch's admin (its own and recovery envelopes),
+                // or the current admin (history envelopes for a new member).
+                let key = if signer == named.admin {
+                    named.admin_key.clone()
+                } else if replayed.authority.admin().ok() == Some(signer) {
+                    replayed
+                        .authority
+                        .members()
+                        .ok()
+                        .and_then(|m| m.into_iter().find(|m| m.id == signer))
+                        .map(|m| m.signing_key)
+                        .ok_or(RelayError::Authority(authority::Error::Unauthorized))?
+                } else {
+                    return Err(RelayError::Authority(authority::Error::Unauthorized));
+                };
+                verify_signature(&parsed, &key).map_err(RelayError::Authority)?;
+                false
+            }
+            // Stored only by provisioning (its bytes again are answered
+            // above, as a client re-publishing its controls sends them), and
+            // never: requests go to the mailbox.
+            Body::Genesis(_) | Body::EnrollmentRequest(_) => {
+                return Err(RelayError::Authority(authority::Error::Unsupported))
+            }
+        };
+        if !transition {
+            let stored: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM authority
+                 WHERE route = $1 AND kind NOT IN ('genesis', 'membership', 'root_recovery')",
+            )
+            .bind(row.id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if stored >= MAX_AUTHORITY_OBJECTS {
+                return Err(RelayError::QuotaExhausted);
+            }
         }
-        let seq = insert_authority(&mut tx, row.id, digest, kind, bytes).await?;
+        let seq = insert_authority(&mut tx, row.id, digest, kind, bytes, !transition).await?;
         tx.commit().await?;
         Ok(Appended::Stored(Receipt {
             sequence: seq,
             generation: row.generation,
             digest: *digest,
         }))
+    }
+
+    /// As [`Self::put_authority_as`] with no session: only transitions
+    /// and recoveries.
+    pub async fn put_authority(
+        &self,
+        route: &Route,
+        digest: &Hash,
+        bytes: &[u8],
+    ) -> Result<Appended> {
+        self.put_authority_as(route, None, digest, bytes).await
     }
 
     /// Leave a joining device's enrollment request under `lookup` (#42).
@@ -964,6 +1127,17 @@ async fn replay(
     let genesis: Vec<u8> = rows.next().ok_or(RelayError::UnknownRoute)?.get("bytes");
     let mut authority = Authority::bootstrap(&genesis, route.clone(), &root_key(&row.root_key)?)
         .map_err(RelayError::Authority)?;
+    let mut manifests = HashMap::new();
+    if let Body::Genesis(g) = authority::parse(&genesis)
+        .map_err(RelayError::Authority)?
+        .message
+        .body
+    {
+        if let Some(m) = Manifest::of(g.epoch, g.admin, &g.roster) {
+            manifests.insert(record_hash(&genesis), m);
+        }
+    }
+    let mut recoveries: HashMap<u64, usize> = HashMap::new();
     for r in rows {
         let kind: String = r.get("kind");
         let bytes: Vec<u8> = r.get("bytes");
@@ -972,28 +1146,57 @@ async fn replay(
         } else {
             authority.apply_recovery(&bytes)
         };
+        let body = authority::parse(&bytes)
+            .map_err(RelayError::Authority)?
+            .message
+            .body;
+        let (Body::Membership(m) | Body::RootRecovery(m)) = &body else {
+            return Err(RelayError::Malformed);
+        };
+        if matches!(body, Body::RootRecovery(_)) {
+            *recoveries.entry(m.generation).or_default() += 1;
+        }
         match applied {
-            Ok(_) | Err(authority::Error::Fork) => {}
+            Ok(true) => {
+                if let Some(manifest) = Manifest::of(m.epoch, m.admin, &m.roster) {
+                    manifests.insert(record_hash(&bytes), manifest);
+                }
+            }
+            Ok(false) | Err(authority::Error::Fork) => {}
             Err(error) => return Err(RelayError::Authority(error)),
         }
     }
-    Ok(Replayed { authority })
+    Ok(Replayed {
+        authority,
+        manifests,
+        recoveries,
+    })
 }
 
+/// Append `bytes` to the route's authority log, counting them toward its
+/// stored bytes. With `quota`, refuse with [`RelayError::QuotaExhausted`]
+/// before storing anything if they would pass the route's byte quota.
 pub(crate) async fn insert_authority(
     tx: &mut Transaction<'static, Postgres>,
     route: i64,
     digest: &Hash,
     kind: &str,
     bytes: &[u8],
+    quota: bool,
 ) -> Result<u64> {
-    let seq: i64 = sqlx::query_scalar(
-        "UPDATE routes SET authority_high_water = authority_high_water + 1
-         WHERE id = $1 RETURNING authority_high_water",
+    let size = i64::try_from(bytes.len()).map_err(|_| RelayError::TooLarge)?;
+    let seq: Option<i64> = sqlx::query_scalar(
+        "UPDATE routes SET authority_high_water = authority_high_water + 1,
+             used_bytes = used_bytes + $2
+         WHERE id = $1 AND (NOT $3 OR quota_bytes IS NULL OR used_bytes + $2 <= quota_bytes)
+         RETURNING authority_high_water",
     )
     .bind(route)
-    .fetch_one(&mut **tx)
+    .bind(size)
+    .bind(quota)
+    .fetch_optional(&mut **tx)
     .await?;
+    let seq = seq.ok_or(RelayError::QuotaExhausted)?;
     sqlx::query(
         "INSERT INTO authority (route, sequence, digest, kind, bytes) VALUES ($1, $2, $3, $4, $5)",
     )

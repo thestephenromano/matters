@@ -373,18 +373,12 @@ async fn put_authority(
     let digest: Hash = hex(&digest)?;
     let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
     let device = authenticated_as(&api, &route, &headers, true).await?;
-    // The root's session publishes only what a recovery signs: the root
-    // recovery and its recovery envelope.
-    if !api.relay.is_member(&route, &device).await? {
-        let kind = matters_sync::authority::parse(&body)
-            .map(|p| p.message.body.kind())
-            .map_err(|_| malformed())?;
-        if !matches!(kind, "root_recovery" | "key_envelope") {
-            return Err(ApiError(RelayError::NotAMember));
-        }
-    }
+    // Who may publish what is checked with the object, in the transaction
+    // that stores it (Relay::put_authority_as).
     Ok(receipt(
-        api.relay.put_authority(&route, &digest, &body).await?,
+        api.relay
+            .put_authority_as(&route, Some(&device), &digest, &body)
+            .await?,
     ))
 }
 

@@ -119,7 +119,7 @@ impl Relay {
                 .message
                 .body
                 .kind();
-            insert_authority(&mut tx, id, &record_hash(bytes), kind, bytes).await?;
+            insert_authority(&mut tx, id, &record_hash(bytes), kind, bytes, false).await?;
         }
         let mut used: i64 = 0;
         for (n, bytes) in parsed.records.iter().enumerate() {
@@ -140,12 +140,15 @@ impl Relay {
             .await?;
             used += i64::try_from(bytes.len()).map_err(|_| RelayError::TooLarge)?;
         }
-        sqlx::query("UPDATE routes SET record_high_water = $2, used_bytes = $3 WHERE id = $1")
-            .bind(id)
-            .bind(i64::try_from(parsed.records.len()).map_err(|_| RelayError::TooLarge)?)
-            .bind(used)
-            .execute(&mut *tx)
-            .await?;
+        // Authority bytes were counted as they were inserted.
+        sqlx::query(
+            "UPDATE routes SET record_high_water = $2, used_bytes = used_bytes + $3 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(i64::try_from(parsed.records.len()).map_err(|_| RelayError::TooLarge)?)
+        .bind(used)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok((route, generation))
     }

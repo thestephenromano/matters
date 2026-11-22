@@ -7,7 +7,8 @@
 //!   replays 200, and authorization failures and backpressure have their
 //!   own statuses;
 //! - request latency, by template;
-//! - storage across every route (routes, stored records, stored bytes),
+//! - storage across every route (routes, stored records, stored record
+//!   and authority bytes),
 //!   refreshed from the database.
 //!
 //! Labels are drawn only from fixed vocabularies: the API's path templates
@@ -89,7 +90,7 @@ impl Metrics {
         let stored_bytes = Gauge::default();
         registry.register(
             "stored_bytes",
-            "Record bytes stored, across every route",
+            "Record and authority bytes stored, across every route",
             stored_bytes.clone(),
         );
         Self {

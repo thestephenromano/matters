@@ -492,6 +492,28 @@ async fn errors_carry_the_contracts_codes_and_statuses() {
         (full.status, full.code().as_str()),
         (StatusCode::INSUFFICIENT_STORAGE, "quota-exhausted")
     );
+    // Authority objects count toward it too.
+    let envelope = c
+        .authority
+        .wrap_key(
+            &c.admin,
+            c.admin.id(),
+            &matters_sync::ContentKey::new([4; 32]),
+            fresh(),
+        )
+        .unwrap();
+    let full = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&envelope))),
+        Some(&token),
+        envelope,
+    )
+    .await;
+    assert_eq!(
+        (full.status, full.code().as_str()),
+        (StatusCode::INSUFFICIENT_STORAGE, "quota-exhausted")
+    );
     db.finish().await;
 }
 
@@ -738,17 +760,34 @@ async fn the_roots_session_reads_the_authority_log_and_publishes_only_a_recovery
     )
     .await;
     assert_eq!(put.code(), "not-a-member");
-    let b = device();
-    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
-    let membership = call(
+    let claim = matters_sync::authority::sign(
+        &matters_sync::authority::Message {
+            route: route(),
+            signer: c.admin.id(),
+            body: matters_sync::authority::Body::WriterStart(
+                matters_sync::authority::WriterStart {
+                    manifest: c.authority.manifest(),
+                    document: [4; 16],
+                    device: c.admin.id(),
+                    incarnation: fresh(),
+                    actor: 1,
+                    previous: None,
+                },
+            ),
+        },
+        c.admin.signing_key(),
+        fresh(),
+    )
+    .unwrap();
+    let writer = call(
         &app,
         Method::PUT,
-        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&add))),
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&claim))),
         Some(&token),
-        add,
+        claim,
     )
     .await;
-    assert_eq!(membership.code(), "not-a-member");
+    assert_eq!(writer.code(), "not-a-member");
     // A session signed with other words is refused.
     let other = matters_sync::authority::RecoverySecret::new(fresh())
         .keys(&route())
