@@ -81,7 +81,11 @@ Before real users' data reaches a hosted pilot:
 - **Fresh-device freshness.** A device starting from a checkpoint trusts the relay to offer the newest.
 - **Honest members.** A member can author dishonest content. Devices with history detect contradictions with what they hold.
 - **Historical keys.** A removed device keeps the keys of epochs it was in, and anything it already held.
-- **Metadata.** Sizes, timing, device counts and network addresses are visible to the relay.
+- **Metadata.** The relay sees each record's clear header and size: who wrote it, when, its writer's chain, its batch and its kind. It also sees membership history, invitation use and the joining device's address and public keys, when each device is connected, device counts and network addresses, and keeps all of it as long as it keeps the collection. `docs/SYNCING.md` lists it in full. Records are not padded.
+- **Hostile engine payloads.** A member's signed update or checkpoint is decoded by Loro. Decoding failures and panics are contained to the record, but no CPU or memory bound is established for a hostile signed payload inside the engine.
+- **Log growth.** The authority log is not compacted: it grows with every app open and every membership change. A joining or recovering device holds it in memory within the client's caps (`docs/SYNC_KEY_DISTRIBUTION.md` gives the arithmetic), and the relay bounds it with the route's byte quota.
+- **Waiting records.** A device keeps a bounded number of records it cannot authenticate yet. A flood of forgeries can push out a genuine one, which the device reads again only after a cursor reset. In effect, that is the relay withholding it.
+- **Update trust.** A compromised update channel is a compromised endpoint. No release is signed or carries build provenance yet, so no claim about resisting future impersonation through updates can be made.
 
 ## 6. Claims, bounded by evidence (draft)
 

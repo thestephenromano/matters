@@ -7,9 +7,16 @@ Matters keeps your tasks on your device. Sync is optional: turn it on in **Sync*
 Your tasks are encrypted and signed on your device before they leave it, with keys only your devices hold. The relay stores them and passes them on, but it cannot read them, change them unnoticed, or make up new ones.
 
 The relay *can* see:
-- how much you store, and when your devices sync;
-- how many devices you use;
-- the network addresses they connect from.
+- how much you store, and the size of each change: changes are not padded, so a change's size follows the size of the edit;
+- which of your devices made each change, and when;
+- how your changes follow one another: each device's changes form a chain the relay can follow, and it can see which changes were saved together and when the app was opened;
+- which changes are checkpoints, which come after a set number of edits and so show how much you edit;
+- how many devices you use, which one is the admin, and when devices are added, removed or recovered;
+- when an invitation is used, and the network address and public keys of the device that asks to join;
+- when each device is connected, and the network addresses it connects from;
+- that the collection belongs to Matters.
+
+The relay keeps all of this for as long as it keeps your collection, which is until its operator removes it. If you move to another relay, your collection keeps its ID, so the two relays' records can be linked.
 
 It can also refuse to store or pass on your changes, or hold back new ones. When it does, Matters tells you that it can't reach the relay or that the relay refused a change, and keeps your changes on this device.
 
