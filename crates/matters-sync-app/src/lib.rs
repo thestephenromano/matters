@@ -35,7 +35,7 @@ use matters_core::storage::membership::KeyStore;
 use matters_core::storage::{Enrolling, Recovering};
 use matters_core::{Database, MattersError};
 use matters_sync::authority::{parse, Body, Hash, Invitation, Route};
-use matters_sync_client::{Attention, Client, Joiner, Recoverer, Status};
+use matters_sync_client::{check_endpoint, Attention, Client, Joiner, Recoverer, Status};
 use tokio::sync::watch;
 
 /// The application ID every Matters collection is routed under.
@@ -45,6 +45,9 @@ const POLL: Duration = Duration::from_secs(2);
 /// How long an invitation is shown: the relay keeps a request an hour.
 const INVITATION_TTL: Duration = Duration::from_secs(3600);
 const INVITATION_PREFIX: &str = "matters-invite:";
+/// Why sync retries when the relay's roster is behind this device's.
+pub const RELAY_BEHIND: &str =
+    "the relay's list of devices is behind this one's; sync resumes once another device updates it";
 
 /// Where this device stands with sync.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -252,6 +255,9 @@ fn health(status: &Status) -> Health {
         Status::UpToDate => Health::UpToDate,
         Status::Retrying { reason, .. } => Health::Retrying(reason.clone()),
         Status::NeedsAttention(Attention::NotAMember) => Health::Removed,
+        // Not removed: the relay lost this device's membership (a restore
+        // from an older backup), and the client keeps trying.
+        Status::NeedsAttention(Attention::RelayBehind) => Health::Retrying(RELAY_BEHIND.into()),
         Status::NeedsAttention(Attention::QuotaExhausted) => Health::StorageFull,
         Status::NeedsAttention(Attention::Conflict) => Health::Conflict,
         Status::NeedsAttention(Attention::Configuration(code)) if code == "unknown-route" => {
@@ -300,7 +306,13 @@ impl SyncApp {
         let db = &app.inner.db;
         match endpoint {
             Some(endpoint) if db.sync_enabled() => match db.resume_sync(app.inner.keys.as_ref()) {
-                Ok(_) => app.start(&endpoint)?,
+                // A saved address the client refuses (plain http) leaves the
+                // app working locally, with the reason shown.
+                Ok(_) => {
+                    if let Err(error) = app.start(&endpoint) {
+                        app.update(|v| v.error = Some(error));
+                    }
+                }
                 Err(error) => app.update(|v| v.error = Some(plain(error))),
             },
             Some(endpoint) if db.enrolling().map_err(plain)?.is_some() => {
@@ -438,9 +450,7 @@ impl SyncApp {
     /// The view then holds the recovery kit and the provisioning bundle.
     pub fn create(&self, endpoint: &str) -> Result<(), String> {
         let endpoint = endpoint.trim().trim_end_matches('/').to_owned();
-        if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
-            return Err(self.fail("the relay's address starts with https://"));
-        }
+        check_endpoint(&endpoint).map_err(|e| self.fail(e))?;
         let route = Route {
             application: MATTERS_APPLICATION,
             tenant: fresh16(),
@@ -566,6 +576,7 @@ impl SyncApp {
     /// or have set them aside (#41).
     pub fn join(&self, endpoint: &str, invitation: &str) -> Result<(), String> {
         let endpoint = endpoint.trim().trim_end_matches('/').to_owned();
+        check_endpoint(&endpoint).map_err(|e| self.fail(e))?;
         let invitation = parse_invitation(invitation).map_err(|e| self.fail(e))?;
         let request = self
             .inner
@@ -634,6 +645,7 @@ impl SyncApp {
     /// join again through invitations.
     pub fn recover(&self, endpoint: &str, collection: &str, words: &str) -> Result<(), String> {
         let endpoint = endpoint.trim().trim_end_matches('/').to_owned();
+        check_endpoint(&endpoint).map_err(|e| self.fail(e))?;
         let route = parse_collection_id(collection).map_err(|e| self.fail(e))?;
         let recoverer = Recoverer::new(
             &endpoint,
@@ -725,4 +737,23 @@ impl Drop for Inner {
 
 fn path_text(path: &Path) -> String {
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A relay that lost this device's membership is not a removal: the
+    /// interface says the relay is behind, and that sync carries on.
+    #[test]
+    fn a_relay_behind_is_told_apart_from_a_removal() {
+        assert_eq!(
+            health(&Status::NeedsAttention(Attention::NotAMember)),
+            Health::Removed
+        );
+        assert_eq!(
+            health(&Status::NeedsAttention(Attention::RelayBehind)),
+            Health::Retrying(RELAY_BEHIND.into())
+        );
+    }
 }

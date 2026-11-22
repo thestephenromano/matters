@@ -4,9 +4,10 @@
 //! between its [`LocalStore`] and a relay, and never sees plaintext or
 //! keys. One round ([`Client::sync_once`]):
 //! 1. pushes the device's controls, then its records, acknowledging each
-//!    in the store only on the relay's durable `200`/`201`;
-//! 2. pulls the authority log, pairing each transition with this device's
-//!    envelope of the new epoch's key;
+//!    in the store only on the relay's durable `200`/`201`. A control the
+//!    relay refuses for good is set aside, so the round still pulls;
+//! 2. pulls the authority log page by page, pairing each transition with
+//!    this device's envelopes of the new epoch's key;
 //! 3. pulls the record log.
 //!
 //! A page's cursor is saved only after its entries are applied. Applying is
@@ -14,10 +15,24 @@
 //! next time. A lost acknowledgement re-sends identical bytes, and the relay
 //! answers with the original receipt.
 //!
+//! The relay is not trusted with more than availability:
+//! - it is reached over TLS only (cleartext only to this machine, for
+//!   tests and a relay on the same host);
+//! - a response body is read up to [`MAX_RESPONSE_BYTES`];
+//! - a page must keep the contract: no more entries than asked for, in
+//!   ascending sequence, and a cursor that advances until the page says it
+//!   is complete. A round reads at most [`MAX_PAGES_PER_ROUND`] pages of a
+//!   log. A relay that breaks this is retried later, never followed;
+//! - a page whose high-water mark is below this device's cursor means the
+//!   relay's log was reset, and is handled as a new generation;
+//! - a key envelope that does not open is not taken for the transition's
+//!   fault: every envelope addressed to this device for it is tried.
+//!
 //! [`Client::run`] repeats rounds:
 //! - when the relay hints at new records, the application signals a local
 //!   edit, or a minute passes;
-//! - after a temporary failure, with exponential backoff and jitter;
+//! - after a temporary failure, with exponential backoff and jitter, and
+//!   at most [`MAX_RETRY_AFTER`] when the relay asks for longer;
 //! - not at all when the device needs attention (removed, conflict, quota),
 //!   until the application wakes it.
 //!
@@ -25,6 +40,8 @@
 //! cryptographic detail. Store calls run on a blocking thread, never across
 //! a network wait, so local editing is never held up by the network.
 
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -42,16 +59,44 @@ use matters_sync::wire::SIGNATURE_BYTES;
 use minicbor::Decoder;
 use tokio::sync::{watch, Mutex, Notify};
 
+/// Entries asked for per page: the contract's largest page.
 const PAGE: u32 = 256;
 const PERIOD: Duration = Duration::from_secs(60);
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
+/// The most bytes read of one relay response. The relay keeps a page under
+/// 16 MiB; twice that leaves room for an encoding's overhead, and bounds
+/// what a misbehaving relay can make a device hold.
+pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+/// The most pages of one log a round reads: about four million entries,
+/// far beyond any collection's catch-up between checkpoints. A record
+/// page's cursor is saved as it is applied, so a longer log goes on in the
+/// next round.
+pub const MAX_PAGES_PER_ROUND: usize = 16_384;
+/// The most bytes of authority log held at once: while a transition waits
+/// for its envelope on a later page, and when a joining or recovering
+/// device reads the whole log.
+const MAX_HELD_AUTHORITY_BYTES: usize = 128 * 1024 * 1024;
+/// The longest wait a relay's `retry-after-ms` is followed for.
+pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
+/// How long the hints WebSocket may take to connect.
+const HINTS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// The retry reason of a relay whose storage generation changed.
+const GENERATION_CHANGED: &str = "generation-changed";
 
 /// Why the device needs the user's or operator's attention. Sync stops
 /// until the application wakes the client; local work is untouched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attention {
-    /// This device is not, or no longer, a member of the collection.
+    /// This device is not, or no longer, a member of the collection: its
+    /// own authority removed it, or the relay holds everything this device
+    /// knows of the collection's membership and a later removal besides.
     NotAMember,
+    /// The relay does not know this device as a member, but this device's
+    /// own authority does, and the relay would not take the transitions
+    /// that show it: its roster is behind (a restore from an older backup).
+    /// The client keeps trying, with backoff; another device bringing the
+    /// relay up to date resolves it.
+    RelayBehind,
     /// The relay refused an upload that conflicts with a stored record.
     Conflict,
     /// The collection's storage quota on the relay is used up.
@@ -99,6 +144,10 @@ fn retry(reason: impl Into<String>) -> SyncError {
     }
 }
 
+fn network(error: reqwest::Error) -> SyncError {
+    retry(format!("network: {error}"))
+}
+
 /// What one round moved.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
@@ -112,6 +161,10 @@ pub struct Report {
     /// Controls the authority refused (forged, malformed or made stale by
     /// a later transition).
     pub refused_controls: usize,
+    /// Controls the relay refused for good, set aside so the round could go
+    /// on: a transition made stale by one this device had not received, or
+    /// a malformed one.
+    pub set_aside_controls: usize,
     /// This round started the device from the relay's newest checkpoint.
     pub started_from_checkpoint: bool,
     /// This round made a checkpoint and pushed its parts.
@@ -134,7 +187,12 @@ fn refusal(status: u16, body: &[u8]) -> Refusal {
             let Ok(key) = d.str() else { break };
             match key {
                 "code" => code = d.str().unwrap_or("").to_owned(),
-                "retry-after-ms" => after = d.u64().ok().map(Duration::from_millis),
+                "retry-after-ms" => {
+                    after = d
+                        .u64()
+                        .ok()
+                        .map(|ms| Duration::from_millis(ms).min(MAX_RETRY_AFTER))
+                }
                 _ => {
                     if d.skip().is_err() {
                         break;
@@ -213,13 +271,27 @@ fn field_bytes(body: &[u8], name: &str) -> Option<Vec<u8>> {
     None
 }
 
-/// A fetched page: its entries and its cursor.
+/// A fetched page: its entries with their sequence numbers, and its cursor.
 struct Page {
     generation: [u8; 16],
     high_water: u64,
-    entries: Vec<Vec<u8>>,
+    entries: Vec<(u64, Vec<u8>)>,
     next: Vec<u8>,
     complete: bool,
+}
+
+/// `[[sequence, bytes], ...]`, as pages and snapshot lists carry entries.
+fn parse_entries(d: &mut Decoder<'_>) -> Option<Vec<(u64, Vec<u8>)>> {
+    let count = d.array().ok()??;
+    let mut list = Vec::new();
+    for _ in 0..count {
+        if d.array().ok()? != Some(2) {
+            return None;
+        }
+        let sequence = d.u64().ok()?;
+        list.push((sequence, d.bytes().ok()?.to_vec()));
+    }
+    Some(list)
 }
 
 fn parse_page(body: &[u8]) -> Option<Page> {
@@ -231,16 +303,7 @@ fn parse_page(body: &[u8]) -> Option<Page> {
         match d.str().ok()? {
             "generation" => generation = d.bytes().ok()?.try_into().ok(),
             "high-water" => high_water = Some(d.u64().ok()?),
-            "records" => {
-                let count = d.array().ok()??;
-                let mut list = Vec::new();
-                for _ in 0..count {
-                    d.array().ok()?;
-                    d.u64().ok()?;
-                    list.push(d.bytes().ok()?.to_vec());
-                }
-                entries = Some(list);
-            }
+            "records" => entries = Some(parse_entries(&mut d)?),
             "next" => next = Some(d.bytes().ok()?.to_vec()),
             "complete" => complete = Some(d.bool().ok()?),
             _ => d.skip().ok()?,
@@ -263,20 +326,143 @@ fn parse_snapshots(body: &[u8]) -> Option<([u8; 16], Vec<Vec<u8>>)> {
     for _ in 0..n {
         match d.str().ok()? {
             "generation" => generation = d.bytes().ok()?.try_into().ok(),
-            "records" => {
-                let count = d.array().ok()??;
-                let mut list = Vec::new();
-                for _ in 0..count {
-                    d.array().ok()?;
-                    d.u64().ok()?;
-                    list.push(d.bytes().ok()?.to_vec());
-                }
-                entries = Some(list);
-            }
+            "records" => entries = Some(parse_entries(&mut d)?),
             _ => d.skip().ok()?,
         }
     }
-    Some((generation?, entries?))
+    let entries = entries?.into_iter().map(|(_, bytes)| bytes).collect();
+    Some((generation?, entries))
+}
+
+/// A relay cursor's generation and last sequence: `CBOR([generation,
+/// last-sequence])` (sync-relay-v0.cddl), exactly.
+fn decode_cursor(bytes: &[u8]) -> Option<([u8; 16], u64)> {
+    let mut d = Decoder::new(bytes);
+    if d.array().ok()? != Some(2) {
+        return None;
+    }
+    let generation = d.bytes().ok()?.try_into().ok()?;
+    let last = d.u64().ok()?;
+    (d.position() == bytes.len()).then_some((generation, last))
+}
+
+/// What is wrong with a page, judged against the cursor it was fetched
+/// after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PageFault {
+    /// The relay's log is not the one the cursor was read from: another
+    /// generation, or a high-water mark below the cursor (a reset the relay
+    /// did not announce). Handled as a restore.
+    GenerationChanged,
+    /// The page breaks the contract.
+    Invalid(&'static str),
+}
+
+/// Check a page against the contract and the cursor `after` it answers:
+/// - at most [`PAGE`] entries, in strictly ascending sequence after the
+///   cursor;
+/// - a next cursor of the page's generation, at or past its last entry, at
+///   most the high-water mark;
+/// - complete exactly when the next cursor reached the high-water mark,
+///   and otherwise a next cursor past `after`, so paging always ends.
+fn check_page(page: &Page, after: Option<&[u8]>) -> std::result::Result<(), PageFault> {
+    let mut last = 0;
+    if let Some(after) = after {
+        match decode_cursor(after) {
+            Some((generation, at)) if generation == page.generation => {
+                if page.high_water < at {
+                    return Err(PageFault::GenerationChanged);
+                }
+                last = at;
+            }
+            // Another generation (the relay should have answered 410), or a
+            // cursor no relay of this contract made: start over.
+            _ => return Err(PageFault::GenerationChanged),
+        }
+    }
+    let Some((generation, next)) = decode_cursor(&page.next) else {
+        return Err(PageFault::Invalid("cursor"));
+    };
+    if generation != page.generation {
+        return Err(PageFault::Invalid("cursor generation"));
+    }
+    if page.entries.len() > PAGE as usize {
+        return Err(PageFault::Invalid("more entries than asked for"));
+    }
+    let mut previous = last;
+    for (sequence, _) in &page.entries {
+        if *sequence <= previous {
+            return Err(PageFault::Invalid("entries out of order"));
+        }
+        previous = *sequence;
+    }
+    if next < previous || next > page.high_water {
+        return Err(PageFault::Invalid("cursor out of range"));
+    }
+    if page.complete != (next == page.high_water) {
+        return Err(PageFault::Invalid("completeness"));
+    }
+    if !page.complete && next <= last {
+        return Err(PageFault::Invalid("cursor does not advance"));
+    }
+    Ok(())
+}
+
+/// Read a response's status and body, refusing a body over
+/// [`MAX_RESPONSE_BYTES`] as it streams in.
+async fn read_body(mut response: reqwest::Response) -> Result<(u16, Vec<u8>)> {
+    let too_large = || retry("the relay's response is too large");
+    let status = response.status().as_u16();
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(network)? {
+        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok((status, body))
+}
+
+/// How a client reaches its relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Transport {
+    /// HTTPS, and WSS for hints.
+    Tls,
+    /// Cleartext to this machine only.
+    Loopback,
+}
+
+const NOT_HTTPS: &str = "the relay's address starts with https://";
+
+/// Check a relay's address: `https://`, or `http://` to this machine only
+/// (`127.0.0.1`, `::1` or `localhost`), for tests and a relay on the same
+/// host. Anything else would carry session tokens in the clear.
+pub fn check_endpoint(endpoint: &str) -> std::result::Result<(), String> {
+    transport(endpoint).map(|_| ())
+}
+
+fn transport(endpoint: &str) -> std::result::Result<Transport, String> {
+    let url = reqwest::Url::parse(endpoint.trim()).map_err(|_| NOT_HTTPS.to_owned())?;
+    let host = url.host_str().ok_or_else(|| NOT_HTTPS.to_owned())?;
+    match url.scheme() {
+        "https" => Ok(Transport::Tls),
+        "http" if is_loopback(host) => Ok(Transport::Loopback),
+        _ => Err(NOT_HTTPS.to_owned()),
+    }
+}
+
+fn is_loopback(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Engine updates between the checkpoints a device makes, by default.
@@ -285,10 +471,14 @@ pub const CHECKPOINT_EVERY: u64 = 1000;
 /// The sync client for one device's store and one relay.
 pub struct Client<S: LocalStore + 'static> {
     base: String,
+    transport: Transport,
     checkpoint_every: u64,
     http: reqwest::Client,
     store: Arc<S>,
     token: Mutex<Option<[u8; 32]>>,
+    /// Set by a generation change: the next round publishes every control
+    /// this device knows, not only those it signed.
+    republish: AtomicBool,
     status: watch::Sender<Status>,
     wake: Arc<Notify>,
 }
@@ -299,23 +489,44 @@ fn install_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+/// How a control PUT ended.
+enum Put {
+    Stored,
+    /// Refused for good: these bytes will never be stored.
+    Refused,
+}
+
+/// Whether `bytes` is a membership transition or root recovery: what makes
+/// a device a member on the relay.
+fn is_transition(bytes: &[u8]) -> bool {
+    matches!(
+        authority::parse(bytes).map(|p| p.message.body),
+        Ok(Body::Membership(_) | Body::RootRecovery(_))
+    )
+}
+
 impl<S: LocalStore + 'static> Client<S> {
     /// A client for `endpoint` (e.g. `https://relay.example`), trusting the
-    /// operating system's certificate store.
+    /// operating system's certificate store. Plain `http://` is refused
+    /// except to this machine ([`check_endpoint`]).
     pub fn new(endpoint: &str, store: Arc<S>) -> std::result::Result<Self, String> {
+        let transport = transport(endpoint)?;
         install_provider();
         let http = reqwest::Client::builder()
+            .https_only(transport == Transport::Tls)
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            base: endpoint.trim_end_matches('/').to_owned(),
+            base: endpoint.trim().trim_end_matches('/').to_owned(),
+            transport,
             checkpoint_every: CHECKPOINT_EVERY,
             http,
             store,
             token: Mutex::new(None),
+            republish: AtomicBool::new(false),
             status: watch::channel(Status::Idle).0,
             wake: Arc::new(Notify::new()),
         })
@@ -355,10 +566,7 @@ impl<S: LocalStore + 'static> Client<S> {
             .post(format!("{}{path}", self.base))
             .header("content-type", "application/cbor")
             .body(body);
-        let response = request.send().await.map_err(|e| retry(e.to_string()))?;
-        let status = response.status().as_u16();
-        let bytes = response.bytes().await.map_err(|e| retry(e.to_string()))?;
-        Ok((status, bytes.to_vec()))
+        read_body(request.send().await.map_err(network)?).await
     }
 
     async fn request(
@@ -374,10 +582,7 @@ impl<S: LocalStore + 'static> Client<S> {
         }
         let token = self.session().await?;
         request = request.bearer_auth(hex(&token));
-        let response = request.send().await.map_err(|e| retry(e.to_string()))?;
-        let status = response.status().as_u16();
-        let bytes = response.bytes().await.map_err(|e| retry(e.to_string()))?;
-        Ok((status, bytes.to_vec()))
+        read_body(request.send().await.map_err(network)?).await
     }
 
     /// An authenticated request, signing in again once if the session ended.
@@ -404,6 +609,16 @@ impl<S: LocalStore + 'static> Client<S> {
         if let Some(t) = *token {
             return Ok(t);
         }
+        let new = match self.sign_in().await {
+            Err(SyncError::Attention(Attention::NotAMember)) => self.sign_in_again().await?,
+            other => other?,
+        };
+        *token = Some(new);
+        Ok(new)
+    }
+
+    /// Answer the relay's challenge for a session token.
+    async fn sign_in(&self) -> Result<[u8; 32]> {
         let route = self.on_store(|s| s.route()).await?;
         let device = self.on_store(|s| s.device()).await?;
         let (status, body) = self
@@ -425,23 +640,90 @@ impl<S: LocalStore + 'static> Client<S> {
         if status != 200 {
             return Err(refusal(status, &body).into_error());
         }
-        let new: [u8; 32] = field_bytes(&body, "token")
+        field_bytes(&body, "token")
             .and_then(|t| t.try_into().ok())
-            .ok_or_else(|| retry("malformed session"))?;
-        *token = Some(new);
-        Ok(new)
+            .ok_or_else(|| retry("malformed session"))
+    }
+
+    /// The relay does not know this device as a member. If this device's
+    /// own authority does, the relay may have been restored from a backup
+    /// older than its membership: publish the transitions this device
+    /// knows, and sign in once more. Still refused, the relay is behind if
+    /// it would not take them; if it took them all, it holds a later
+    /// removal this device has not received.
+    async fn sign_in_again(&self) -> Result<[u8; 32]> {
+        if !self.on_store(|s| s.is_current_member()).await? {
+            return Err(SyncError::Attention(Attention::NotAMember));
+        }
+        let Some(all_taken) = self.republish_without_session().await? else {
+            return Err(SyncError::Attention(Attention::NotAMember));
+        };
+        match self.sign_in().await {
+            Err(SyncError::Attention(Attention::NotAMember)) if !all_taken => {
+                Err(SyncError::Attention(Attention::RelayBehind))
+            }
+            other => other,
+        }
+    }
+
+    /// Publish the membership transitions and root recoveries this device
+    /// knows, oldest first, without a session: they are what makes a device
+    /// a member, so a relay that lost them must take them from anyone.
+    /// `Some(true)` if the relay took every one, `Some(false)` if it
+    /// refused one (the rest depend on it, so they are not sent), and
+    /// `None` when there is nothing to publish.
+    async fn republish_without_session(&self) -> Result<Option<bool>> {
+        let route = self.on_store(|s| s.route()).await?;
+        let r = route_hex(&route);
+        let transitions: Vec<Vec<u8>> = self
+            .on_store(|s| s.known_controls())
+            .await?
+            .into_iter()
+            .filter(|bytes| is_transition(bytes))
+            .collect();
+        if transitions.is_empty() {
+            return Ok(None);
+        }
+        for bytes in transitions {
+            let path = format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&bytes)));
+            let response = self
+                .http
+                .put(format!("{}{path}", self.base))
+                .header("content-type", "application/vnd.matters.sync-authority")
+                .body(bytes)
+                .send()
+                .await
+                .map_err(network)?;
+            let (status, _) = read_body(response).await?;
+            if !matches!(status, 200 | 201) {
+                return Ok(Some(false));
+            }
+        }
+        Ok(Some(true))
     }
 
     /// One round: push, then pull. A changed relay generation is handled in
     /// place, by re-queueing everything and starting the round again once.
     pub async fn sync_once(&self) -> Result<Report> {
         match self.round().await {
-            Err(SyncError::Retry { reason, .. }) if reason == "generation-changed" => {
-                self.on_store(|s| s.generation_changed()).await?;
+            Err(SyncError::Retry { reason, .. }) if reason == GENERATION_CHANGED => {
+                self.generation_changed().await?;
                 self.round().await
             }
             other => other,
         }
+    }
+
+    /// The relay's log is not the one this device read: forget the cursors
+    /// and queue everything again. Every known control goes back too,
+    /// whoever signed it, since the restore may predate any of them; the
+    /// transitions first and without a session, so a device the restored
+    /// relay does not know yet can sign in.
+    async fn generation_changed(&self) -> Result<()> {
+        self.on_store(|s| s.generation_changed()).await?;
+        self.republish.store(true, Ordering::SeqCst);
+        self.republish_without_session().await?;
+        Ok(())
     }
 
     async fn round(&self) -> Result<Report> {
@@ -449,90 +731,206 @@ impl<S: LocalStore + 'static> Client<S> {
         let r = route_hex(&route);
         let mut report = Report::default();
         // Push: controls first, so receivers know a writer before its records.
+        self.push_controls(&r, &mut report).await?;
+        self.push_records(&r, &mut report).await?;
+        self.pull_authority(&r, &mut report).await?;
+        self.pull_records(&r, &mut report).await?;
+        Ok(report)
+    }
+
+    async fn put_control(&self, r: &str, bytes: Vec<u8>) -> Result<Put> {
+        let path = format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&bytes)));
+        let (status, body) = self
+            .call(
+                reqwest::Method::PUT,
+                &path,
+                Some(bytes),
+                "application/vnd.matters.sync-authority",
+            )
+            .await?;
+        match status {
+            200 | 201 => Ok(Put::Stored),
+            // Malformed, too large, or refused by the relay's authority
+            // (made stale by a transition this device has not received).
+            400 | 413 | 422 => Ok(Put::Refused),
+            _ => Err(refusal(status, &body).into_error()),
+        }
+    }
+
+    /// Push this device's outgoing controls, then, after a generation
+    /// change, every control it knows. A control the relay refuses for
+    /// good is set aside: the round goes on to pull, which is how this
+    /// device learns what made it stale.
+    async fn push_controls(&self, r: &str, report: &mut Report) -> Result<()> {
         for (seq, bytes) in self.on_store(|s| s.outgoing_controls()).await? {
-            let path = format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&bytes)));
-            let (status, body) = self
-                .call(
-                    reqwest::Method::PUT,
-                    &path,
-                    Some(bytes),
-                    "application/vnd.matters.sync-authority",
-                )
-                .await?;
-            match status {
-                200 | 201 => {
+            match self.put_control(r, bytes).await? {
+                Put::Stored => {
                     self.on_store(move |s| s.acknowledge_control(seq)).await?;
                     report.pushed_controls += 1;
                 }
-                _ => return Err(refusal(status, &body).into_error()),
+                Put::Refused => {
+                    self.on_store(move |s| s.set_aside_control(seq)).await?;
+                    report.set_aside_controls += 1;
+                }
             }
         }
-        self.push_records(&r, &mut report).await?;
-        // Pull the authority log whole first, so a transition finds this
-        // device's envelope even on a later page.
+        if self.republish.load(Ordering::SeqCst) {
+            for bytes in self.on_store(|s| s.known_controls()).await? {
+                // The genesis is the route's, provisioned by its operator.
+                if matches!(
+                    authority::parse(&bytes).map(|p| p.message.body),
+                    Ok(Body::Genesis(_))
+                ) {
+                    continue;
+                }
+                match self.put_control(r, bytes).await? {
+                    Put::Stored => report.pushed_controls += 1,
+                    Put::Refused => report.set_aside_controls += 1,
+                }
+            }
+            self.republish.store(false, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    /// Pull the authority log and apply it page by page. A transition is
+    /// tried with each envelope this device has seen for it; when none
+    /// opens, later pages are read for more (the admin publishes them right
+    /// after the transition), up to [`MAX_HELD_AUTHORITY_BYTES`] held. If
+    /// none comes, applying stops there, and the page is read again next
+    /// round.
+    async fn pull_authority(&self, r: &str, report: &mut Report) -> Result<()> {
         let device = self.on_store(|s| s.device()).await?;
-        let mut pages = Vec::new();
-        let mut cursor = self.on_store(|s| s.cursor(Log::Authority)).await?;
+        let cursor = self.on_store(|s| s.cursor(Log::Authority)).await?;
+        let mut reader = LogReader::new(self, r, "authority", cursor);
+        // Pages read and not yet wholly applied, oldest first; `at` is the
+        // next entry to apply of the first.
+        let mut window: VecDeque<Page> = VecDeque::new();
+        let (mut at, mut held) = (0, 0);
+        // This device's envelopes seen so far, by the manifest they name.
+        let mut mine: HashMap<Hash, Vec<Vec<u8>>> = HashMap::new();
+        let mut read_more = true;
         loop {
-            let page = self.fetch(&r, "authority", cursor.as_deref()).await?;
-            let complete = page.complete;
-            cursor = Some(page.next.clone());
-            pages.push(page);
-            if complete {
-                break;
+            if read_more {
+                let Some(page) = reader.next().await? else {
+                    // The log is read; a transition still lacks its envelope.
+                    return Ok(());
+                };
+                for (_, bytes) in &page.entries {
+                    match authority::parse(bytes).map(|p| p.message.body) {
+                        Ok(Body::KeyEnvelope(k)) if k.recipient == device => {
+                            let seen = mine.entry(k.manifest).or_default();
+                            if !seen.contains(bytes) {
+                                seen.push(bytes.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                held += page.entries.iter().map(|(_, b)| b.len()).sum::<usize>();
+                window.push_back(page);
             }
-        }
-        let all: Vec<Vec<u8>> = pages.iter().flat_map(|p| p.entries.clone()).collect();
-        'pages: for page in &pages {
-            for control in &page.entries {
-                let envelope = envelope_for(&all, control, &device);
-                let control = control.clone();
-                match self
-                    .on_store(move |s| s.receive_control(&control, envelope.as_deref()))
-                    .await?
-                {
+            let Some(front) = window.front() else {
+                return Ok(());
+            };
+            let mut waiting = false;
+            while at < front.entries.len() {
+                let control = front.entries[at].1.clone();
+                let candidates = if is_transition(&control) {
+                    mine.get(&record_hash(&control))
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                match self.apply_control(control, candidates).await? {
                     ControlOutcome::Done => report.applied_controls += 1,
                     ControlOutcome::Refused => report.refused_controls += 1,
-                    // Its envelope is not on the relay yet: stop here, so
-                    // this page is fetched again next round.
-                    ControlOutcome::NeedsEnvelope => break 'pages,
+                    ControlOutcome::NeedsEnvelope => {
+                        waiting = true;
+                        break;
+                    }
                     ControlOutcome::Stopped => {
-                        let next = page.next.clone();
+                        let next = front.next.clone();
                         self.on_store(move |s| s.save_cursor(Log::Authority, &next))
                             .await?;
                         return Err(SyncError::Attention(Attention::NotAMember));
                     }
                 }
+                at += 1;
             }
-            let next = page.next.clone();
+            if waiting {
+                // Its envelope is not on the relay yet, or lies further on.
+                if reader.complete || held > MAX_HELD_AUTHORITY_BYTES {
+                    return Ok(());
+                }
+                read_more = true;
+                continue;
+            }
+            let next = front.next.clone();
             self.on_store(move |s| s.save_cursor(Log::Authority, &next))
                 .await?;
+            if let Some(done) = window.pop_front() {
+                held -= done.entries.iter().map(|(_, b)| b.len()).sum::<usize>();
+            }
+            at = 0;
+            read_more = window.is_empty();
         }
-        // A device that holds nothing yet starts from the newest
-        // checkpoint, when the relay has one it accepts.
+    }
+
+    /// Apply one control, with each candidate envelope in turn until one
+    /// opens. With none that opens, a transition that keeps this device a
+    /// member waits for one: it is never skipped.
+    async fn apply_control(
+        &self,
+        control: Vec<u8>,
+        candidates: Vec<Vec<u8>>,
+    ) -> Result<ControlOutcome> {
+        let control = Arc::new(control);
+        if candidates.is_empty() {
+            let control = control.clone();
+            return self
+                .on_store(move |s| s.receive_control(&control, None))
+                .await;
+        }
+        for envelope in candidates {
+            let control = control.clone();
+            match self
+                .on_store(move |s| s.receive_control(&control, Some(&envelope)))
+                .await?
+            {
+                ControlOutcome::NeedsEnvelope => continue,
+                outcome => return Ok(outcome),
+            }
+        }
+        Ok(ControlOutcome::NeedsEnvelope)
+    }
+
+    /// Pull the record log, saving each page's cursor once it is received.
+    /// A device that holds nothing yet starts from the newest checkpoint,
+    /// when the relay has one it accepts.
+    async fn pull_records(&self, r: &str, report: &mut Report) -> Result<()> {
         let mut cursor = self.on_store(|s| s.cursor(Log::Records)).await?;
         if cursor.is_none()
             && self.on_store(|s| s.wants_checkpoint()).await?
-            && self.start_from_newest(&r).await?
+            && self.start_from_newest(r).await?
         {
             report.started_from_checkpoint = true;
             cursor = self.on_store(|s| s.cursor(Log::Records)).await?;
         }
-        // Pull records, saving each page's cursor once it is received.
-        loop {
-            let page = self.fetch(&r, "records", cursor.as_deref()).await?;
+        let mut reader = LogReader::new(self, r, "records", cursor);
+        while let Some(page) = reader.next().await? {
             // The whole page at once: the store applies it in one go (#241).
-            let records = page.entries;
+            let records: Vec<Vec<u8>> = page.entries.into_iter().map(|(_, b)| b).collect();
             for outcome in self.on_store(move |s| s.receive_records(&records)).await? {
                 match outcome {
                     Ok(()) => report.received_records += 1,
                     Err(_) => report.refused_records += 1,
                 }
             }
-            let next = page.next.clone();
+            let next = page.next;
             self.on_store(move |s| s.save_cursor(Log::Records, &next))
                 .await?;
-            cursor = Some(page.next);
             if page.complete {
                 // Up to date with the relay: a checkpoint may be due.
                 let at = Cursor {
@@ -542,12 +940,11 @@ impl<S: LocalStore + 'static> Client<S> {
                 let every = self.checkpoint_every;
                 if self.on_store(move |s| s.make_checkpoint(at, every)).await? {
                     report.made_checkpoint = true;
-                    self.push_records(&r, &mut report).await?;
+                    self.push_records(r, report).await?;
                 }
-                break;
             }
         }
-        Ok(report)
+        Ok(())
     }
 
     /// Push every outgoing record, acknowledging each on the relay's
@@ -587,6 +984,9 @@ impl<S: LocalStore + 'static> Client<S> {
         }
         let (generation, records) =
             parse_snapshots(&body).ok_or_else(|| retry("malformed snapshots"))?;
+        if records.len() > PAGE as usize {
+            return Err(retry("the relay served more snapshots than asked for"));
+        }
         let route = self.on_store(|s| s.route()).await?;
         let batch_of = |bytes: &[u8]| {
             wire::parse_for_route(bytes, &route.application, &route.tenant, &route.collection)
@@ -610,6 +1010,8 @@ impl<S: LocalStore + 'static> Client<S> {
         }
     }
 
+    /// Fetch one page of `log` after the cursor `after`, checked against
+    /// the contract ([`check_page`]).
     async fn fetch(&self, route: &str, log: &str, after: Option<&[u8]>) -> Result<Page> {
         let mut path = format!("/v0/routes/{route}/{log}?limit={PAGE}");
         if let Some(after) = after {
@@ -619,15 +1021,45 @@ impl<S: LocalStore + 'static> Client<S> {
             .call(reqwest::Method::GET, &path, None, "application/cbor")
             .await?;
         match status {
-            200 => parse_page(&body).ok_or_else(|| retry("malformed page")),
-            410 => Err(retry("generation-changed")),
+            200 => {
+                let page = parse_page(&body).ok_or_else(|| retry("malformed page"))?;
+                match check_page(&page, after) {
+                    Ok(()) => Ok(page),
+                    Err(PageFault::GenerationChanged) => Err(retry(GENERATION_CHANGED)),
+                    Err(PageFault::Invalid(why)) => {
+                        Err(retry(format!("the relay served a bad {log} page: {why}")))
+                    }
+                }
+            }
+            410 => Err(retry(GENERATION_CHANGED)),
             _ => Err(refusal(status, &body).into_error()),
         }
     }
 
+    /// The whole authority log from its start, keeping the entries `keep`
+    /// selects, up to [`MAX_HELD_AUTHORITY_BYTES`] of them.
+    async fn whole_authority(&self, r: &str, keep: impl Fn(&[u8]) -> bool) -> Result<Vec<Vec<u8>>> {
+        let mut reader = LogReader::new(self, r, "authority", None);
+        let (mut log, mut held) = (Vec::new(), 0);
+        while let Some(page) = reader.next().await? {
+            for (_, bytes) in page.entries {
+                if !keep(&bytes) {
+                    continue;
+                }
+                held += bytes.len();
+                if held > MAX_HELD_AUTHORITY_BYTES {
+                    return Err(retry("the relay's authority log is too large"));
+                }
+                log.push(bytes);
+            }
+        }
+        Ok(log)
+    }
+
     /// Run rounds until `shutdown` resolves: on hints, local edits, every
     /// minute, and after temporary failures with backoff. A round that needs
-    /// attention waits for the application to wake the client.
+    /// attention waits for the application to wake the client. Nothing here
+    /// waits on the hints connection.
     pub async fn run(&self, shutdown: impl std::future::Future<Output = ()>) {
         tokio::pin!(shutdown);
         let hints = Arc::new(Notify::new());
@@ -635,7 +1067,11 @@ impl<S: LocalStore + 'static> Client<S> {
         let mut hint_task: Option<tokio::task::JoinHandle<()>> = None;
         loop {
             let _ = self.status.send(Status::Syncing);
-            let wait = match self.sync_once().await {
+            let round = tokio::select! {
+                _ = &mut shutdown => break,
+                round = self.sync_once() => round,
+            };
+            let wait = match round {
                 Ok(_) => {
                     backoff = Duration::from_secs(1);
                     let _ = self.status.send(Status::UpToDate);
@@ -644,12 +1080,25 @@ impl<S: LocalStore + 'static> Client<S> {
                     }
                     Some(PERIOD)
                 }
+                // Another device bringing the relay up to date resolves
+                // it, so keep trying, slowly.
+                Err(SyncError::Attention(Attention::RelayBehind)) => {
+                    let delay = backoff;
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                    let _ = self
+                        .status
+                        .send(Status::NeedsAttention(Attention::RelayBehind));
+                    Some(jitter(delay))
+                }
                 Err(SyncError::Attention(attention)) => {
                     let _ = self.status.send(Status::NeedsAttention(attention));
                     None
                 }
                 Err(SyncError::Retry { reason, after }) => {
-                    let delay = after.unwrap_or(backoff).max(backoff / 2);
+                    let delay = after
+                        .unwrap_or(backoff)
+                        .max(backoff / 2)
+                        .min(MAX_RETRY_AFTER);
                     backoff = (backoff * 2).min(MAX_BACKOFF);
                     let _ = self.status.send(Status::Retrying {
                         after: delay,
@@ -684,30 +1133,93 @@ impl<S: LocalStore + 'static> Client<S> {
         let _ = self.status.send(Status::Idle);
     }
 
-    /// Hold the hints WebSocket open, notifying on each hint; ends when the
-    /// connection does (the next round reconnects).
+    /// Start holding the hints WebSocket open, notifying on each hint. It
+    /// connects on its own task, within [`HINTS_CONNECT_TIMEOUT`], and ends
+    /// when the connection does (a later round reconnects). It uses the
+    /// session the round left, without waiting for one: `None` if there is
+    /// none to hand.
     async fn listen(&self, hints: Arc<Notify>) -> Option<tokio::task::JoinHandle<()>> {
         let route = self.on_store(|s| s.route()).await.ok()?;
-        let token = self.session().await.ok()?;
-        let url = format!("{}/v0/routes/{}/hints", self.base, route_hex(&route))
-            .replacen("https://", "wss://", 1)
-            .replacen("http://", "ws://", 1);
+        let token = (*self.token.try_lock().ok()?)?;
+        let url = format!("{}/v0/routes/{}/hints", self.base, route_hex(&route));
+        let (url, connector) = match self.transport {
+            Transport::Tls => (
+                url.replacen("https://", "wss://", 1),
+                tls_config().map(|c| tokio_tungstenite::Connector::Rustls(Arc::new(c))),
+            ),
+            Transport::Loopback => (
+                url.replacen("http://", "ws://", 1),
+                Some(tokio_tungstenite::Connector::Plain),
+            ),
+        };
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         let mut request = url.into_client_request().ok()?;
         request.headers_mut().insert(
             "authorization",
             format!("Bearer {}", hex(&token)).parse().ok()?,
         );
-        let connector = tls_config().map(|c| tokio_tungstenite::Connector::Rustls(Arc::new(c)));
-        let (mut socket, _) =
-            tokio_tungstenite::connect_async_tls_with_config(request, None, false, connector)
-                .await
-                .ok()?;
         Some(tokio::spawn(async move {
+            let connect =
+                tokio_tungstenite::connect_async_tls_with_config(request, None, false, connector);
+            let Ok(Ok((mut socket, _))) =
+                tokio::time::timeout(HINTS_CONNECT_TIMEOUT, connect).await
+            else {
+                return;
+            };
             while let Some(Ok(_)) = socket.next().await {
                 hints.notify_one();
             }
         }))
+    }
+}
+
+/// One log read in order from a cursor, each page checked, at most
+/// [`MAX_PAGES_PER_ROUND`] pages a round.
+struct LogReader<'a, S: LocalStore + 'static> {
+    client: &'a Client<S>,
+    route: &'a str,
+    log: &'static str,
+    cursor: Option<Vec<u8>>,
+    pages: usize,
+    complete: bool,
+}
+
+impl<'a, S: LocalStore + 'static> LogReader<'a, S> {
+    fn new(
+        client: &'a Client<S>,
+        route: &'a str,
+        log: &'static str,
+        cursor: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            client,
+            route,
+            log,
+            cursor,
+            pages: 0,
+            complete: false,
+        }
+    }
+
+    /// The next page, or `None` once a complete one was read.
+    async fn next(&mut self) -> Result<Option<Page>> {
+        if self.complete {
+            return Ok(None);
+        }
+        if self.pages == MAX_PAGES_PER_ROUND {
+            return Err(retry(format!(
+                "the relay's {} log is longer than a round reads",
+                self.log
+            )));
+        }
+        self.pages += 1;
+        let page = self
+            .client
+            .fetch(self.route, self.log, self.cursor.as_deref())
+            .await?;
+        self.cursor = Some(page.next.clone());
+        self.complete = page.complete;
+        Ok(Some(page))
     }
 }
 
@@ -720,25 +1232,6 @@ fn tls_config() -> Option<rustls::ClientConfig> {
         .with_platform_verifier()
         .ok()
         .map(|b| b.with_no_client_auth())
-}
-
-/// This device's envelope of the key of the epoch `control` starts, if it
-/// is a transition and the log holds one.
-fn envelope_for(log: &[Vec<u8>], control: &[u8], device: &Hash) -> Option<Vec<u8>> {
-    let parsed = authority::parse(control).ok()?;
-    if !matches!(
-        parsed.message.body,
-        Body::Membership(_) | Body::RootRecovery(_)
-    ) {
-        return None;
-    }
-    let manifest = record_hash(control);
-    log.iter()
-        .find(|bytes| {
-            matches!(authority::parse(bytes).map(|p| p.message.body),
-                Ok(Body::KeyEnvelope(k)) if k.recipient == *device && k.manifest == manifest)
-        })
-        .cloned()
 }
 
 /// Up to a quarter more, so devices that failed together retry apart.
@@ -843,12 +1336,8 @@ impl<J: JoiningStore + 'static> Joiner<J> {
             .body(request.to_vec())
             .send()
             .await
-            .map_err(|e| retry(format!("network: {e}")))?;
-        let status = response.status().as_u16();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| retry(format!("network: {e}")))?;
+            .map_err(network)?;
+        let (status, body) = read_body(response).await?;
         match status {
             200 | 201 => Ok(()),
             _ => Err(refusal(status, &body).into_error()),
@@ -862,20 +1351,17 @@ impl<J: JoiningStore + 'static> Joiner<J> {
         let route = self.client.on_store(|s| s.route()).await?;
         let device = self.client.on_store(|s| s.device()).await?;
         let r = route_hex(&route);
-        let mut log = Vec::new();
-        let mut cursor: Option<Vec<u8>> = None;
-        loop {
-            let page = match self.client.fetch(&r, "authority", cursor.as_deref()).await {
-                Ok(page) => page,
-                Err(SyncError::Attention(Attention::NotAMember)) => return Ok(false),
-                Err(other) => return Err(other),
-            };
-            log.extend(page.entries);
-            cursor = Some(page.next);
-            if page.complete {
-                break;
-            }
-        }
+        // Everything but other devices' envelopes.
+        let ours = |bytes: &[u8]| match authority::parse(bytes).map(|p| p.message.body) {
+            Ok(Body::KeyEnvelope(k)) => k.recipient == device,
+            Ok(_) => true,
+            Err(_) => false,
+        };
+        let log = match self.client.whole_authority(&r, ours).await {
+            Ok(log) => log,
+            Err(SyncError::Attention(Attention::NotAMember)) => return Ok(false),
+            Err(other) => return Err(other),
+        };
         let (mut controls, mut envelopes) = (Vec::new(), Vec::new());
         for bytes in log {
             match authority::parse(&bytes).map(|p| p.message.body) {
@@ -987,19 +1473,10 @@ impl<R: RecoveringStore + 'static> Recoverer<R> {
     pub async fn recover(&self) -> Result<()> {
         let route = self.client.on_store(|s| s.route()).await?;
         let r = route_hex(&route);
-        let mut log = Vec::new();
-        let mut cursor: Option<Vec<u8>> = None;
-        loop {
-            let page = self
-                .client
-                .fetch(&r, "authority", cursor.as_deref())
-                .await?;
-            log.extend(page.entries);
-            cursor = Some(page.next);
-            if page.complete {
-                break;
-            }
-        }
+        let log = self
+            .client
+            .whole_authority(&r, |bytes| authority::parse(bytes).is_ok())
+            .await?;
         let (mut controls, mut envelopes) = (Vec::new(), Vec::new());
         for bytes in log {
             match authority::parse(&bytes).map(|p| p.message.body) {

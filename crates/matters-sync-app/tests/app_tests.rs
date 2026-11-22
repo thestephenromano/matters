@@ -258,3 +258,48 @@ fn a_collection_from_creation_to_recovery() {
     assert!(c.app.view().admin);
     relayed.finish();
 }
+
+/// Session tokens and sync traffic never travel in the clear (#45): a relay
+/// is reached over https, or over http only on this machine. Each way in
+/// refuses another address before it changes anything.
+#[test]
+fn a_relay_is_reached_over_https_or_on_this_machine_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = device(dir.path(), "a");
+    let refused = Err("the relay's address starts with https://".to_owned());
+    for endpoint in [
+        "http://relay.example",
+        "http://127.0.0.1.relay.example",
+        "http://127.0.0.1@relay.example",
+        "ws://relay.example",
+        "relay.example",
+    ] {
+        assert_eq!(a.app.create(endpoint), refused, "{endpoint}");
+        assert_eq!(
+            a.app.join(endpoint, "matters-invite:x"),
+            refused,
+            "{endpoint}"
+        );
+        assert_eq!(
+            a.app.recover(endpoint, &"0".repeat(64), "words"),
+            refused,
+            "{endpoint}"
+        );
+    }
+    let db = a.app.database();
+    assert!(!db.sync_enabled() && db.enrolling().unwrap().is_none());
+    assert_eq!(a.app.view().phase, Phase::Off);
+    assert_eq!(*a.saved.lock().unwrap(), None);
+    // On this machine, plain http is fine: tests, and a relay on the host.
+    for endpoint in [
+        "http://127.0.0.1:9",
+        "http://[::1]:9",
+        "http://localhost:9",
+        "https://relay.example",
+    ] {
+        assert_eq!(matters_sync_client::check_endpoint(endpoint), Ok(()));
+    }
+    a.app.create("http://127.0.0.1:9").unwrap();
+    assert_eq!(a.app.view().phase, Phase::On);
+    assert!(a.app.view().kit.is_some());
+}
