@@ -124,10 +124,12 @@ Clients verify every object they read. The relay also checks each one before sto
 
 | Kind | Who may upload it | What the relay checks |
 | --- | --- | --- |
-| `membership`, `root_recovery` | Any session | Accepted by the route's authority (key-distribution rules). A second valid successor of one manifest is kept once as fork evidence; membership is then frozen and further transitions get `400 malformed`. At most two recoveries per generation are kept (the accepted one and one as evidence); a third gets `507 quota-exhausted`. |
+| `membership`, `root_recovery` | Anyone; no session is needed | Accepted by the route's authority (key-distribution rules). A second valid successor of one manifest is kept once as fork evidence; membership is then frozen and further transitions get `400 malformed`. At most two recoveries per generation are kept (the accepted one and one as evidence); a third gets `507 quota-exhausted`. |
 | `writer_start`, `writer_handoff` | A member's session | Signer and claimed device are the session's device, a current member; the signature verifies with its roster key. Otherwise `422 context-mismatch`, `403 not-a-member` or `400 malformed`. |
 | `key_envelope` | A member's or the root's session | It names a known manifest and its epoch, and is signed (and names as `authority`) that manifest's admin or the current admin, verified with that admin's roster key. Otherwise `400 malformed`. |
 | `genesis`, `enrollment_request` | Nobody | Genesis is stored only by provisioning (its stored bytes again get `200`); enrollment requests go to the mailbox. `400 malformed`. |
+
+Transitions and recoveries need no session because their signatures already say who may publish them, and because a device may need to publish one before it can sign in: a relay restored from a backup taken before a device was admitted does not know that device, which re-publishes the transition that admitted it (see *Restore*). Such a `PUT` is bounded like any request without a session: its body size, and the relay's limit on requests without a session. With an `Authorization` header, the session is checked first, whatever the kind. Every other kind needs a session, checked before the body is read; without one it gets `401 unauthenticated`.
 
 Authority bytes count toward the route's byte quota, as records do. A route keeps at most 4,096 writer claims and key envelopes together. Past either limit those kinds get `507 quota-exhausted`, refused before anything is stored. Membership transitions and recoveries are exempt from both refusals, so a full route can still remove a device; the authority's own transition limit bounds them.
 
@@ -177,7 +179,7 @@ No error deletes, rewrites or acknowledges a record. A quota is refused before a
 | Relay process crash | Every acknowledged record survives (committed and flushed) | Retries unacknowledged uploads; gets `200` for any that had committed |
 | Primary host loss, no standby | Records acknowledged since the last archived WAL segment may be lost | After the operator restores, `410 generation-changed`; the client re-uploads everything it holds, which restores lost records unless every holder lost them too |
 | Host loss with a synchronous standby | Every acknowledged record survives | No generation change if failover keeps the history |
-| Point-in-time or backup restore | The restore procedure installs a new random generation before serving | `410` on the old cursor; the client refetches from sequence 1, compares with its retained receipts, re-uploads its records and authority objects, and deduplicates by record ID |
+| Point-in-time or backup restore | The restore procedure installs a new random generation before serving | `410` on the old cursor; the client refetches from sequence 1, compares with its retained receipts, re-uploads its records and authority objects, and deduplicates by record ID. A device admitted after the backup is not in the restored roster: it re-publishes the transition that admitted it, which needs no session, and then signs in |
 
 A malicious or careless operator can hide a reset by keeping the generation; clients detect contradictions only through their own retained receipts and authenticated history (record contract, *Restore / rollback*). Uploads from a client never depend on the relay being fresh.
 

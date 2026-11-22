@@ -454,6 +454,60 @@ async fn errors_carry_the_contracts_codes_and_statuses() {
         );
         assert_eq!(response.keys()[..2], ["code", "retry"]);
     }
+    // Without a session the body is never read: an oversized one is
+    // refused as unauthenticated, not as too large.
+    for uri in [
+        format!("/v0/routes/{r}/records/{}", hex(&id)),
+        format!("/v0/routes/{r}/authority/{}", hex(&[0; 48])),
+    ] {
+        let mut request = Request::builder().method(Method::PUT).uri(&uri);
+        if uri.contains("/authority/") {
+            request = request.header("authorization", "Bearer 00");
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                request
+                    .body(Body::from(vec![0; matters_sync::wire::MAX_WIRE_BYTES + 1]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+    }
+    // A transition needs no session; an envelope does.
+    let b = device();
+    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
+    let anonymous = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&add))),
+        None,
+        add,
+    )
+    .await;
+    assert_eq!(anonymous.status, StatusCode::CREATED);
+    let envelope = c
+        .authority
+        .wrap_key(
+            &c.admin,
+            c.admin.id(),
+            &matters_sync::ContentKey::new([4; 32]),
+            fresh(),
+        )
+        .unwrap();
+    let anonymous = call(
+        &app,
+        Method::PUT,
+        &format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&envelope))),
+        None,
+        envelope,
+    )
+    .await;
+    assert_eq!(
+        (anonymous.status, anonymous.code().as_str()),
+        (StatusCode::UNAUTHORIZED, "unauthenticated")
+    );
     // A cursor from before a restore names the new generation.
     let page = call(
         &app,

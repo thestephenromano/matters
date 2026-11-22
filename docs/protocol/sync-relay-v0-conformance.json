@@ -118,6 +118,20 @@
       ]
     },
     {
+      "name": "a-restored-relay-takes-back-the-transition-it-lost",
+      "steps": [
+        {"backup": "b1"},
+        {"as": "A", "put_authority": "membership-adding-C", "expect": {"status": 201}},
+        {"as": "C", "session": true, "expect": {"status": 200}},
+        {"restore": "b1"},
+        {"as": "C", "session": true, "expect": {"status": 403, "code": "not-a-member"}},
+        {"as": "C", "put_authority": "membership-adding-C", "anonymous": true, "expect": {"status": 201}},
+        {"as": "C", "session": true, "expect": {"status": 200}},
+        {"as": "C", "put_authority": "writer-start-of-C", "anonymous": true, "expect": {"status": 401, "code": "unauthenticated"}}
+      ],
+      "note": "C was admitted after the backup. It holds the signed transition that admitted it and re-publishes it without a session, which the relay verifies against the authority it has; writer claims and envelopes still need one."
+    },
+    {
       "name": "quota-and-rate-limits-are-distinct",
       "config": {"max_records_per_route": 1, "rate_limit": "configured"},
       "steps": [

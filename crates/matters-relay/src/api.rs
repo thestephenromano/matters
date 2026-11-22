@@ -2,9 +2,10 @@
 //!
 //! Bodies are deterministic CBOR (`application/cbor`) except record and
 //! authority bytes, which travel exactly as signed. Every error is a CBOR
-//! `{"code", "retry", ...}` with the contract's status. Bodies are read
-//! up to the operation's limit, and a larger one is `too-large` before
-//! anything else happens.
+//! `{"code", "retry", ...}` with the contract's status. A request that
+//! needs a session is authenticated from its headers before its body is
+//! read. Bodies are read up to the operation's limit, and a larger one is
+//! `too-large` before anything else happens to it.
 
 use std::sync::Arc;
 
@@ -356,8 +357,9 @@ async fn put_record(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let record: [u8; 32] = hex(&record)?;
-    let body = read(request.into_body(), MAX_WIRE_BYTES).await?;
+    // The session first: nobody without one makes the relay read a body.
     let device = authenticated(&api, &route, &headers).await?;
+    let body = read(request.into_body(), MAX_WIRE_BYTES).await?;
     Ok(receipt(
         api.relay.append(&route, &device, &record, &body).await?,
     ))
@@ -371,13 +373,21 @@ async fn put_authority(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let digest: Hash = hex(&digest)?;
+    // With a session, it is checked before the body is read. Without one,
+    // only membership transitions and root recoveries are taken: their
+    // signatures say who may publish them, and a device a restored relay no
+    // longer knows re-publishes the transition that admitted it (#45).
+    let device = if headers.contains_key(header::AUTHORIZATION) {
+        Some(authenticated_as(&api, &route, &headers, true).await?)
+    } else {
+        None
+    };
     let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
-    let device = authenticated_as(&api, &route, &headers, true).await?;
     // Who may publish what is checked with the object, in the transaction
     // that stores it (Relay::put_authority_as).
     Ok(receipt(
         api.relay
-            .put_authority_as(&route, Some(&device), &digest, &body)
+            .put_authority_as(&route, device.as_ref(), &digest, &body)
             .await?,
     ))
 }

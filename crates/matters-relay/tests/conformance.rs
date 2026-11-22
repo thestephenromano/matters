@@ -238,6 +238,7 @@ struct World {
     c: DeviceKeys,
     collection: Collection,
     records: BTreeMap<String, Named>,
+    controls: BTreeMap<String, Vec<u8>>,
     tokens: BTreeMap<String, [u8; 32]>,
     generations: BTreeMap<String, Vec<u8>>,
     cursors: BTreeMap<String, Vec<u8>>,
@@ -309,6 +310,7 @@ impl World {
             c,
             collection,
             records: BTreeMap::new(),
+            controls: BTreeMap::new(),
             tokens: BTreeMap::new(),
             generations: BTreeMap::from([("g0".to_owned(), g0.to_vec())]),
             cursors: BTreeMap::new(),
@@ -328,6 +330,48 @@ impl World {
             world.subscribe_hints().await;
         }
         Some(world)
+    }
+
+    /// A named control message, made once so that every step sends the
+    /// same bytes.
+    fn control(&mut self, name: &str) -> Vec<u8> {
+        if let Some(bytes) = self.controls.get(name) {
+            return bytes.clone();
+        }
+        let c = &self.collection;
+        let bytes = match name {
+            "membership-removing-B" => transition(c, vec![c.admin.member(true)]),
+            "membership-adding-C" => transition(
+                c,
+                vec![
+                    c.admin.member(true),
+                    self.b.member(false),
+                    self.c.member(false),
+                ],
+            ),
+            "writer-start-of-C" => matters_sync::authority::sign(
+                &matters_sync::authority::Message {
+                    route: route(),
+                    signer: self.c.id(),
+                    body: matters_sync::authority::Body::WriterStart(
+                        matters_sync::authority::WriterStart {
+                            manifest: c.authority.manifest(),
+                            document: [4; 16],
+                            device: self.c.id(),
+                            incarnation: fresh(),
+                            actor: 3,
+                            previous: None,
+                        },
+                    ),
+                },
+                self.c.signing_key(),
+                fresh(),
+            )
+            .unwrap(),
+            other => panic!("control {other}"),
+        };
+        self.controls.insert(name.to_owned(), bytes.clone());
+        bytes
     }
 
     fn device(&self, name: &str) -> &DeviceKeys {
@@ -662,20 +706,23 @@ impl World {
             return;
         }
         if let Some(kind) = step["put_authority"].as_str() {
-            assert_eq!(kind, "membership-removing-B");
-            let remove = transition(&self.collection, vec![self.collection.admin.member(true)]);
-            let token = self.token(&device, &route(), false).await;
+            let bytes = self.control(kind);
+            let token = if step["anonymous"] == true {
+                None
+            } else {
+                Some(self.token(&device, &route(), false).await)
+            };
             let path = format!(
                 "/v0/routes/{}/authority/{}",
                 route_hex(&route()),
-                hex(&record_hash(&remove))
+                hex(&record_hash(&bytes))
             );
             let response = http(
                 &self.relay.addr.clone(),
                 "PUT",
                 &path,
-                Some(&token),
-                &remove,
+                token.as_ref(),
+                &bytes,
             )
             .await;
             self.check(response.as_ref(), expect, context);
@@ -872,7 +919,7 @@ async fn every_conformance_scenario_passes_against_the_real_binary() {
         return;
     }
     let all = scenarios();
-    assert_eq!(all.len(), 13, "every scenario of the fixture");
+    assert_eq!(all.len(), 14, "every scenario of the fixture");
     for scenario in all {
         let name = scenario["name"].as_str().unwrap().to_owned();
         let wants_hints = scenario["steps"]
