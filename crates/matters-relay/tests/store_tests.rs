@@ -492,3 +492,44 @@ async fn an_older_relay_refuses_a_database_a_newer_one_migrated() {
     }
     db.finish().await;
 }
+
+#[tokio::test]
+async fn pages_hold_a_bounded_number_of_bytes_and_always_one_entry() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    let c = collection();
+    db.relay
+        .provision(&route(), c.keys.root_key(), &c.genesis)
+        .await
+        .unwrap();
+    // Seventeen checkpoint parts of about a megabyte each: more than one
+    // page's byte budget, far fewer than its entry limit.
+    let plaintext = vec![0x5a; 1_000_000];
+    for _ in 0..17 {
+        let id = fresh();
+        let bytes = snapshot_record(&c.admin, id, &plaintext, &route());
+        db.relay
+            .append(&route(), &c.admin.id(), &id, &bytes)
+            .await
+            .unwrap();
+    }
+    let size = |entries: &[(u64, Vec<u8>)]| entries.iter().map(|(_, b)| b.len()).sum::<usize>();
+    let budget = usize::try_from(matters_relay::MAX_PAGE_BYTES).unwrap();
+    let first = db.relay.records(&route(), None, 256).await.unwrap();
+    assert!(first.entries.len() < 17 && !first.entries.is_empty());
+    assert!(size(&first.entries) <= budget);
+    assert!(!first.complete, "the rest is on the next page");
+    let rest = db
+        .relay
+        .records(&route(), Some(&first.next), 256)
+        .await
+        .unwrap();
+    assert!(rest.complete);
+    assert_eq!(first.entries.len() + rest.entries.len(), 17);
+    let snapshots = db.relay.snapshots(&route(), 256).await.unwrap();
+    assert!(snapshots.entries.len() < 17 && !snapshots.entries.is_empty());
+    assert!(size(&snapshots.entries) <= budget);
+    assert_eq!(snapshots.entries[0].0, 17, "newest first");
+    db.finish().await;
+}

@@ -2,6 +2,10 @@
   "contract": "docs/SYNC_SERVICE_CONTRACT.md",
   "version": 0,
   "notation": "Each scenario runs against a fresh route with devices A and B in its roster and C not in it. Records are named; r1' has r1's record ID and different bytes. Sequences and generations are compared by name: g0 is the route's generation at provisioning, g1 a new one. 'any' accepts any value. A 'restart' step kills the relay process; 'restore' restores the database from a backup taken at the named step and runs the restore procedure; with 'keep_generation' it skips the procedure's new generation, as a careless operator might.",
+  "limits": {
+    "page_entries": 256,
+    "page_entry_bytes": 16777216
+  },
   "scenarios": [
     {
       "name": "duplicate-upload-returns-original-receipt",

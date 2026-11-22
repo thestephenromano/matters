@@ -7,6 +7,11 @@ use sqlx::{Postgres, Row, Transaction};
 
 /// The most records or authority objects one page returns.
 pub const MAX_PAGE: u32 = 256;
+/// The most entry bytes one page returns (records, authority objects or
+/// snapshots), beyond its first entry, which is always returned so that a
+/// page always makes progress. With records of up to about 1 MiB, a count
+/// alone would let one page hold 256 MiB, twice over in memory.
+pub const MAX_PAGE_BYTES: i64 = 16 * 1024 * 1024;
 /// The largest authority object accepted (the control budget).
 const MAX_AUTHORITY_BYTES: usize = authority::MAX_CONTROL_BYTES;
 
@@ -625,7 +630,8 @@ impl Relay {
     }
 
     /// A page of the route's records after `after` (from sequence 1 when
-    /// `None`), at most `limit` (1 to [`MAX_PAGE`]).
+    /// `None`), at most `limit` (1 to [`MAX_PAGE`]) and [`MAX_PAGE_BYTES`]
+    /// of entry bytes after the first.
     pub async fn records(&self, route: &Route, after: Option<&Cursor>, limit: u32) -> Result<Page> {
         self.page(route, after, limit, Log::Records).await
     }
@@ -651,11 +657,18 @@ impl Relay {
         let id: i64 = row.get("id");
         let generation = generation_of(row.get("generation"))?;
         let rows = sqlx::query(
-            "SELECT sequence, bytes FROM records WHERE route = $1 AND snapshot
-             ORDER BY sequence DESC LIMIT $2",
+            "SELECT sequence, bytes FROM (
+                 SELECT sequence, bytes,
+                        row_number() OVER (ORDER BY sequence DESC) AS n,
+                        SUM(octet_length(bytes)) OVER (ORDER BY sequence DESC) AS running
+                 FROM records WHERE route = $1 AND snapshot
+                 ORDER BY sequence DESC LIMIT $2
+             ) page WHERE n = 1 OR running <= $3
+             ORDER BY sequence DESC",
         )
         .bind(id)
         .bind(i64::from(limit))
+        .bind(MAX_PAGE_BYTES)
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -719,22 +732,38 @@ impl Relay {
             Some(cursor) => cursor.last,
             None => 0,
         };
+        // Up to `limit` entries, cut where their bytes pass the page's
+        // budget, but never below one entry. Sizes come from the column
+        // headers, so entries past the cut are never read out.
         let rows = sqlx::query(match log {
             Log::Records => {
-                "SELECT sequence, bytes FROM records
-                 WHERE route = $1 AND sequence > $2 AND sequence <= $3
-                 ORDER BY sequence LIMIT $4"
+                "SELECT sequence, bytes FROM (
+                     SELECT sequence, bytes,
+                            row_number() OVER (ORDER BY sequence) AS n,
+                            SUM(octet_length(bytes)) OVER (ORDER BY sequence) AS running
+                     FROM records
+                     WHERE route = $1 AND sequence > $2 AND sequence <= $3
+                     ORDER BY sequence LIMIT $4
+                 ) page WHERE n = 1 OR running <= $5
+                 ORDER BY sequence"
             }
             Log::Authority => {
-                "SELECT sequence, bytes FROM authority
-                 WHERE route = $1 AND sequence > $2 AND sequence <= $3
-                 ORDER BY sequence LIMIT $4"
+                "SELECT sequence, bytes FROM (
+                     SELECT sequence, bytes,
+                            row_number() OVER (ORDER BY sequence) AS n,
+                            SUM(octet_length(bytes)) OVER (ORDER BY sequence) AS running
+                     FROM authority
+                     WHERE route = $1 AND sequence > $2 AND sequence <= $3
+                     ORDER BY sequence LIMIT $4
+                 ) page WHERE n = 1 OR running <= $5
+                 ORDER BY sequence"
             }
         })
         .bind(id)
         .bind(i64::try_from(last).map_err(|_| RelayError::Malformed)?)
         .bind(i64::try_from(high_water).map_err(|_| RelayError::Malformed)?)
         .bind(i64::from(limit))
+        .bind(MAX_PAGE_BYTES)
         .fetch_all(&mut *tx)
         .await?;
         let entries: Vec<(u64, Vec<u8>)> = rows

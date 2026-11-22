@@ -83,7 +83,7 @@ GET /v0/routes/{route}/records?after={cursor}&limit={1..256}
        "next": h'<cursor>', "complete": false}
 ```
 
-The relay captures the route's high-water mark at the start of the request and returns records in sequence order up to it; records appended meanwhile belong to the next fetch. `complete` is true when the page reached the high-water mark. The cursor is opaque to clients: `CBOR([generation, last-sequence])`, base64url in the query. Omitting `after` starts from sequence 1. Records are immutable, so a client may retry a page and must deduplicate by record ID. A client advances its stored cursor only after it has durably stored the page's records locally (the receive commit of #35/#39).
+The relay captures the route's high-water mark at the start of the request and returns records in sequence order up to it; records appended meanwhile belong to the next fetch. A page holds at most `limit` entries and at most 16 MiB (16,777,216 bytes) of entry bytes, except that its first entry is always returned, so every page makes progress. A shorter page than `limit` is therefore not the end: `complete` is true when the page reached the high-water mark. The cursor is opaque to clients: `CBOR([generation, last-sequence])`, base64url in the query. Omitting `after` starts from sequence 1. Records are immutable, so a client may retry a page and must deduplicate by record ID. A client advances its stored cursor only after it has durably stored the page's records locally (the receive commit of #35/#39).
 
 A cursor from another generation gets `410 generation-changed` with the current generation (see *Restore*). So does a cursor of the current generation whose last sequence is past the route's high-water mark: history shrank without a new generation (a restore that skipped that step), and an empty, complete page would let the client wait for sequences that were lost. The same holds for the authority log's cursors. An empty page is not evidence that history never existed; a missing predecessor stays pending on the client.
 
@@ -107,7 +107,7 @@ GET /v0/routes/{route}/snapshots?limit={1..256}
 → 200 {"generation": h'…', "records": [[57, h'<record>'], [41, h'<record>'], …]}
 ```
 
-This returns the route's newest `snapshot` records, newest first, with their sequences. A new device uses it to start from the newest checkpoint instead of reading the whole log (SYNC_CHECKPOINTS.md).
+This returns the route's newest `snapshot` records, newest first, with their sequences, under the same limits as a page: at most `limit` entries and 16 MiB of entry bytes beyond the first. A new device uses it to start from the newest checkpoint instead of reading the whole log (SYNC_CHECKPOINTS.md).
 
 The relay tells these records apart only by their clear kind. It cannot see which checkpoint a part belongs to, or whether a checkpoint is complete. The client groups the parts and checks them. The same records also appear in the ordinary record log. An empty list means the relay holds no checkpoint, not that none was ever made.
 
@@ -174,7 +174,7 @@ A malicious or careless operator can hide a reset by keeping the generation; cli
 
 [The fixture scenarios](protocol/sync-relay-v0-conformance.json) are transport-level scripts with expected statuses and receipts. #38's relay and any other implementation must pass them against a real PostgreSQL instance, including crashes before and after commit; #39's client must handle each documented response. They cover duplicate uploads, same-ID conflicts, context mismatch, reconnect and cursor resume, pagination with concurrent appends, generation change after a restore, session expiry, revoked devices and quota errors. The relay's runner is [`crates/matters-relay/tests/conformance.rs`](../crates/matters-relay/tests/conformance.rs). It reads this file, drives the real binary, and runs in CI's "relay against PostgreSQL" job.
 
-Resource limits (body sizes above, page limit 256, challenge and token lifetimes) are chosen v0 values, measured under #43's workloads before a pilot. Rate limits and quotas are operator configuration, reported through `429` and `507`.
+Resource limits (body sizes above, page limits of 256 entries and 16 MiB, challenge and token lifetimes; the fixture file's `limits` lists them and the runner checks the relay's against it) are chosen v0 values, measured under #43's workloads before a pilot. Rate limits and quotas are operator configuration, reported through `429` and `507`.
 
 ## Out of scope for v0
 

@@ -846,6 +846,24 @@ fn scenarios() -> Vec<Value> {
     fixture["scenarios"].as_array().unwrap().clone()
 }
 
+/// The fixture's resource limits are the relay's.
+#[test]
+fn the_fixtures_limits_are_the_relays() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../docs/protocol/sync-relay-v0-conformance.json"
+    ))
+    .unwrap();
+    let limits = &fixture["limits"];
+    assert_eq!(
+        limits["page_entries"].as_u64(),
+        Some(u64::from(matters_relay::MAX_PAGE))
+    );
+    assert_eq!(
+        limits["page_entry_bytes"].as_i64(),
+        Some(matters_relay::MAX_PAGE_BYTES)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn every_conformance_scenario_passes_against_the_real_binary() {
     if std::env::var_os("MATTERS_RELAY_TEST_DATABASE_URL").is_none() {

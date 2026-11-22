@@ -18,6 +18,8 @@ session-response = {"token": id32, "expires": unix-ms, "generation": id16}
 
 receipt = {"sequence": seq, "generation": id16, "digest": hash48}
 
+; At most `limit` (1..256) entries and 16 MiB of entry bytes; the first
+; entry is always included. "complete", not the length, marks the end.
 page = {
   "generation": id16,
   "high-water": seq / 0,
@@ -27,7 +29,8 @@ page = {
 }
 cursor = bstr .cbor [generation: id16, last-sequence: seq / 0]
 
-; GET /v0/routes/{route}/snapshots: snapshot records only, newest first.
+; GET /v0/routes/{route}/snapshots: snapshot records only, newest first,
+; under the page's limits.
 snapshots = {"generation": id16, "records": [* [seq, bstr]]}
 
 hint = {"generation": id16, "sequence": seq}
