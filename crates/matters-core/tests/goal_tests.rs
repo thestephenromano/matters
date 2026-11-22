@@ -668,11 +668,26 @@ fn existing_databases_gain_goal_columns_without_losing_data() {
         let mut garden = Project::new(id(10), "Garden", 0.0);
         db.add_project(&mut garden).unwrap();
         task_on(&db, 1, Some(day(10)));
-        // Back to the schema before goal references.
+        // Back to the schema before goal references: v15's columns, and the
+        // (empty) sync tables v16 and later create, since opening runs every
+        // migration after the newest applied one again.
         db.with_raw_conn(|c| {
             c.execute_batch(
                 "ALTER TABLE projects DROP COLUMN goal_id;
                  ALTER TABLE tasks DROP COLUMN goal_id;
+                 DROP TABLE IF EXISTS sync_received;
+                 DROP TABLE IF EXISTS sync_receive_heads;
+                 DROP TABLE IF EXISTS sync_pending;
+                 DROP TABLE IF EXISTS sync_pending_v16;
+                 DROP TABLE IF EXISTS sync_cursors;
+                 DROP TABLE IF EXISTS sync_checkpoint_out;
+                 DROP TABLE IF EXISTS sync_checkpoint_parts;
+                 DROP TABLE IF EXISTS sync_checkpoints;
+                 DROP TABLE IF EXISTS sync_receive_base;
+                 DROP TABLE IF EXISTS sync_covered;
+                 DROP TABLE IF EXISTS sync_quarantine;
+                 DROP TABLE IF EXISTS sync_frozen;
+                 DROP TABLE IF EXISTS sync_checkpoint_waits;
                  DELETE FROM schema_migrations WHERE version >= 15;",
             )?;
             Ok(())
