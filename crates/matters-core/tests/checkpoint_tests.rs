@@ -905,3 +905,63 @@ fn a_checkpoint_naming_another_head_of_a_devices_own_chain_is_a_fork() {
         Checkpointed::Accepted
     );
 }
+
+#[test]
+fn covered_records_met_again_in_chain_order_keep_their_positions() {
+    let p = pair();
+    let from_a = records(&p.a);
+    assert_eq!(from_a.len(), 2);
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    let (c, _) = join(&p.a, &p.dir.path().join("c.db"));
+    assert!(c.start_from_checkpoint(&parts(&p.a), GENERATION).unwrap());
+    // The first record waits; the covered head then walks back to it.
+    let _ = c.receive_record(&from_a[0]).unwrap();
+    let _ = c.receive_record(&from_a[1]).unwrap();
+    assert!(c.pending_records().unwrap().is_empty(), "both recognised");
+    let positions: Vec<(Vec<u8>, i64)> = c
+        .with_conn(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT digest, position FROM sync_covered ORDER BY position")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    let expected: Vec<(Vec<u8>, i64)> = from_a
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (record_hash(r).to_vec(), i as i64 + 1))
+        .collect();
+    assert_eq!(positions, expected);
+}
+
+#[test]
+fn a_checkpoint_carries_at_most_its_budget_of_pending_records() {
+    let p = pair();
+    acknowledge_all(&p.a);
+    let carry = |n: usize| {
+        p.a.with_raw_conn(|c| {
+            c.execute("DELETE FROM sync_pending", [])?;
+            Ok(c.execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+                 INSERT INTO sync_pending (record_id, digest, bytes, reason, authenticated)
+                     SELECT randomblob(32), randomblob(48), randomblob(24), 'carried', 1 FROM n",
+                [n as i64],
+            )?)
+        })
+        .unwrap()
+    };
+    carry(checkpoint::MAX_PENDING);
+    let id = p.a.create_checkpoint(cursor(2)).unwrap();
+    assert!(id.is_some(), "exactly the budget is carried");
+    assert_eq!(
+        p.a.latest_checkpoint().unwrap().unwrap().pending.len(),
+        checkpoint::MAX_PENDING
+    );
+    carry(checkpoint::MAX_PENDING + 1);
+    assert_eq!(
+        p.a.create_checkpoint(cursor(3)).unwrap(),
+        None,
+        "past it, none"
+    );
+}

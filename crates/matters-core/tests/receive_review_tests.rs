@@ -1148,3 +1148,150 @@ fn records_kept_before_v19_are_received_again_once() {
         .unwrap();
     assert_eq!(left, 0, "each received again once");
 }
+
+fn count(db: &Database, sql: &str) -> i64 {
+    db.with_conn(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+        .unwrap()
+}
+
+#[test]
+fn a_checkpoint_head_missing_from_records_received_before_positions_were_kept_is_a_fork() {
+    let p = pair();
+    let mut chain = records(&p.a);
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    let parts = checkpoint_parts(&p.a);
+    let head = record_hash(chain.last().unwrap());
+    p.a.add_task(&mut Task::new(id(3), "from A, three", 2.0))
+        .unwrap();
+    chain.extend(records(&p.a));
+    for r in &chain {
+        assert_eq!(p.b.receive_record(r).unwrap(), Received::Applied);
+    }
+    // B's rows from before v19 hold A's chain past the checkpoint's length,
+    // but not the head it lists at that length.
+    p.b.with_raw_conn(|c| {
+        c.execute("UPDATE sync_received SET position = NULL", [])?;
+        Ok(c.execute(
+            "UPDATE sync_received SET digest = zeroblob(48) WHERE digest = ?1",
+            [head.as_slice()],
+        )?)
+    })
+    .unwrap();
+    match p.b.receive_record(&parts[0]).unwrap() {
+        Received::Checkpoint(Checkpointed::Refused(reason)) => {
+            assert!(reason.contains("another head"), "{reason}")
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn decided_checkpoints_past_the_budget_are_pruned() {
+    let p = pair();
+    for r in records(&p.a) {
+        p.b.receive_record(&r).unwrap();
+    }
+    p.b.with_raw_conn(|c| {
+        Ok(c.execute_batch(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 40)
+             INSERT INTO sync_checkpoints (id, coverage, state, reason)
+                 SELECT randomblob(48), x'00', 'refused', 'old' FROM n;",
+        )?)
+    })
+    .unwrap();
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    match p.b.receive_record(&checkpoint_parts(&p.a)[0]).unwrap() {
+        Received::Checkpoint(Checkpointed::Accepted) => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        count(
+            &p.b,
+            "SELECT COUNT(*) FROM sync_checkpoints WHERE state != 'accepted'"
+        ),
+        matters_core::storage::checkpoint::KEEP_DECIDED
+    );
+    assert_eq!(
+        count(
+            &p.b,
+            "SELECT COUNT(*) FROM sync_checkpoints WHERE state = 'accepted'"
+        ),
+        1
+    );
+}
+
+#[test]
+fn the_first_part_of_a_checkpoint_of_two_waits_for_the_other() {
+    let p = pair();
+    acknowledge_all(&p.a);
+    p.a.create_checkpoint(cursor(2)).unwrap().unwrap();
+    let a_dev = keys(&p.a_keys);
+    let honest = opened_parts(&p.a, &a_dev);
+    let part = checkpoint::parse_part(&honest[0]).unwrap();
+    let c = checkpoint::Coverage::parse(part.coverage.unwrap()).unwrap();
+    // A payload past one chunk: two parts, the first naming the total.
+    let two = Checkpoint::new(
+        checkpoint::Statement {
+            engine: c.engine,
+            schema: c.schema,
+            epoch: c.epoch,
+            writers: c.writers,
+            version: c.version,
+            frontiers: c.frontiers,
+            cursor: c.cursor,
+        },
+        vec![7; checkpoint::CHUNK_BYTES],
+        vec![],
+    )
+    .unwrap();
+    let plaintexts = two.parts().unwrap();
+    assert_eq!(plaintexts.len(), 2);
+    let sealed = sealed_parts(&p.a, &a_dev, &plaintexts);
+    match p.b.receive_record(&sealed[0]).unwrap() {
+        Received::Checkpoint(Checkpointed::Part) => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(parts_kept(&p.b), 1, "kept until the other arrives");
+}
+
+#[test]
+fn a_covered_chain_met_again_is_walked_within_its_writer() {
+    let p = pair();
+    let a_dev = keys(&p.a_keys);
+    let incarnation = p.a.writer_incarnation().unwrap();
+    // A record under another incarnation, and one of A's chain that names
+    // it as its predecessor: both wait on B.
+    let foreign = data(&p.a, &a_dev, fresh(), None, b"x");
+    let linked = data(&p.a, &a_dev, incarnation, Some(record_hash(&foreign)), b"x");
+    for r in [&foreign, &linked] {
+        assert!(matches!(
+            p.b.receive_record(r).unwrap(),
+            Received::Pending(_)
+        ));
+    }
+    // A checkpoint B started from covers A's chain up to `linked`.
+    p.b.with_raw_conn(|c| {
+        Ok(c.execute(
+            "INSERT INTO sync_receive_base (incarnation, base, base_head) VALUES (?1, 1, ?2)",
+            rusqlite::params![incarnation.as_slice(), record_hash(&linked).as_slice()],
+        )?)
+    })
+    .unwrap();
+    let _ =
+        p.b.receive_record(&data(&p.a, &a_dev, fresh(), None, b"y"))
+            .unwrap();
+    let digest = |r: &[u8]| {
+        p.b.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM sync_pending WHERE digest = ?1",
+                [record_hash(r).as_slice()],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+        .unwrap()
+    };
+    assert_eq!(digest(&linked), 0, "met again, covered");
+    assert_eq!(digest(&foreign), 1, "another writer's record stays");
+}

@@ -346,18 +346,20 @@ fn judge(conn: &Connection, joined: &Joined, doc: &Document, c: &Checkpoint) -> 
             }
             std::cmp::Ordering::Greater => {
                 // The record at the listed length must be the listed head.
-                let known = if w.records == held.base && !held.own {
-                    held.base_head == Some(w.head)
-                } else {
-                    match at_position(conn, &w.incarnation, w.records, held.own)? {
+                let known = match w.records.cmp(&held.base) {
+                    // The head of the checkpoint this device started from.
+                    // A device's own chain has no base, and a checkpoint
+                    // lists no empty chain, so this is a received one.
+                    std::cmp::Ordering::Equal => held.base_head == Some(w.head),
+                    order => match at_position(conn, &w.incarnation, w.records, held.own)? {
                         Some(digest) => digest == w.head,
                         // Received before positions were kept.
-                        None if w.records > held.base => {
+                        None if order == std::cmp::Ordering::Greater => {
                             holds(conn, &w.incarnation, &w.head, held.own)?
                         }
                         // Inside what this device knows only by its length.
                         None => true,
-                    }
+                    },
                 };
                 if !known {
                     return Ok(fork());
