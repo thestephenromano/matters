@@ -20,6 +20,15 @@ finish-args:
   - --device=dri
   # Reminders (#60) are desktop notifications.
   - --talk-name=org.freedesktop.Notifications
+  # Sync to the relay (#39, #42): HTTPS, and its hints WebSocket.
+  - --share=network
+  # The sync device keys (#37) need nothing more: inside the sandbox oo7
+  # keeps them in a file keyring under the app's own data directory,
+  # sealed with a key from the Secret portal, which a Flatpak reaches
+  # without a permission. oo7 falls back to the host's Secret Service only
+  # where the portal is missing; that would take
+  # --talk-name=org.freedesktop.secrets, the whole host keyring, so it is
+  # not granted.
 modules:
   - name: matters
     buildsystem: simple
