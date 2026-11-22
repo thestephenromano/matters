@@ -325,7 +325,7 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
     let recovering = Recovering {
         db: r.clone(),
         keys: MemoryKeyStore::default(),
-        words: words.clone(),
+        words: words.clone().into(),
         route: route(),
     };
     assert_eq!(recovering.route().unwrap(), route());
@@ -372,14 +372,15 @@ fn a_recovering_device_signs_in_as_the_root_and_recovers() {
         keys: MemoryKeyStore::default(),
         words: matters_sync::authority::RecoverySecret::new([3; 32])
             .words()
-            .unwrap(),
+            .unwrap()
+            .into(),
         route: route(),
     };
     assert_ne!(wrong.root().unwrap(), root);
     assert!(Recovering {
         db: r,
         keys: MemoryKeyStore::default(),
-        words: "not words".into(),
+        words: String::from("not words").into(),
         route: route(),
     }
     .root()

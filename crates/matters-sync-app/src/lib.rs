@@ -37,6 +37,7 @@ use matters_core::{Database, MattersError};
 use matters_sync::authority::{parse, Body, Hash, Invitation, Route};
 use matters_sync_client::{check_endpoint, Attention, Client, Joiner, Recoverer, Status};
 use tokio::sync::watch;
+use zeroize::Zeroizing;
 
 /// The application ID every Matters collection is routed under.
 pub const MATTERS_APPLICATION: [u8; 16] = *b"io.matters.tasks";
@@ -93,8 +94,8 @@ pub struct RecoveryKit {
     pub endpoint: String,
     /// The collection's ID, in groups.
     pub collection: String,
-    /// The 24 recovery words.
-    pub words: String,
+    /// The 24 recovery words, wiped from memory when dropped.
+    pub words: Zeroizing<String>,
 }
 
 /// What the relay's operator needs to accept a new collection.
@@ -465,7 +466,7 @@ impl SyncApp {
             v.kit = Some(RecoveryKit {
                 endpoint: endpoint.clone(),
                 collection: collection_id(&route),
-                words,
+                words: Zeroizing::new(words),
             });
             v.provisioning = Some(provisioning);
         });
@@ -652,7 +653,7 @@ impl SyncApp {
             Arc::new(Recovering {
                 db: self.inner.db.clone(),
                 keys: self.inner.keys.clone(),
-                words: words.to_owned(),
+                words: Zeroizing::new(words.to_owned()),
                 route,
             }),
         )

@@ -1270,7 +1270,7 @@ impl qobject::AppController {
             serde_json::json!({
                 "endpoint": k.endpoint,
                 "collection": k.collection,
-                "words": k.words,
+                "words": k.words.as_str(),
             })
             .to_string()
         });

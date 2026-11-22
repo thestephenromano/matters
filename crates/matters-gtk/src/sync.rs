@@ -516,7 +516,9 @@ impl SyncPanel {
             Some(kit) => {
                 self.kit_text.set_label(&format!(
                     "Relay address\n{}\n\nCollection ID\n{}\n\nRecovery words\n{}",
-                    kit.endpoint, kit.collection, kit.words
+                    kit.endpoint,
+                    kit.collection,
+                    kit.words.as_str()
                 ));
                 if !self.kit_window.is_visible() {
                     GtkWindowExt::set_focus(&self.kit_window, Some(&self.kit_kept));
