@@ -14,7 +14,7 @@ The relay stores only what clients have already encrypted and signed: records, a
 | --- | --- | --- |
 | `postgres` | `postgres:18.7` | The relay's store: every acknowledgement is a committed transaction (ADR 0003). Data in the `postgres` volume. |
 | `relay` | built from `packaging/relay/Containerfile` | The relay, distroless and unprivileged, on the private network only. API on 8484, metrics on 9484. |
-| `caddy` | `caddy:2.11` | TLS in front, with certificates from a public CA, or its own CA with `internal`. It publishes 443 and 80, and forwards only `/v0/*`, `/healthz` and `/readyz`. |
+| `caddy` | `caddy:2.11` | TLS in front, with certificates from a public CA, or its own CA with `internal`. It publishes 443 and 80, and forwards only `/v0/*`, `/healthz` and `/readyz`, except export (`/v0/routes/*/export`), which it answers `404`. |
 
 The image build is reproducible from source:
 - base images are pinned by digest;
@@ -24,7 +24,8 @@ The image build is reproducible from source:
 
 CI's `self-hosted relay image` job (`ci/relay-image.sh`) runs whenever the relay, matters-sync or the packaging changes. It builds the image and brings the stack up, then checks that:
 - the relay is ready over TLS through Caddy, on HTTP/2;
-- metrics are not public, and are served on the private network.
+- metrics are not public, and are served on the private network;
+- export is not reachable through Caddy.
 
 ## Setting up
 
@@ -98,6 +99,8 @@ The devices re-send what the copy lacked and agree again. The re-sent record is 
 The drill shows what the recovery point means in practice. An edit acknowledged after the backup survives *because a device still held it*. If every device that held it is lost too, it is lost.
 
 `matters-relay export` and `import` move one route between deployments with every byte unchanged, under a new generation (SYNC_SERVICE_CONTRACT.md).
+
+Export is operator-only. Run `matters-relay export` in the relay's container, or call `GET /v0/routes/{route}/export` with `MATTERS_RELAY_OPERATOR_TOKEN` on the relay's own listener (port 8484 on the stack's private network). Caddy refuses the path on the public name, so a leaked token alone cannot read a route from outside.
 
 ## Upgrades
 

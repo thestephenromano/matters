@@ -157,7 +157,7 @@ GET /v0/routes/{route}/export   (operator credential)
                          [authority-bytes…], [[sequence, record-bytes]…]]
 ```
 
-Export preserves every authority object and record byte for byte, with its sequence. Import (an operator action on the target relay) stores the same bytes and assigns a **new generation**; sequences may be renumbered but keep the exported order. Authenticated bytes and identities never change, so clients move between managed and self-hosted relays by switching the endpoint and resynchronizing. Nothing in either format is specific to Matters' task model.
+Export is an operator action: a deployment serves it only to its operators (the self-hosted stack's proxy refuses the path on its public name; SELF_HOSTING.md). Export preserves every authority object and record byte for byte, with its sequence. Import (an operator action on the target relay) stores the same bytes and assigns a **new generation**; sequences may be renumbered but keep the exported order. Authenticated bytes and identities never change, so clients move between managed and self-hosted relays by switching the endpoint and resynchronizing. Nothing in either format is specific to Matters' task model.
 
 ## Errors, quotas and retries
 
