@@ -8,7 +8,7 @@ Status: a draft for the maintainer to adapt and send ([#45](https://github.com/t
 
 Dear [reviewer],
 
-I maintain [Matters](https://github.com/thestephenromano/matters), a personal task manager for Linux desktops (Qt and GTK). Its optional sync keeps a person's devices in step through a relay that stores only ciphertext. I am looking for an independent review of the protocol and its implementation before any real user's data goes through it. I would like your assessment, and if you take this on, your report.
+I maintain [Matters](https://github.com/thestephenromano/matters), a personal task manager for the Linux desktop (Qt). Its optional sync keeps a person's devices in step through a relay that stores only ciphertext. I am looking for an independent review of the protocol and its implementation before any real user's data goes through it. I would like your assessment, and if you take this on, your report.
 
 ## What it is
 

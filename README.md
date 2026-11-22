@@ -25,20 +25,19 @@ matters/
 │   └── SPEC.md                 # Product & technical specification
 ├── crates/
 │   ├── matters-core/           # Pure Rust domain & SQLite storage engine
-│   ├── matters-ui/             # Qt 6 / QML interface layer (cxx-qt)
-│   └── matters-gtk/            # GTK 4 / libadwaita interface (secondary)
+│   └── matters-ui/             # Qt 6 / QML interface layer (cxx-qt)
 ├── ci/                         # System packages and the gates CI runs
 ```
 
 For full architectural, data model, and interaction specifications, see [docs/SPEC.md](docs/SPEC.md).
 
-Planned synchronization requirements and evaluation gates are recorded in the [encrypted sync design](docs/SYNC_DESIGN.md), including post-quantum end-to-end encryption and an independently usable sync service. Decisions so far: [Loro as the CRDT engine](docs/decisions/0001-crdt-adoption.md), [the post-quantum record stack for prototype evaluation](docs/decisions/0002-post-quantum-sync.md) and [the relay components](docs/decisions/0003-relay-components.md), with the [service contract](docs/SYNC_SERVICE_CONTRACT.md).
+Planned synchronization requirements and evaluation gates are recorded in the [encrypted sync design](docs/SYNC_DESIGN.md), including post-quantum end-to-end encryption and an independently usable sync service. Decisions so far: [one front end, Qt](docs/decisions/0005-one-front-end.md), [Loro as the CRDT engine](docs/decisions/0001-crdt-adoption.md), [the post-quantum record stack for prototype evaluation](docs/decisions/0002-post-quantum-sync.md) and [the relay components](docs/decisions/0003-relay-components.md), with the [service contract](docs/SYNC_SERVICE_CONTRACT.md).
 
 ---
 
 ## Building and Testing
 
-Matters needs Qt 6.8 or later, GTK 4 with libadwaita 1.5 or later, and the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it). On Fedora, `sudo ci/fedora-deps.sh` installs the system packages; the cargo tools the gates use (cargo-deny, cargo-mutants, cargo-llvm-cov) are pinned in `ci/tool-versions`.
+Matters needs Qt 6.8 or later and the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it). On Fedora, `sudo ci/fedora-deps.sh` installs the system packages; the cargo tools the gates use (cargo-deny, cargo-mutants, cargo-llvm-cov) are pinned in `ci/tool-versions`.
 
 ```sh
 cargo run -p matters-ui     # the Qt app
@@ -50,7 +49,7 @@ Each gate is a script in `ci/` that runs the same locally and in CI. A gate that
 - `ci/hygiene.sh`: no tracked files that `.gitignore` excludes, shellcheck on `ci/*.sh`, and the Flatpak's Rust archives match `rust-toolchain.toml`.
 - `ci/lint.sh`: rustfmt, clippy with warnings denied, and rustdoc with warnings denied.
 - `ci/deny.sh`: cargo-deny against `deny.toml` (advisories, licenses, banned crates, sources). Every advisory exception names its reason and the issue that retires it.
-- `ci/workspace-tests.sh`: the core tests, a `qmllint` check of the QML against the generated bridge types, and GTK widget tests on a headless Broadway display.
+- `ci/workspace-tests.sh`: the workspace tests, including a `qmllint` check of the QML against the generated bridge types.
 - `ci/ui-lane.sh reduced|animations`: the Qt Quick interaction tests, offscreen, with animations off or on. The lane checks that every test in `tests/qml` ran, keeps to a time budget, and writes a JUnit report. Set `MATTERS_UI_TEST_PLATFORM=wayland` to watch the tests run.
 - `ci/style-check.sh`: Matters' control style holds under the desktop's Qt platform theme, COSMIC's included.
 - `ci/coverage.sh`: matters-core's line coverage, held to a floor set just under the measured figure. It writes an lcov report.

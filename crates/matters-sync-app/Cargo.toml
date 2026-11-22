@@ -5,7 +5,7 @@ edition = "2021"
 license.workspace = true
 publish = false
 authors = ["Matters Contributors"]
-description = "The Matters app's sync session (#42): setup, joining, recovery and status for the Qt and GTK frontends"
+description = "The Matters app's sync session (#42): setup, joining, recovery and status for the Qt app"
 
 [dependencies]
 matters-core = { path = "../matters-core" }

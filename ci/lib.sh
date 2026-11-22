@@ -44,8 +44,9 @@ require_tool() {
     command -v "$1" >/dev/null 2>&1 || cannot_run "$1 is not installed${2:+ ($2)}"
 }
 
-# The GTK widget tests start a Broadway display, which puts its socket in
-# XDG_RUNTIME_DIR; containers and CI runners usually don't set one.
+# Tests that start their own services (a private D-Bus daemon, a Qt
+# platform) may put sockets in XDG_RUNTIME_DIR; containers and CI runners
+# usually don't set one.
 ensure_runtime_dir() {
     if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
         XDG_RUNTIME_DIR="$(mktemp -d)"

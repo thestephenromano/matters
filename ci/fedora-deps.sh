@@ -12,11 +12,13 @@ packages=(
     qt6-qtbase-devel qt6-qtdeclarative-devel
     # lrelease builds the translation catalogs in; lupdate checks them (#75).
     qt6-linguist
-    gtk4-devel libadwaita-devel
     mesa-dri-drivers dejavu-sans-fonts
     ShellCheck tar gzip
     # A private bus for the single-instance and activation tests (#203).
     dbus-daemon
+    # diff, for the translation-catalog check (until #261 it came in with
+    # GTK's development packages).
+    diffutils
 )
 if [ "${1:-}" = "--desktop-themes" ]; then
     packages+=(cutecosmic-qt6 kf6-qqc2-desktop-style)
