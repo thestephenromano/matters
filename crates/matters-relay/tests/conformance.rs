@@ -586,8 +586,10 @@ impl World {
                     .await
                     .unwrap();
             }
-            // The restore procedure.
-            cli(&self.db.url(), &["new-generation", "--all"]);
+            // The restore procedure, unless the scenario skips its last step.
+            if step["keep_generation"] != true {
+                cli(&self.db.url(), &["new-generation", "--all"]);
+            }
             self.db.relay = matters_relay::Relay::connect(&self.db.url()).await.unwrap();
             self.relay = start(&self.db.url(), &pairs(&self.env));
             // Sessions opened after the backup are gone with it.
@@ -852,7 +854,7 @@ async fn every_conformance_scenario_passes_against_the_real_binary() {
         return;
     }
     let all = scenarios();
-    assert_eq!(all.len(), 12, "every scenario of the fixture");
+    assert_eq!(all.len(), 13, "every scenario of the fixture");
     for scenario in all {
         let name = scenario["name"].as_str().unwrap().to_owned();
         let wants_hints = scenario["steps"]

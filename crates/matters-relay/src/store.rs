@@ -708,8 +708,12 @@ impl Relay {
         let id: i64 = row.get("id");
         let generation = generation_of(row.get("generation"))?;
         let high_water = sequence(row.get("high_water"));
+        // A cursor of another generation, or one past the high-water mark
+        // (history shrank under the same generation: a restore that skipped
+        // `new-generation`), is not continuity. Answering it with an empty,
+        // complete page would silently skip whatever is appended next.
         let last = match after {
-            Some(cursor) if cursor.generation != generation => {
+            Some(cursor) if cursor.generation != generation || cursor.last > high_water => {
                 return Err(RelayError::GenerationChanged { generation });
             }
             Some(cursor) => cursor.last,

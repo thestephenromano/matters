@@ -85,7 +85,7 @@ GET /v0/routes/{route}/records?after={cursor}&limit={1..256}
 
 The relay captures the route's high-water mark at the start of the request and returns records in sequence order up to it; records appended meanwhile belong to the next fetch. `complete` is true when the page reached the high-water mark. The cursor is opaque to clients: `CBOR([generation, last-sequence])`, base64url in the query. Omitting `after` starts from sequence 1. Records are immutable, so a client may retry a page and must deduplicate by record ID. A client advances its stored cursor only after it has durably stored the page's records locally (the receive commit of #35/#39).
 
-A cursor from another generation gets `410 generation-changed` with the current generation (see *Restore*). An empty page is not evidence that history never existed; a missing predecessor stays pending on the client.
+A cursor from another generation gets `410 generation-changed` with the current generation (see *Restore*). So does a cursor of the current generation whose last sequence is past the route's high-water mark: history shrank without a new generation (a restore that skipped that step), and an empty, complete page would let the client wait for sequences that were lost. The same holds for the authority log's cursors. An empty page is not evidence that history never existed; a missing predecessor stays pending on the client.
 
 ### Enrollment mailbox
 

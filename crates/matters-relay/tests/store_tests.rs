@@ -265,6 +265,28 @@ async fn pages_resume_by_cursor_stop_at_their_high_water_and_refuse_old_generati
             "malformed"
         );
     }
+    // A cursor past the high-water mark under the same generation is a
+    // restore that kept the generation: refused as a change, not answered
+    // with an empty, complete page.
+    let beyond = Cursor {
+        last: second.high_water + 1,
+        ..second.next
+    };
+    for log in [true, false] {
+        let page = if log {
+            db.relay.records(&route(), Some(&beyond), 10).await
+        } else {
+            db.relay
+                .authority_objects(&route(), Some(&beyond), 10)
+                .await
+        };
+        match page {
+            Err(RelayError::GenerationChanged { generation: g }) => {
+                assert_eq!(g, second.generation)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
     // After a restore installs a new generation, old cursors are refused
     // and name the new generation.
     let generation = db.relay.new_generation(&route()).await.unwrap();

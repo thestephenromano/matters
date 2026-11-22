@@ -1,7 +1,7 @@
 {
   "contract": "docs/SYNC_SERVICE_CONTRACT.md",
   "version": 0,
-  "notation": "Each scenario runs against a fresh route with devices A and B in its roster and C not in it. Records are named; r1' has r1's record ID and different bytes. Sequences and generations are compared by name: g0 is the route's generation at provisioning, g1 a new one. 'any' accepts any value. A 'restart' step kills the relay process; 'restore' restores the database from a backup taken at the named step and runs the restore procedure.",
+  "notation": "Each scenario runs against a fresh route with devices A and B in its roster and C not in it. Records are named; r1' has r1's record ID and different bytes. Sequences and generations are compared by name: g0 is the route's generation at provisioning, g1 a new one. 'any' accepts any value. A 'restart' step kills the relay process; 'restore' restores the database from a backup taken at the named step and runs the restore procedure; with 'keep_generation' it skips the procedure's new generation, as a careless operator might.",
   "scenarios": [
     {
       "name": "duplicate-upload-returns-original-receipt",
@@ -80,6 +80,19 @@
         {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1", "r2"]}}
       ],
       "note": "r2 was acknowledged and lost by the restore; A re-uploads it after the generation change."
+    },
+    {
+      "name": "a-cursor-past-the-high-water-mark-is-a-generation-change",
+      "steps": [
+        {"as": "A", "append": "r1", "expect": {"status": 201, "sequence": 1, "generation": "g0"}},
+        {"backup": "b1"},
+        {"as": "A", "append": "r2", "expect": {"status": 201, "sequence": 2}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1", "r2"], "save_cursor": "c2"}},
+        {"restore": "b1", "keep_generation": true},
+        {"as": "B", "fetch": {"after": "c2"}, "expect": {"status": 410, "code": "generation-changed", "generation": "g0"}},
+        {"as": "B", "fetch": {"after": null}, "expect": {"records": ["r1"], "generation": "g0"}}
+      ],
+      "note": "A restore that skipped the new generation leaves the old one in place, but c2 now points past the high-water mark. The relay answers that as a generation change, so B resynchronizes instead of waiting past sequence 2 for records that were lost and will be renumbered."
     },
     {
       "name": "sessions-are-device-and-roster-bound",
