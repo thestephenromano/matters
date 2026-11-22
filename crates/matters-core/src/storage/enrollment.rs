@@ -335,15 +335,18 @@ fn held_head(conn: &Connection, held: &[SignedRecord], incarnation: &Id) -> Resu
         .map(|h| h.try_into())
         .transpose()
         .map_err(|_| MattersError::Validation("stored chain head".into()))?;
-    loop {
+    // Each step moves to a held record further along the chain, so the walk
+    // takes at most one step per held record.
+    for _ in 0..held.len() {
         let mut next = held
             .iter()
             .filter(|r| &r.incarnation == incarnation && r.previous == head);
         match (next.next(), next.next()) {
             (Some(only), None) => head = Some(only.hash),
-            _ => return Ok(head),
+            _ => break,
         }
     }
+    Ok(head)
 }
 
 fn not_resumed() -> MattersError {
@@ -870,6 +873,61 @@ mod tests {
             incarnation: [n; 32],
             head: None,
         }
+    }
+
+    fn record(incarnation: u8, previous: Option<u8>, hash: u8) -> SignedRecord {
+        SignedRecord {
+            author: [9; 48],
+            incarnation: [incarnation; 32],
+            previous: previous.map(|p| [p; 48]),
+            hash: [hash; 48],
+        }
+    }
+
+    /// The held head follows the chain from what this device applied, one
+    /// signed successor at a time, and stops at a gap, a fork or another
+    /// writer's records.
+    #[test]
+    fn the_held_head_follows_only_this_writers_unbroken_chain() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sync_receive_heads (incarnation BLOB, head BLOB);
+             CREATE TABLE sync_receive_base (incarnation BLOB, base_head BLOB);
+             CREATE TABLE sync_writers (incarnation BLOB, head BLOB);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_receive_heads VALUES (?1, ?2)",
+            params![[1u8; 32].as_slice(), [10u8; 48].as_slice()],
+        )
+        .unwrap();
+        let writer = [1u8; 32];
+        let head = |held: &[SignedRecord]| held_head(&conn, held, &writer).unwrap();
+
+        assert_eq!(head(&[]), Some([10; 48]), "nothing held: the applied head");
+        let chain = [record(1, Some(10), 11), record(1, Some(11), 12)];
+        assert_eq!(head(&chain), Some([12; 48]), "followed to its end");
+        assert_eq!(
+            head(&[record(1, Some(11), 12)]),
+            Some([10; 48]),
+            "a gap stops the walk"
+        );
+        assert_eq!(
+            head(&[record(1, Some(10), 11), record(1, Some(10), 13)]),
+            Some([10; 48]),
+            "a fork stops the walk"
+        );
+        assert_eq!(
+            head(&[record(2, Some(10), 11)]),
+            Some([10; 48]),
+            "another writer's record is not followed"
+        );
+        let other = [2u8; 32];
+        assert_eq!(
+            held_head(&conn, &[record(2, None, 20)], &other).unwrap(),
+            Some([20; 48]),
+            "a writer with nothing applied starts from its first record"
+        );
     }
 
     /// The budget keeps every leaving device's closing, deferring only
