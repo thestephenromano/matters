@@ -443,3 +443,30 @@ async fn a_quota_refuses_before_storing_anything() {
     let _: Hash = record_hash(&bytes);
     db.finish().await;
 }
+
+/// Rolling back the relay (#44, docs/SELF_HOSTING.md "Upgrades"): a relay
+/// binary older than its database's schema refuses to start, rather than
+/// serve tables it does not know. Starting the current one again migrates
+/// nothing twice.
+#[tokio::test]
+async fn an_older_relay_refuses_a_database_a_newer_one_migrated() {
+    let Some(db) = TestDb::start().await else {
+        return;
+    };
+    // Started again on the same database: nothing to migrate.
+    let again = matters_relay::Relay::connect(&db.url()).await.unwrap();
+    again.pool().close().await;
+    // A newer relay applied a migration this one does not have.
+    sqlx::query(
+        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+         VALUES (9999, 'from a newer relay', true, '\\x00', 0)",
+    )
+    .execute(db.relay.pool())
+    .await
+    .unwrap();
+    match matters_relay::Relay::connect(&db.url()).await {
+        Err(error) => assert!(error.to_string().contains("migrat"), "{error}"),
+        Ok(_) => panic!("an older relay served a newer schema"),
+    }
+    db.finish().await;
+}

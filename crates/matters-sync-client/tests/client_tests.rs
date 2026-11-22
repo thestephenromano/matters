@@ -431,3 +431,113 @@ async fn a_lost_collection_is_recovered_from_its_words_through_the_relay() {
     }
     relayed.finish().await;
 }
+
+/// A relay serving `database` on a fresh local port.
+async fn serve(url: &str, database: &str) -> (Relay, String) {
+    let base = url.rsplit_once('/').unwrap().0;
+    let relay = Relay::connect(&format!("{base}/{database}")).await.unwrap();
+    let app = router_with(relay.clone(), system_clock(), Options::default());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (relay, endpoint)
+}
+
+/// The restore drill (#44, docs/SELF_HOSTING.md "Backups and restore"):
+/// 1. a consistent copy of the relay's database is taken;
+/// 2. the devices go on, and the relay acknowledges more;
+/// 3. the relay is lost and restored from the copy, into a new storage
+///    generation.
+///
+/// The devices re-send what the copy lacks, so nothing acknowledged after
+/// the backup is lost while a device still holds it. Record identities,
+/// membership and epochs come back unchanged.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_restored_from_a_backup_loses_nothing_its_devices_still_hold() {
+    let Some(relayed) = relay().await else { return };
+    let url = std::env::var("MATTERS_RELAY_TEST_DATABASE_URL").unwrap();
+    let d = devices(&relayed).await;
+    let a = Client::new(&relayed.endpoint, d.a.clone()).unwrap();
+    let b = Client::new(&relayed.endpoint, d.b.clone()).unwrap();
+    a.sync_once().await.unwrap();
+    b.sync_once().await.unwrap();
+    let before = d.b.sync_membership().unwrap();
+
+    // 1. The backup: a consistent copy, taken with the relay stopped.
+    relayed.relay.pool().close().await;
+    let backup = format!("{}_backup", relayed.name);
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE DATABASE {backup} TEMPLATE {}",
+        relayed.name
+    )))
+    .execute(&relayed.admin)
+    .await
+    .unwrap();
+
+    // 2. The relay comes back and acknowledges more than the copy holds.
+    let (live, endpoint) = serve(&url, &relayed.name).await;
+    let a = Client::new(&endpoint, d.a.clone()).unwrap();
+    let b = Client::new(&endpoint, d.b.clone()).unwrap();
+    d.b.add_task(&mut Task::new(id(7), "acknowledged after the backup", 6.0))
+        .unwrap();
+    let after_backup = d.b.outgoing_records().unwrap();
+    assert_eq!(b.sync_once().await.unwrap().pushed_records, 1);
+    a.sync_once().await.unwrap();
+    assert!(titles(&d.a).contains(&"acknowledged after the backup".to_owned()));
+    live.pool().close().await;
+
+    // 3. The live database is lost; the operator restores the copy and
+    //    starts a new generation.
+    let (restored, endpoint) = serve(&url, &backup).await;
+    assert_eq!(restored.new_generation_everywhere().await.unwrap(), 1);
+    assert_eq!(
+        restored
+            .records(&route(), None, 256)
+            .await
+            .unwrap()
+            .high_water,
+        2,
+        "the copy holds only what was there when it was taken"
+    );
+    let a = Client::new(&endpoint, d.a.clone()).unwrap();
+    let b = Client::new(&endpoint, d.b.clone()).unwrap();
+    for _ in 0..2 {
+        a.sync_once().await.unwrap();
+        b.sync_once().await.unwrap();
+    }
+    // Nothing a device held is lost, and the devices agree.
+    assert_eq!(titles(&d.a), titles(&d.b));
+    assert!(titles(&d.a).contains(&"acknowledged after the backup".to_owned()));
+    // The re-sent record is the same record: same ID, same bytes.
+    let page = restored.records(&route(), None, 256).await.unwrap();
+    assert!(page
+        .entries
+        .iter()
+        .any(|(_, bytes)| *bytes == after_backup[0].bytes));
+    let mut ids: Vec<&[u8]> = page.entries.iter().map(|(_, b)| &b[..]).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), page.entries.len(), "no record stored twice");
+    // Membership and epochs are as they were: the restore reset no authority.
+    let after = d.b.sync_membership().unwrap();
+    assert_eq!(
+        (after.epoch, after.manifest),
+        (before.epoch, before.manifest)
+    );
+    assert!(restored.is_member(&route(), &after.device).await.unwrap());
+
+    restored.pool().close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {backup} WITH (FORCE)"
+    )))
+    .execute(&relayed.admin)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {} WITH (FORCE)",
+        relayed.name
+    )))
+    .execute(&relayed.admin)
+    .await
+    .unwrap();
+}

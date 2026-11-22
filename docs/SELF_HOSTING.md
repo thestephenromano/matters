@@ -1,8 +1,8 @@
 # Self-hosting the sync relay
 
-Status: [#44](https://github.com/thestephenromano/matters/issues/44), in steps.
+Status: [#44](https://github.com/thestephenromano/matters/issues/44).
 - The image, the stack, health and metrics are in place.
-- Automated restore drills, the upgrade compatibility matrix and dashboards follow. Until they land, the restore and upgrade procedures below are documented but not yet proven by an automated drill.
+- A restore drill and the upgrade rules below are checked automatically on every change to the relay or the client.
 
 The relay stores only what clients have already encrypted and signed: records, authority objects, envelopes, and the indexes it needs to serve them. Content keys, device keys and recovery material never reach it (SYNC_SERVICE_CONTRACT.md). An operator can see routes, sizes and timing, but never content.
 
@@ -87,14 +87,32 @@ To restore:
 
 The new generation makes every client's cursor invalid (`410 generation-changed`). Each client then forgets its cursors, re-queues everything it wrote, and reads the log again. Record identities, membership and epochs travel inside the signed bytes and do not change.
 
+**The drill.** `a_relay_restored_from_a_backup_loses_nothing_its_devices_still_hold` (`crates/matters-sync-client/tests/client_tests.rs`) runs this procedure against the real relay and PostgreSQL:
+1. two devices sync;
+2. a consistent copy of the relay's database is taken;
+3. the relay acknowledges another edit;
+4. the database is lost, the copy is restored, and a new generation starts.
+
+The devices re-send what the copy lacked and agree again. The re-sent record is the same record, with the same ID and bytes, and nothing is stored twice. Membership and epochs are unchanged.
+
+The drill shows what the recovery point means in practice. An edit acknowledged after the backup survives *because a device still held it*. If every device that held it is lost too, it is lost.
+
 `matters-relay export` and `import` move one route between deployments with every byte unchanged, under a new generation (SYNC_SERVICE_CONTRACT.md).
 
 ## Upgrades
 
-- **Schema.** The relay's schema migrations run forward at start, and older relays do not run against a newer schema.
+- **Schema.** The relay's schema migrations run forward at start. An older relay refuses a database a newer one migrated (`an_older_relay_refuses_a_database_a_newer_one_migrated`), so it never serves tables it does not know.
 - **Before upgrading.** Take a backup.
 - **Rolling back.** Restore that backup with a new generation, as above, so clients re-upload whatever arrived after it.
 - **Clients and the API.** The API is versioned (`/v0/`). Clients refuse unknown versions and suites, and a relay answers an unknown version with `unsupported-version`.
+
+| | Relay at the same `/v0` | Relay rolled back to an older build |
+| --- | --- | --- |
+| **Client, same `/v0`** | Works. Additive endpoints, such as `/snapshots` and `/enrollments`, are used where present | The older relay refuses the newer database (above). Restore the backup taken before the upgrade, with a new generation |
+| **Client too old for the relay's `/v0` additions** | Works without them. A device that can't start from a checkpoint reads the whole log | Works |
+| **A future `/v1`** | Unknown paths answer `unsupported-version`, and the client asks for attention | — |
+
+On the device, Matters refuses a database written by a newer Matters (`MattersError::NewerSchema`), and leaves it untouched.
 
 ## Credentials
 
