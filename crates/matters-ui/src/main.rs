@@ -18,12 +18,34 @@ fn main() {
             std::process::exit(1);
         }
     };
-    matters_ui::install_database(db);
+    matters_ui::install_database(db.clone());
     // This device's settings (#72). An unreadable file gives the defaults,
     // and the app says so once it is up.
     match SettingsFile::in_config_dir() {
         Ok(file) => matters_ui::install_settings(Some(file), None),
         Err(err) => matters_ui::install_settings(None, Some(err.to_string())),
+    }
+    // Sync (#42), when the desktop has a keyring for this device's keys.
+    // Without one, Matters works as before and Sync says why it can't.
+    match matters_keyring::Oo7KeyStore::open() {
+        Ok(keys) => {
+            let data_dir = Database::default_path()
+                .ok()
+                .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                .unwrap_or_else(std::env::temp_dir);
+            match matters_sync_app::SyncApp::open(
+                std::sync::Arc::new(db),
+                std::sync::Arc::new(keys),
+                matters_ui::saved_sync_endpoint(),
+                data_dir,
+                matters_ui::sync_changed_notice,
+                matters_ui::save_sync_endpoint,
+            ) {
+                Ok(app) => matters_ui::install_sync(app),
+                Err(err) => eprintln!("matters: sync is unavailable: {err}"),
+            }
+        }
+        Err(err) => eprintln!("matters: sync is unavailable without a keyring: {err}"),
     }
     // Reminders (#60) as desktop notifications.
     matters_ui::install_notifier(Box::new(matters_ui::notify::DesktopNotifier));

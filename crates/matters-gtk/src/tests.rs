@@ -122,7 +122,7 @@ fn activate_nav(ui: &Ui, view: &View) {
 fn gtk_ui_end_to_end() {
     let _display = Broadway::start();
     libadwaita::init().expect("initialise libadwaita");
-    let ui = Ui::build(None, Database::open_in_memory().unwrap());
+    let ui = Ui::build(None, Database::open_in_memory().unwrap(), None);
     settle();
 
     adding_a_task_lists_it_in_the_current_view(&ui);
@@ -131,6 +131,100 @@ fn gtk_ui_end_to_end() {
     projects_can_be_created_and_opened(&ui);
     notes_save_and_the_row_stays_open(&ui);
     when_buttons_reschedule(&ui);
+
+    // A second window whose device can sync (#42), with keys in memory.
+    let db = Database::open_in_memory().unwrap();
+    let (dirty, notice) = crate::sync::SyncPanel::notice();
+    let dir = tempfile::tempdir().unwrap();
+    let app = matters_sync_app::SyncApp::open(
+        std::sync::Arc::new(db.clone()),
+        std::sync::Arc::new(matters_core::storage::membership::MemoryKeyStore::default()),
+        None,
+        dir.path(),
+        notice,
+        |_| {},
+    )
+    .unwrap();
+    let synced = Ui::build(None, db, Some((app, dirty)));
+    settle();
+    sync_from_the_ways_in_to_stopping(&synced);
+}
+
+/// Whether `window`'s focus is in `widget`: an entry hands its focus to
+/// its own text child.
+fn focused_in(window: &impl IsA<gtk4::Window>, widget: &gtk4::Widget) -> bool {
+    GtkWindowExt::focus(window).is_some_and(|f| &f == widget || f.is_ancestor(widget))
+}
+
+/// Pump the main loop until `done`, for at most ten seconds.
+fn wait_until(what: &str, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out: {what}");
+        pump(Duration::from_millis(50));
+    }
+}
+
+fn sync_from_the_ways_in_to_stopping(ui: &Rc<Ui>) {
+    let p = ui.sync.clone();
+    activate_nav(ui, &View::Today);
+    add_task(ui, "gtk-before-sync");
+    assert!(p.status.label().contains("on this device only"));
+    assert!(p
+        .button
+        .tooltip_text()
+        .is_some_and(|t| t.contains("on this device only")));
+    p.button.emit_clicked();
+    settle();
+    assert!(p.off_box.is_visible(), "the ways in");
+    assert!(
+        focused_in(&p.window, p.endpoint.upcast_ref()),
+        "the keyboard starts in the address"
+    );
+
+    // A damaged invitation is refused, in plain words, and nothing changes.
+    p.endpoint.set_text("http://127.0.0.1:9");
+    p.invitation_field.buffer().set_text("not an invitation");
+    p.join.emit_clicked();
+    settle();
+    assert_eq!(p.error.label(), "this is not a Matters invitation");
+    assert!(p.off_box.is_visible());
+
+    // Starting: the recovery kit once, then a relay that can't be reached.
+    p.create.emit_clicked();
+    wait_until("the recovery kit is shown", || p.kit_window.is_visible());
+    let kit = p.kit_text.label();
+    let words = kit.rsplit("Recovery words\n").next().unwrap();
+    assert_eq!(words.split_whitespace().count(), 24, "{kit}");
+    assert!(kit.contains("http://127.0.0.1:9"));
+    p.kit_kept.emit_clicked();
+    wait_until("the kit is put away", || !p.kit_window.is_visible());
+    wait_until("the relay can't be reached", || {
+        p.status.label().contains("saved on this device")
+    });
+    assert!(!p.status.label().contains("backed up"));
+    assert!(p.unsent.is_visible(), "the tasks wait for the relay");
+    assert!(p.button.has_css_class("error"));
+
+    // Stopping with changes not on the relay: asked first, safe choice
+    // first, and every task stays.
+    p.leave.emit_clicked();
+    settle();
+    assert!(p.leave_box.is_visible());
+    assert!(p.leave_text.label().contains("never get them"));
+    assert!(
+        focused_in(&p.window, p.leave_keep.upcast_ref()),
+        "the safe choice has the keyboard"
+    );
+    p.leave_keep.emit_clicked();
+    settle();
+    assert!(!p.leave_box.is_visible());
+    assert!(p.leave.is_visible(), "still syncing");
+    p.leave.emit_clicked();
+    settle();
+    p.leave_confirm.emit_clicked();
+    wait_until("sync is off", || p.off_box.is_visible());
+    assert!(titles(ui).contains(&"gtk-before-sync".to_string()));
 }
 
 fn adding_a_task_lists_it_in_the_current_view(ui: &Rc<Ui>) {

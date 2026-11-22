@@ -25,7 +25,7 @@ pub use query::{
 };
 pub use settings::{
     AppearanceSettings, CalendarSettings, ColorScheme, LogPolicy, LogbookSettings, Settings,
-    SettingsFile, SettingsProblem,
+    SettingsFile, SettingsProblem, SyncSettings,
 };
 pub use storage::Database;
 pub use undo::TaskSnapshot;

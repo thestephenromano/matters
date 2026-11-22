@@ -52,7 +52,7 @@ pub use message::{
 #[doc(hidden)]
 pub use recovery::recovery_seeds;
 pub use recovery::{genesis, RecoveryKeys, RecoverySecret, RECOVERY_WORDS};
-pub use session::{session_bytes, sign_session, verify_session, SESSION_LABEL};
+pub use session::{session_bytes, sign_root_session, sign_session, verify_session, SESSION_LABEL};
 
 /// A SHA-384 hash or device ID.
 pub type Hash = [u8; 48];
@@ -277,6 +277,11 @@ impl Authority {
     /// The pinned root's signer ID.
     pub fn root(&self) -> Hash {
         self.root
+    }
+
+    /// The pinned root's verification key.
+    pub fn root_key(&self) -> &VerificationKey {
+        &self.root_key
     }
 
     fn active(&self) -> Result<&State> {

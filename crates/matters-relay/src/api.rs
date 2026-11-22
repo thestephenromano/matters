@@ -93,6 +93,10 @@ pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
             "/v0/routes/{route}/authority",
             axum::routing::get(get_authority),
         )
+        .route(
+            "/v0/routes/{route}/enrollments/{lookup}",
+            put(put_enrollment).get(get_enrollment),
+        )
         .route("/v0/routes/{route}/hints", axum::routing::get(hints))
         .route("/v0/routes/{route}/export", axum::routing::get(export))
         .route("/healthz", axum::routing::get(healthz))
@@ -232,6 +236,16 @@ fn body_route(parts: [[u8; 16]; 3]) -> Route {
 }
 
 async fn authenticated(api: &Api, route: &Route, headers: &HeaderMap) -> Result<Hash> {
+    authenticated_as(api, route, headers, false).await
+}
+
+/// As [`authenticated`], also accepting a recovering device's root session.
+async fn authenticated_as(
+    api: &Api,
+    route: &Route,
+    headers: &HeaderMap,
+    root_allowed: bool,
+) -> Result<Hash> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -239,7 +253,10 @@ async fn authenticated(api: &Api, route: &Route, headers: &HeaderMap) -> Result<
         .and_then(|t| hex::<32>(t).ok())
         .ok_or(ApiError(RelayError::Unauthenticated))?;
     let now = (api.clock)();
-    let device = api.relay.authenticate(route, &token, now).await?;
+    let device = api
+        .relay
+        .authenticate_as(route, &token, now, root_allowed)
+        .await?;
     if let Some(limit) = api.options.rate_limit {
         admit(&api.buckets, limit, route, &device, now)?;
     }
@@ -351,10 +368,66 @@ async fn put_authority(
     let route = path_route(&route)?;
     let digest: Hash = hex(&digest)?;
     let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
-    authenticated(&api, &route, &headers).await?;
+    let device = authenticated_as(&api, &route, &headers, true).await?;
+    // The root's session publishes only what a recovery signs: the root
+    // recovery and its recovery envelope.
+    if !api.relay.is_member(&route, &device).await? {
+        let kind = matters_sync::authority::parse(&body)
+            .map(|p| p.message.body.kind())
+            .map_err(|_| malformed())?;
+        if !matches!(kind, "root_recovery" | "key_envelope") {
+            return Err(ApiError(RelayError::NotAMember));
+        }
+    }
     Ok(receipt(
         api.relay.put_authority(&route, &digest, &body).await?,
     ))
+}
+
+/// `PUT /v0/routes/{route}/enrollments/{lookup}`: a joining device leaves
+/// its enrollment request (#42). No session: it is not a member yet.
+async fn put_enrollment(
+    State(api): State<Api>,
+    Path((route, lookup)): Path<(String, String)>,
+    request: Request,
+) -> Result<Response> {
+    let route = path_route(&route)?;
+    let lookup: [u8; 16] = hex(&lookup)?;
+    let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
+    let created = api.relay.put_enrollment(&route, &lookup, &body).await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok(status.into_response())
+}
+
+/// `GET /v0/routes/{route}/enrollments/{lookup}`: the route's admin
+/// collects a request. Anyone else is told there is none.
+async fn get_enrollment(
+    State(api): State<Api>,
+    Path((route, lookup)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response> {
+    let route = path_route(&route)?;
+    let lookup: [u8; 16] = hex(&lookup)?;
+    let device = authenticated(&api, &route, &headers).await?;
+    match api.relay.enrollment(&route, &device, &lookup).await? {
+        Some(bytes) => Ok((
+            StatusCode::OK,
+            [(
+                header::CONTENT_TYPE,
+                "application/vnd.matters.sync-authority",
+            )],
+            bytes,
+        )
+            .into_response()),
+        None => Ok(cbor_response(
+            StatusCode::NOT_FOUND,
+            error_body("malformed", false, None),
+        )),
+    }
 }
 
 /// `after` (base64url of the cursor) and `limit` (1..=256) from a query.
@@ -420,7 +493,7 @@ async fn get_authority(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let (after, limit) = page_query(query)?;
-    authenticated(&api, &route, &headers).await?;
+    authenticated_as(&api, &route, &headers, true).await?;
     Ok(page_response(
         api.relay
             .authority_objects(&route, after.as_ref(), limit)

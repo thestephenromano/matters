@@ -241,3 +241,160 @@ fn cursors_are_per_log_and_a_relay_restore_requeues_everything() {
     assert_eq!(a.outgoing_controls().unwrap(), controls);
     assert_eq!(a.outgoing_records().unwrap(), records);
 }
+
+#[test]
+fn a_joining_device_signs_in_with_its_keys_and_finishes_once_admitted() {
+    use matters_core::storage::Enrolling;
+    use matters_sync::store::JoiningStore;
+    let dir = tempfile::tempdir().unwrap();
+    let a = Database::open(dir.path().join("a.db")).unwrap();
+    a.create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    let b = std::sync::Arc::new(Database::open(dir.path().join("b.db")).unwrap());
+    assert_eq!(b.enrolling().unwrap(), None);
+    let keys = std::sync::Arc::new(MemoryKeyStore::default());
+    let joining = Enrolling {
+        db: b.clone(),
+        keys: keys.clone(),
+    };
+    assert!(joining.route().is_err(), "not joining yet");
+    let invitation = a.invite().unwrap();
+    let request = b.start_enrollment(keys.as_ref(), &invitation).unwrap();
+    let device = parse(&request).unwrap().message.signer;
+    assert_eq!(joining.route().unwrap(), route());
+    assert_eq!(joining.device().unwrap(), device);
+    assert_eq!(b.enrolling().unwrap(), Some((route(), device)));
+    // It signs with the key it enrolled.
+    let signature = joining.sign_session(&[5; 32]).unwrap();
+    let enrolled = keys
+        .load(&keys.names()[0])
+        .unwrap()
+        .unwrap()
+        .keys()
+        .unwrap();
+    verify_session(
+        enrolled.verification_key(),
+        &route(),
+        &device,
+        &[5; 32],
+        &signature,
+    )
+    .unwrap();
+    // Before the admission: not yet. After it: joined. Anything else wrong
+    // is an error, not a wait.
+    assert!(!joining.finish(&a.sync_controls().unwrap(), &[]).unwrap());
+    assert!(joining.finish(&[], &[]).is_err(), "no genesis");
+    a.admit(&request, &invitation).unwrap();
+    let envelopes: Vec<Vec<u8>> = a
+        .outgoing_controls()
+        .unwrap()
+        .into_iter()
+        .filter(|o| {
+            matches!(parse(&o.bytes).unwrap().message.body,
+                Body::KeyEnvelope(ref k) if k.recipient == device)
+        })
+        .map(|o| o.bytes)
+        .collect();
+    // The transition without this device's envelope: not yet, either.
+    assert!(!joining.finish(&a.sync_controls().unwrap(), &[]).unwrap());
+    assert!(joining
+        .finish(&a.sync_controls().unwrap(), &envelopes)
+        .unwrap());
+    assert!(b.sync_enabled());
+    assert_eq!(b.enrolling().unwrap(), None, "finished");
+    // Keys missing from the keyring are an error, not a silent wait.
+    let c = std::sync::Arc::new(Database::open(dir.path().join("c.db")).unwrap());
+    c.start_enrollment(&MemoryKeyStore::default(), &a.invite().unwrap())
+        .unwrap();
+    assert!(c
+        .sign_enrolling_session(&MemoryKeyStore::default(), &[1; 32])
+        .is_err());
+}
+
+#[test]
+fn a_recovering_device_signs_in_as_the_root_and_recovers() {
+    use matters_core::storage::Recovering;
+    use matters_sync::store::RecoveringStore;
+    let dir = tempfile::tempdir().unwrap();
+    let a = Database::open(dir.path().join("a.db")).unwrap();
+    let words = a
+        .create_collection(&MemoryKeyStore::default(), route())
+        .unwrap();
+    a.add_task(&mut Task::new(id(1), "kept", 0.0)).unwrap();
+    let r = std::sync::Arc::new(Database::open(dir.path().join("r.db")).unwrap());
+    let recovering = Recovering {
+        db: r.clone(),
+        keys: MemoryKeyStore::default(),
+        words: words.clone(),
+        route: route(),
+    };
+    assert_eq!(recovering.route().unwrap(), route());
+    let root = recovering.root().unwrap();
+    let genesis = a.sync_controls().unwrap().remove(0);
+    let Body::Genesis(g) = parse(&genesis).unwrap().message.body else {
+        unreachable!()
+    };
+    assert_eq!(root, matters_sync::authority::root_id(&g.root_key).unwrap());
+    let signature = recovering.sign_root_session(&[6; 32]).unwrap();
+    verify_session(&g.root_key, &route(), &root, &[6; 32], &signature).unwrap();
+    // The authority log as the relay holds it: controls, and every
+    // envelope; only the recovery ones are used.
+    let mut controls = Vec::new();
+    let mut envelopes = Vec::new();
+    for c in a.sync_controls().unwrap() {
+        controls.push(c);
+    }
+    for o in a.outgoing_controls().unwrap() {
+        if matches!(parse(&o.bytes).unwrap().message.body, Body::KeyEnvelope(_)) {
+            envelopes.push(o.bytes);
+        }
+    }
+    for (_, e) in a.sync_envelopes().unwrap() {
+        envelopes.push(e);
+    }
+    recovering.recover(&controls, &envelopes).unwrap();
+    assert!(r.sync_enabled());
+    let outgoing = recovering.outgoing().unwrap();
+    assert!(outgoing
+        .iter()
+        .any(|(_, b)| matches!(parse(b).unwrap().message.body, Body::RootRecovery(_))));
+    for (seq, _) in &outgoing {
+        recovering.acknowledge(*seq).unwrap();
+    }
+    assert!(recovering.outgoing().unwrap().is_empty());
+    for record in a.outgoing_records().unwrap() {
+        r.receive_record(&record.bytes).unwrap();
+    }
+    assert_eq!(r.get_task(&id(1)).unwrap().unwrap().title, "kept");
+    // Other words are another root.
+    let wrong = Recovering {
+        db: r.clone(),
+        keys: MemoryKeyStore::default(),
+        words: matters_sync::authority::RecoverySecret::new([3; 32])
+            .words()
+            .unwrap(),
+        route: route(),
+    };
+    assert_ne!(wrong.root().unwrap(), root);
+    assert!(Recovering {
+        db: r,
+        keys: MemoryKeyStore::default(),
+        words: "not words".into(),
+        route: route(),
+    }
+    .root()
+    .is_err());
+}
+
+#[test]
+fn a_shared_key_store_is_the_store_it_shares() {
+    use matters_core::storage::membership::DeviceSeeds;
+    let inner = std::sync::Arc::new(MemoryKeyStore::default());
+    let shared: std::sync::Arc<MemoryKeyStore> = inner.clone();
+    let seeds = DeviceSeeds::from_bytes(&[7; DeviceSeeds::BYTES]).unwrap();
+    KeyStore::store(&shared, "device", &seeds).unwrap();
+    assert_eq!(inner.names(), ["device"], "stored in the one store");
+    let loaded = KeyStore::load(&shared, "device").unwrap().unwrap();
+    assert_eq!(loaded.to_bytes(), seeds.to_bytes());
+    assert!(KeyStore::load(&shared, "other").unwrap().is_none());
+}

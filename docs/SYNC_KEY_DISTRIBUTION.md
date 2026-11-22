@@ -131,7 +131,7 @@ binding    = HMAC-SHA384(key("matters-sync/v0/enrollment"),
 ```
 
 - **Invitation.** The admin draws 16 bytes of OS entropy and shows the invitation as a QR code. Alternatively it shows the 26-character code and publishes the offer under the lookup, so a device that has only the code can fetch the route, root ID and manifest. The code-holding device checks the offer's tag before using anything in it. The secret is one-time, and the admin's application forgets it after one accepted request.
-- **Request.** The new device pins the root by the invitation's root ID (`Authority::bootstrap_from_invitation`) and signs an `enrollment_request` with its own signing key, as the device ID of its two keys.
+- **Request.** The new device pins the root by the invitation's root ID (`Authority::bootstrap_from_invitation`) and signs an `enrollment_request` with its own signing key, as the device ID of its two keys. It leaves the request in the relay's enrollment mailbox under the invitation's lookup ID, and the admin's device collects it there (SYNC_SERVICE_CONTRACT.md, #42).
 - **Acceptance.** `Authority::accept_enrollment` checks, before the admin signs anything:
   - the invitation's route, root and current manifest;
   - the request's route, kind and manifest;
@@ -188,6 +188,8 @@ root_recovery body = membership body, signed by the root under "matters-sync/v0/
   - a commitment to a fresh content key.
 - **Admitting a recovery** (`apply_recovery`). Every device checks the root signature against its pin. The recovery then becomes current even if generation N had later transitions the recoverer did not see, or was frozen by a membership fork, and it clears that freeze. From then on, any membership transition of an earlier generation is `Stale`, whoever signed it. Exact replays of accepted records still return a duplicate result. Two different valid recoveries to one generation retain both and freeze; a recovery to the next generation clears the freeze.
 - **After recovery.** Earlier devices are no longer members: they re-enroll through an invitation from the new admin. Until then they keep their unsent work for explicit recovery.
+- **Through the relay (#42).** The recovering device signs in as the root (SYNC_SERVICE_CONTRACT.md, "The root's session"), reads the authority log, recovers locally, and publishes the root recovery and its recovery envelope. Its own writer claim then goes through its ordinary session.
+- **The recovery kit.** The keys derive from the words *and* the route, so recovering needs the route too. Applications show the relay address, the collection's ID (its tenant and collection) and the 24 words together, and the user keeps all three.
 
 **Material that fails safely.** Wrong words derive another root and recovery key, which bootstrap, `recover` and `unwrap_recovery_key` all refuse with `Identity`. An epoch whose recovery envelope was never written cannot be read from the words alone, and that loss is explicit rather than silent. If both the words and every device are gone, the content cannot be recovered; there is no server-held bypass.
 

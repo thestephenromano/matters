@@ -23,6 +23,7 @@ use matters_core::{
 };
 use uuid::Uuid;
 
+use crate::sync::SyncPanel;
 use crate::task_row::TaskRow;
 
 /// The sidebar views GTK offers. GTK has no way to delete a task, so it has no
@@ -60,11 +61,22 @@ pub(crate) struct Ui {
     /// One widget per entry of `State::shown`, in the same order.
     pub(crate) task_rows: RefCell<Vec<TaskRow>>,
     pub(crate) content_page: NavigationPage,
+    /// Sync (#42): its button in the sidebar, and its window.
+    pub(crate) sync: Rc<SyncPanel>,
 }
 
 impl Ui {
-    /// Build and show the window. `app` is `None` in tests.
-    pub(crate) fn build(app: Option<&Application>, db: Database) -> Rc<Ui> {
+    /// Build and show the window. `app` is `None` in tests. `sync` is the
+    /// sync session, with the flag it sets when its view changes; `None`
+    /// when this device can't sync.
+    pub(crate) fn build(
+        app: Option<&Application>,
+        db: Database,
+        sync: Option<(
+            matters_sync_app::SyncApp,
+            std::sync::Arc<std::sync::atomic::AtomicBool>,
+        )>,
+    ) -> Rc<Ui> {
         let window = ApplicationWindow::builder()
             .title("Matters (GTK)")
             .default_width(960)
@@ -135,6 +147,16 @@ impl Ui {
         proj_list.add_css_class("navigation-sidebar");
         sidebar_box.append(&proj_list);
 
+        // Sync (#42), at the foot of the sidebar.
+        let (sync_app, sync_dirty) = match sync {
+            Some((app, dirty)) => (Some(app), Some(dirty)),
+            None => (None, None),
+        };
+        let sync = SyncPanel::build(sync_app, &window);
+        sync.button.set_halign(Align::Start);
+        sync.button.set_margin_top(8);
+        sidebar_box.append(&sync.button);
+
         let sidebar_page = NavigationPage::builder()
             .title("Matters")
             .child(&ScrolledWindow::builder().child(&sidebar_box).build())
@@ -197,7 +219,17 @@ impl Ui {
             task_list,
             task_rows: RefCell::new(Vec::new()),
             content_page,
+            sync,
         });
+        // What other devices changed shows once a round has finished.
+        if let Some(dirty) = sync_dirty {
+            let weak = Rc::downgrade(&ui);
+            ui.sync.follow(dirty, move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.refresh();
+                }
+            });
+        }
 
         // ---- Events ---------------------------------------------------------
         {
@@ -262,7 +294,13 @@ impl Ui {
     /// Show `result`'s error, if any, as a toast. Returns whether it succeeded.
     fn check<T>(&self, result: matters_core::Result<T>) -> bool {
         match result {
-            Ok(_) => true,
+            Ok(_) => {
+                // A local change: send it soon (#42).
+                if let Some(app) = &self.sync.app {
+                    app.sync_now();
+                }
+                true
+            }
             Err(err) => {
                 eprintln!("matters-gtk: {err}");
                 self.toasts.add_toast(Toast::new(&err.to_string()));

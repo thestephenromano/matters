@@ -21,3 +21,7 @@ endgroup
 group "matters-sync-client against the relay"
 cargo test --locked -p matters-sync-client || refuse "the sync client's tests failed"
 endgroup
+
+group "matters-sync-app against the relay"
+cargo test --locked -p matters-sync-app || refuse "the app's sync session tests failed"
+endgroup

@@ -108,6 +108,17 @@ pub trait KeyStore {
     fn store(&self, name: &str, seeds: &DeviceSeeds) -> Result<()>;
 }
 
+/// A shared key store is a key store.
+impl<T: KeyStore + ?Sized> KeyStore for std::sync::Arc<T> {
+    fn load(&self, name: &str) -> Result<Option<DeviceSeeds>> {
+        (**self).load(name)
+    }
+
+    fn store(&self, name: &str, seeds: &DeviceSeeds) -> Result<()> {
+        (**self).store(name, seeds)
+    }
+}
+
 /// A [`KeyStore`] in memory, for tests.
 #[cfg(feature = "test-support")]
 #[derive(Default)]
@@ -470,6 +481,70 @@ impl Database {
         })
     }
 
+    /// Return to local-only use (#42): every task, project and setting stays
+    /// as it is, and this database stops syncing.
+    ///
+    /// - **Unsent edits.** Edits the relay has not acknowledged would then
+    ///   never reach another device. While there are any, this refuses with
+    ///   [`MattersError::UnsentWork`] unless `discard_unsent` says the user
+    ///   chose that explicitly.
+    /// - **Backup.** First it keeps a consistent copy of the database beside
+    ///   it (`<db>.pre-local-<ms>.db`), so leaving can be undone by hand.
+    /// - **What it clears.** Every `sync_*` table, in one transaction, then
+    ///   the open's engine and keys. The device's keys stay in the key store
+    ///   and are simply no longer used.
+    ///
+    /// Other devices keep the collection. An admin that leaves leaves no
+    /// admin behind, until the collection is recovered from its words.
+    pub fn leave_collection(&self, discard_unsent: bool) -> Result<LeftCollection> {
+        self.with_sealing(|conn, engine, sync| {
+            if engine.is_none() {
+                return Err(MattersError::Validation("sync is off".into()));
+            }
+            let unsent: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sync_records WHERE acked = 0",
+                [],
+                |r| r.get(0),
+            )?;
+            if unsent > 0 && !discard_unsent {
+                return Err(MattersError::UnsentWork(unsent as usize));
+            }
+            let backup = match conn.path().filter(|p| !p.is_empty()) {
+                Some(path) => {
+                    let backup = format!("{path}.pre-local-{}.db", crate::clock::now_millis());
+                    conn.execute("VACUUM INTO ?1", params![backup])?;
+                    Some(std::path::PathBuf::from(backup))
+                }
+                None => None,
+            };
+            let tables: Vec<String> = {
+                let mut stmt = conn.prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'
+                     AND name LIKE 'sync\\_%' ESCAPE '\\'",
+                )?;
+                let rows = stmt.query_map([], |r| r.get(0))?;
+                rows.collect::<rusqlite::Result<_>>()?
+            };
+            let tx = conn.transaction()?;
+            // The sync tables refer to each other; checked at the commit,
+            // when every one of them is empty, the order does not matter.
+            tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+            for table in &tables {
+                tx.execute(&format!("DELETE FROM \"{table}\""), [])?;
+            }
+            super::sync::crash_point("leave-before-commit");
+            tx.commit()?;
+            *engine = None;
+            sync.sealing = None;
+            sync.membership = None;
+            sync.required = false;
+            Ok(LeftCollection {
+                unsent: unsent as usize,
+                backup,
+            })
+        })
+    }
+
     /// Load this device's keys from `store` and its authority from the
     /// stored controls, and start sealing as a new writer incarnation.
     /// Call once after each open of a joined database; until then writes
@@ -687,6 +762,15 @@ impl Database {
             })
         })
     }
+}
+
+/// What leaving a collection did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftCollection {
+    /// Edits the relay had not acknowledged, now local only.
+    pub unsent: usize,
+    /// The copy of the database taken first.
+    pub backup: Option<std::path::PathBuf>,
 }
 
 /// A summary of this device's membership.

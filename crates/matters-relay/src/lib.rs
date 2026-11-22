@@ -31,4 +31,7 @@ mod sessions;
 mod store;
 
 pub use sessions::{Session, CHALLENGE_MS, SESSION_MS};
-pub use store::{Appended, Cursor, Page, Receipt, Relay, RelayError, MAX_PAGE};
+pub use store::{
+    Appended, Cursor, Page, Receipt, Relay, RelayError, ENROLLMENT_TTL_SECONDS, MAX_ENROLLMENTS,
+    MAX_PAGE,
+};

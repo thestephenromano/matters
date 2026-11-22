@@ -134,7 +134,64 @@ pub mod qobject {
         /// Whether the desktop's accent replaces Matters' own (#76);
         /// chosen with `choose_follow_accent`.
         #[qproperty(bool, follow_accent)]
+        /// Sync (#42), from the app's sync session (`matters_sync_app`).
+        /// Whether this device can sync at all: false without a keyring.
+        #[qproperty(bool, sync_available)]
+        /// `off`, `joining`, `recovering` or `on`.
+        #[qproperty(QString, sync_phase)]
+        /// `idle`, `syncing`, `up-to-date`, `retrying`, `waiting-for-relay`,
+        /// `removed`, `storage-full`, `conflict` or `unsupported`.
+        #[qproperty(QString, sync_health)]
+        /// The reason behind `retrying` and `unsupported`.
+        #[qproperty(QString, sync_detail)]
+        /// Changes saved here that the relay has not acknowledged.
+        #[qproperty(i32, sync_unsent)]
+        #[qproperty(QString, sync_endpoint)]
+        /// The invitation to show a new device, while adding one.
+        #[qproperty(QString, sync_invitation)]
+        /// The recovery kit to show once, as JSON `{endpoint, collection,
+        /// words}`, or empty.
+        #[qproperty(QString, sync_kit_json)]
+        /// The relay operator's command for a new collection, or empty.
+        #[qproperty(QString, sync_provision_command)]
+        /// Member devices, as JSON `[{id, short, thisDevice, admin}]`.
+        #[qproperty(QString, sync_devices_json)]
+        #[qproperty(bool, sync_admin)]
+        #[qproperty(QString, sync_error)]
         type AppController = super::AppControllerRust;
+
+        /// Start a new collection syncing with the relay at `endpoint`.
+        #[qinvokable]
+        fn sync_create(self: Pin<&mut AppController>, endpoint: &QString);
+        /// Join the collection an invitation from another device names.
+        #[qinvokable]
+        fn sync_join(self: Pin<&mut AppController>, endpoint: &QString, invitation: &QString);
+        /// Recover the collection from its recovery kit.
+        #[qinvokable]
+        fn sync_recover(
+            self: Pin<&mut AppController>,
+            endpoint: &QString,
+            collection: &QString,
+            words: &QString,
+        );
+        /// Show an invitation for a new device.
+        #[qinvokable]
+        fn sync_invite(self: Pin<&mut AppController>);
+        #[qinvokable]
+        fn sync_cancel_invitation(self: Pin<&mut AppController>);
+        /// The recovery kit is written down: stop showing it.
+        #[qinvokable]
+        fn sync_kit_kept(self: Pin<&mut AppController>);
+        /// Remove the device whose ID is `id` (hex), as the admin.
+        #[qinvokable]
+        fn sync_remove_device(self: Pin<&mut AppController>, id: &QString);
+        /// Stop syncing and keep everything here. Returns 0 when done, or
+        /// how many changes have not reached the relay when that refused
+        /// it; `discard_unsent` keeps them here only.
+        #[qinvokable]
+        fn sync_leave(self: Pin<&mut AppController>, discard_unsent: bool) -> i32;
+        #[qinvokable]
+        fn sync_now(self: Pin<&mut AppController>);
 
         /// Choose when finished tasks move to the Logbook (a `LogPolicy`
         /// key), and keep the choice (#67, #72). What is finished so far
@@ -757,6 +814,40 @@ pub mod qobject {
 /// take arguments, so `main` opens the database first and installs it here.
 static DATABASE: OnceLock<Database> = OnceLock::new();
 
+/// The app's sync session (#42), when this device can sync.
+static SYNC: OnceLock<matters_sync_app::SyncApp> = OnceLock::new();
+/// Who hears the session's changes: the controller, once it exists.
+static SYNC_LISTENER: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
+
+/// What the sync session calls on every change of its view, from any
+/// thread: it reaches the controller on the Qt thread.
+pub fn sync_changed_notice() {
+    if let Some(listener) = SYNC_LISTENER.lock().unwrap().as_ref() {
+        listener();
+    }
+}
+
+/// Install the app's sync session, before any QML object is created.
+pub fn install_sync(app: matters_sync_app::SyncApp) {
+    if SYNC.set(app).is_err() {
+        panic!("matters-ui: sync installed twice");
+    }
+}
+
+/// Keep the relay this device syncs with in the settings, or forget it.
+pub fn save_sync_endpoint(endpoint: Option<String>) {
+    let mut state = settings();
+    state.settings.sync.endpoint = endpoint;
+    if let Err(err) = state.save() {
+        eprintln!("matters: {}", not_saved(&err));
+    }
+}
+
+/// The relay this device syncs with, as the settings keep it.
+pub fn saved_sync_endpoint() -> Option<String> {
+    settings().settings.sync.endpoint.clone()
+}
+
 pub fn install_database(db: Database) {
     if DATABASE.set(db).is_err() {
         panic!("matters-ui: database installed twice");
@@ -924,6 +1015,18 @@ pub struct AppControllerRust {
     system_accent: QString,
     high_contrast: bool,
     follow_accent: bool,
+    sync_available: bool,
+    sync_phase: QString,
+    sync_health: QString,
+    sync_detail: QString,
+    sync_unsent: i32,
+    sync_endpoint: QString,
+    sync_invitation: QString,
+    sync_kit_json: QString,
+    sync_provision_command: QString,
+    sync_devices_json: QString,
+    sync_admin: bool,
+    sync_error: QString,
     visit: i32,
     reorderable: bool,
     accepts_new_tasks: bool,
@@ -1002,6 +1105,18 @@ impl Default for AppControllerRust {
             system_accent: QString::default(),
             high_contrast: false,
             follow_accent,
+            sync_available: SYNC.get().is_some(),
+            sync_phase: QString::from("off"),
+            sync_health: QString::from("idle"),
+            sync_detail: QString::default(),
+            sync_unsent: 0,
+            sync_endpoint: QString::default(),
+            sync_invitation: QString::default(),
+            sync_kit_json: QString::default(),
+            sync_provision_command: QString::default(),
+            sync_devices_json: QString::from("[]"),
+            sync_admin: false,
+            sync_error: QString::default(),
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -1027,6 +1142,12 @@ impl cxx_qt::Initialize for qobject::AppController {
             let _ = thread.queue(|controller| controller.appearance_changed());
         }));
         self.as_mut().appearance_changed();
+        // Sync (#42): each change of the session's view, on this thread.
+        let thread = self.qt_thread();
+        *SYNC_LISTENER.lock().unwrap() = Some(Box::new(move || {
+            let _ = thread.queue(|controller| controller.sync_changed());
+        }));
+        self.as_mut().sync_changed();
         let problem = settings().problem.clone();
         if let Some(problem) = problem {
             self.report(problem.message());
@@ -1116,6 +1237,167 @@ impl qobject::AppController {
         self.as_mut().set_follow_accent(follow);
         if let Err(err) = saved {
             self.report(not_saved(&err));
+        }
+    }
+
+    /// Show the sync session's view (#42), and reload the lists: what other
+    /// devices changed has arrived. Delegates keep their focus and edits
+    /// (`TaskListModel` reconciles by task id).
+    fn sync_changed(mut self: Pin<&mut Self>) {
+        let Some(sync) = SYNC.get() else {
+            return;
+        };
+        use matters_sync_app::{Health, Phase};
+        let v = sync.view();
+        let phase = match v.phase {
+            Phase::Off => "off",
+            Phase::Joining => "joining",
+            Phase::Recovering => "recovering",
+            Phase::On => "on",
+        };
+        let (health, detail) = match &v.health {
+            Health::Idle => ("idle", String::new()),
+            Health::Syncing => ("syncing", String::new()),
+            Health::UpToDate => ("up-to-date", String::new()),
+            Health::Retrying(why) => ("retrying", why.clone()),
+            Health::WaitingForRelay => ("waiting-for-relay", String::new()),
+            Health::Removed => ("removed", String::new()),
+            Health::StorageFull => ("storage-full", String::new()),
+            Health::Conflict => ("conflict", String::new()),
+            Health::Unsupported(why) => ("unsupported", why.clone()),
+        };
+        let kit = v.kit.as_ref().map_or(String::new(), |k| {
+            serde_json::json!({
+                "endpoint": k.endpoint,
+                "collection": k.collection,
+                "words": k.words,
+            })
+            .to_string()
+        });
+        let devices: Vec<serde_json::Value> = v
+            .devices
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "id": d.id.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                    "short": d.short,
+                    "thisDevice": d.this_device,
+                    "admin": d.admin,
+                })
+            })
+            .collect();
+        let arrived = health == "up-to-date" && String::from(&self.sync_health) != "up-to-date";
+        self.as_mut().set_sync_phase(QString::from(phase));
+        self.as_mut().set_sync_health(QString::from(health));
+        self.as_mut()
+            .set_sync_detail(QString::from(detail.as_str()));
+        self.as_mut().set_sync_unsent(v.unsent as i32);
+        self.as_mut()
+            .set_sync_endpoint(QString::from(v.endpoint.as_deref().unwrap_or("")));
+        self.as_mut()
+            .set_sync_invitation(QString::from(v.invitation.as_deref().unwrap_or("")));
+        self.as_mut().set_sync_kit_json(QString::from(kit.as_str()));
+        self.as_mut().set_sync_provision_command(QString::from(
+            v.provisioning.as_ref().map_or("", |p| p.command.as_str()),
+        ));
+        self.as_mut().set_sync_devices_json(QString::from(
+            serde_json::Value::from(devices).to_string().as_str(),
+        ));
+        self.as_mut().set_sync_admin(v.admin);
+        self.as_mut()
+            .set_sync_error(QString::from(v.error.as_deref().unwrap_or("")));
+        // Reload when a round finished: what other devices changed is here.
+        if arrived {
+            if let Err(err) = self.as_mut().refresh_sidebar_and_header() {
+                self.as_mut().report(err.to_string());
+            }
+            let next = self.revision.wrapping_add(1);
+            self.set_revision(next);
+        }
+    }
+
+    pub fn sync_create(self: Pin<&mut Self>, endpoint: &QString) {
+        if let Some(sync) = SYNC.get() {
+            let _ = sync.create(&String::from(endpoint));
+        }
+        self.sync_changed();
+    }
+
+    pub fn sync_join(self: Pin<&mut Self>, endpoint: &QString, invitation: &QString) {
+        if let Some(sync) = SYNC.get() {
+            let _ = sync.join(&String::from(endpoint), &String::from(invitation));
+        }
+        self.sync_changed();
+    }
+
+    pub fn sync_recover(
+        self: Pin<&mut Self>,
+        endpoint: &QString,
+        collection: &QString,
+        words: &QString,
+    ) {
+        if let Some(sync) = SYNC.get() {
+            let _ = sync.recover(
+                &String::from(endpoint),
+                &String::from(collection),
+                &String::from(words),
+            );
+        }
+        self.sync_changed();
+    }
+
+    pub fn sync_invite(self: Pin<&mut Self>) {
+        if let Some(sync) = SYNC.get() {
+            let _ = sync.invite();
+        }
+        self.sync_changed();
+    }
+
+    pub fn sync_cancel_invitation(self: Pin<&mut Self>) {
+        if let Some(sync) = SYNC.get() {
+            sync.cancel_invitation();
+        }
+        self.sync_changed();
+    }
+
+    pub fn sync_kit_kept(self: Pin<&mut Self>) {
+        if let Some(sync) = SYNC.get() {
+            sync.kit_kept();
+        }
+        self.sync_changed();
+    }
+
+    pub fn sync_remove_device(self: Pin<&mut Self>, id: &QString) {
+        let hex = String::from(id);
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|i| {
+                hex.get(i..i + 2)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            })
+            .collect();
+        if let (Some(sync), Some(Ok(id))) = (SYNC.get(), bytes.map(<[u8; 48]>::try_from)) {
+            let _ = sync.remove_device(&id);
+        }
+        self.sync_changed();
+    }
+
+    pub fn sync_leave(mut self: Pin<&mut Self>, discard_unsent: bool) -> i32 {
+        let Some(sync) = SYNC.get() else {
+            return -1;
+        };
+        let result = match sync.leave(discard_unsent) {
+            Ok(()) => 0,
+            Err(matters_sync_app::LeaveRefused::Unsent(n)) => n as i32,
+            Err(matters_sync_app::LeaveRefused::Failed(_)) => -1,
+        };
+        self.as_mut().sync_changed();
+        result
+    }
+
+    pub fn sync_now(self: Pin<&mut Self>) {
+        if let Some(sync) = SYNC.get() {
+            sync.sync_now();
         }
     }
 
@@ -2245,6 +2527,10 @@ impl qobject::AppController {
         }
         let next = self.revision.wrapping_add(1);
         self.set_revision(next);
+        // A local change: send it soon (#42).
+        if let Some(sync) = SYNC.get() {
+            sync.sync_now();
+        }
     }
 
     fn refresh_sidebar_and_header(mut self: Pin<&mut Self>) -> matters_core::Result<()> {

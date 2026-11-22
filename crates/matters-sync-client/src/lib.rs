@@ -33,7 +33,10 @@ use base64::Engine;
 use futures_util::StreamExt;
 use matters_sync::authority::{self, Body, Hash, Route};
 use matters_sync::record::record_hash;
-pub use matters_sync::store::{ControlOutcome, LocalStore, Log, StoreError};
+pub use matters_sync::store::{
+    ControlOutcome, JoiningStore, LocalStore, Log, RecoveringStore, StoreError,
+};
+use matters_sync::wire::SIGNATURE_BYTES;
 use minicbor::Decoder;
 use tokio::sync::{watch, Mutex, Notify};
 
@@ -633,4 +636,307 @@ fn jitter(delay: Duration) -> Duration {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     delay + delay.mul_f64(f64::from(nanos % 1000) / 4000.0)
+}
+
+/// A joining device seen as a local store: its identity and session
+/// signatures, and nothing to send or receive yet.
+struct AsLocal<J>(Arc<J>);
+
+impl<J: JoiningStore> LocalStore for AsLocal<J> {
+    fn route(&self) -> std::result::Result<Route, StoreError> {
+        self.0.route()
+    }
+    fn device(&self) -> std::result::Result<Hash, StoreError> {
+        self.0.device()
+    }
+    fn sign_session(
+        &self,
+        challenge: &[u8; 32],
+    ) -> std::result::Result<[u8; SIGNATURE_BYTES], StoreError> {
+        self.0.sign_session(challenge)
+    }
+    fn outgoing_controls(&self) -> std::result::Result<Vec<(i64, Vec<u8>)>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn acknowledge_control(&self, _: i64) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+    fn outgoing_records(&self) -> std::result::Result<Vec<([u8; 32], Vec<u8>)>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn acknowledge_record(&self, _: &[u8; 32]) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+    fn receive_control(
+        &self,
+        _: &[u8],
+        _: Option<&[u8]>,
+    ) -> std::result::Result<ControlOutcome, StoreError> {
+        Err("a joining device applies no controls".into())
+    }
+    fn receive_record(&self, _: &[u8]) -> std::result::Result<(), StoreError> {
+        Err("a joining device receives no records".into())
+    }
+    fn cursor(&self, _: Log) -> std::result::Result<Option<Vec<u8>>, StoreError> {
+        Ok(None)
+    }
+    fn save_cursor(&self, _: Log, _: &[u8]) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+    fn generation_changed(&self) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+}
+
+/// A device joining a collection through an invitation (#42).
+///
+/// 1. It leaves its signed enrollment request in the relay's mailbox under
+///    the invitation's lookup ID ([`Joiner::send_request`]).
+/// 2. The admin's device collects it ([`Client::fetch_enrollment`]), admits
+///    it, and publishes the transition and envelopes.
+/// 3. The joining device is then a member. It reads the authority log and
+///    finishes ([`Joiner::try_finish`]).
+pub struct Joiner<J: JoiningStore + 'static> {
+    client: Client<AsLocal<J>>,
+    store: Arc<J>,
+}
+
+impl<J: JoiningStore + 'static> Joiner<J> {
+    pub fn new(endpoint: &str, store: Arc<J>) -> std::result::Result<Self, String> {
+        Ok(Self {
+            client: Client::new(endpoint, Arc::new(AsLocal(store.clone())))?,
+            store,
+        })
+    }
+
+    /// Leave `request`, the signed enrollment request, under `lookup`. No
+    /// session is needed: the device is not a member yet. Sending it again
+    /// is harmless.
+    pub async fn send_request(&self, lookup: &[u8; 16], request: &[u8]) -> Result<()> {
+        let store = self.store.clone();
+        let route = tokio::task::spawn_blocking(move || store.route())
+            .await
+            .map_err(|e| SyncError::Store(e.to_string().into()))?
+            .map_err(SyncError::Store)?;
+        let path = format!(
+            "/v0/routes/{}/enrollments/{}",
+            route_hex(&route),
+            hex(lookup)
+        );
+        let response = self
+            .client
+            .http
+            .put(format!("{}{path}", self.client.base))
+            .header("content-type", "application/vnd.matters.sync-authority")
+            .body(request.to_vec())
+            .send()
+            .await
+            .map_err(|e| retry(format!("network: {e}")))?;
+        let status = response.status().as_u16();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| retry(format!("network: {e}")))?;
+        match status {
+            200 | 201 => Ok(()),
+            _ => Err(refusal(status, &body).into_error()),
+        }
+    }
+
+    /// Finish joining if the admin has admitted this device: read the whole
+    /// authority log and hand it, with this device's envelopes, to the
+    /// store. False while the device is not a member yet.
+    pub async fn try_finish(&self) -> Result<bool> {
+        let route = self.client.on_store(|s| s.route()).await?;
+        let device = self.client.on_store(|s| s.device()).await?;
+        let r = route_hex(&route);
+        let mut log = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        loop {
+            let page = match self.client.fetch(&r, "authority", cursor.as_deref()).await {
+                Ok(page) => page,
+                Err(SyncError::Attention(Attention::NotAMember)) => return Ok(false),
+                Err(other) => return Err(other),
+            };
+            log.extend(page.entries);
+            cursor = Some(page.next);
+            if page.complete {
+                break;
+            }
+        }
+        let (mut controls, mut envelopes) = (Vec::new(), Vec::new());
+        for bytes in log {
+            match authority::parse(&bytes).map(|p| p.message.body) {
+                Ok(Body::KeyEnvelope(k)) => {
+                    if k.recipient == device {
+                        envelopes.push(bytes);
+                    }
+                }
+                Ok(_) => controls.push(bytes),
+                Err(_) => {}
+            }
+        }
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.finish(&controls, &envelopes))
+            .await
+            .map_err(|e| SyncError::Store(e.to_string().into()))?
+            .map_err(SyncError::Store)
+    }
+}
+
+impl<S: LocalStore + 'static> Client<S> {
+    /// For the collection's admin: collect the enrollment request a joining
+    /// device left under `lookup`, if there is one.
+    pub async fn fetch_enrollment(&self, lookup: &[u8; 16]) -> Result<Option<Vec<u8>>> {
+        let route = self.on_store(|s| s.route()).await?;
+        let path = format!(
+            "/v0/routes/{}/enrollments/{}",
+            route_hex(&route),
+            hex(lookup)
+        );
+        let (status, body) = self
+            .call(reqwest::Method::GET, &path, None, "application/cbor")
+            .await?;
+        match status {
+            200 => Ok(Some(body)),
+            404 => Ok(None),
+            _ => Err(refusal(status, &body).into_error()),
+        }
+    }
+}
+
+/// A recovering device seen as a local store: it signs in as the root, and
+/// has nothing of its own to send or receive.
+struct RootAsLocal<R>(Arc<R>);
+
+impl<R: RecoveringStore> LocalStore for RootAsLocal<R> {
+    fn route(&self) -> std::result::Result<Route, StoreError> {
+        self.0.route()
+    }
+    fn device(&self) -> std::result::Result<Hash, StoreError> {
+        self.0.root()
+    }
+    fn sign_session(
+        &self,
+        challenge: &[u8; 32],
+    ) -> std::result::Result<[u8; SIGNATURE_BYTES], StoreError> {
+        self.0.sign_root_session(challenge)
+    }
+    fn outgoing_controls(&self) -> std::result::Result<Vec<(i64, Vec<u8>)>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn acknowledge_control(&self, _: i64) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+    fn outgoing_records(&self) -> std::result::Result<Vec<([u8; 32], Vec<u8>)>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn acknowledge_record(&self, _: &[u8; 32]) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+    fn receive_control(
+        &self,
+        _: &[u8],
+        _: Option<&[u8]>,
+    ) -> std::result::Result<ControlOutcome, StoreError> {
+        Err("a recovering device applies no controls this way".into())
+    }
+    fn receive_record(&self, _: &[u8]) -> std::result::Result<(), StoreError> {
+        Err("a recovering device receives no records this way".into())
+    }
+    fn cursor(&self, _: Log) -> std::result::Result<Option<Vec<u8>>, StoreError> {
+        Ok(None)
+    }
+    fn save_cursor(&self, _: Log, _: &[u8]) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+    fn generation_changed(&self) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+}
+
+/// A device recovering a collection from its recovery words (#42). It
+/// signs in as the collection's root and reads the authority log. It then
+/// recovers locally, as the next generation's sole admin, and publishes the
+/// root recovery. From then on it syncs with an ordinary [`Client`].
+pub struct Recoverer<R: RecoveringStore + 'static> {
+    client: Client<RootAsLocal<R>>,
+    store: Arc<R>,
+}
+
+impl<R: RecoveringStore + 'static> Recoverer<R> {
+    pub fn new(endpoint: &str, store: Arc<R>) -> std::result::Result<Self, String> {
+        Ok(Self {
+            client: Client::new(endpoint, Arc::new(RootAsLocal(store.clone())))?,
+            store,
+        })
+    }
+
+    pub async fn recover(&self) -> Result<()> {
+        let route = self.client.on_store(|s| s.route()).await?;
+        let r = route_hex(&route);
+        let mut log = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        loop {
+            let page = self
+                .client
+                .fetch(&r, "authority", cursor.as_deref())
+                .await?;
+            log.extend(page.entries);
+            cursor = Some(page.next);
+            if page.complete {
+                break;
+            }
+        }
+        let (mut controls, mut envelopes) = (Vec::new(), Vec::new());
+        for bytes in log {
+            match authority::parse(&bytes).map(|p| p.message.body) {
+                Ok(Body::KeyEnvelope(_)) => envelopes.push(bytes),
+                Ok(_) => controls.push(bytes),
+                Err(_) => {}
+            }
+        }
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.recover(&controls, &envelopes))
+            .await
+            .map_err(|e| SyncError::Store(e.to_string().into()))?
+            .map_err(SyncError::Store)?;
+        let store = self.store.clone();
+        let outgoing = tokio::task::spawn_blocking(move || store.outgoing())
+            .await
+            .map_err(|e| SyncError::Store(e.to_string().into()))?
+            .map_err(SyncError::Store)?;
+        // The root's session publishes only what the recovery signed. The
+        // device's own writer claim waits for its ordinary client.
+        for (seq, bytes) in outgoing {
+            let recovery_kind = matches!(
+                authority::parse(&bytes).map(|p| p.message.body),
+                Ok(Body::RootRecovery(_) | Body::KeyEnvelope(_))
+            );
+            if !recovery_kind {
+                continue;
+            }
+            let path = format!("/v0/routes/{r}/authority/{}", hex(&record_hash(&bytes)));
+            let (status, body) = self
+                .client
+                .call(
+                    reqwest::Method::PUT,
+                    &path,
+                    Some(bytes),
+                    "application/vnd.matters.sync-authority",
+                )
+                .await?;
+            match status {
+                200 | 201 => {
+                    let store = self.store.clone();
+                    tokio::task::spawn_blocking(move || store.acknowledge(seq))
+                        .await
+                        .map_err(|e| SyncError::Store(e.to_string().into()))?
+                        .map_err(SyncError::Store)?;
+                }
+                _ => return Err(refusal(status, &body).into_error()),
+            }
+        }
+        Ok(())
+    }
 }

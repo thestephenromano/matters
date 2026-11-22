@@ -135,6 +135,12 @@ impl RecoveryKeys {
         &self.root
     }
 
+    /// The recipient ID a recovery envelope names: the recovery KEM key's
+    /// fingerprint.
+    pub fn recipient(&self) -> Result<Hash> {
+        super::identity::fingerprint(super::identity::KEM_KEY_LABEL, self.kem_public.as_bytes())
+    }
+
     pub fn kem_public_key(&self) -> &KemPublicKey {
         &self.kem_public
     }

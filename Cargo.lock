@@ -3152,6 +3152,9 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "matters-core",
+ "matters-keyring",
+ "matters-sync-app",
+ "tempfile",
  "uuid",
 ]
 
@@ -3207,6 +3210,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "matters-sync-app"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "matters-core",
+ "matters-relay",
+ "matters-sync",
+ "matters-sync-client",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "matters-sync-baseline"
 version = "0.0.0"
 dependencies = [
@@ -3259,6 +3278,8 @@ dependencies = [
  "futures-core",
  "jiff",
  "matters-core",
+ "matters-keyring",
+ "matters-sync-app",
  "notify-rust",
  "serde",
  "serde_json",

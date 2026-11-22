@@ -48,7 +48,7 @@ impl Relay {
         let mut tx = self.pool().begin().await?;
         let row = route_row(&mut tx, route, false).await?;
         let authority = route_authority(&mut tx, route, &row).await?;
-        if !crate::store::member(&authority, device) {
+        if !crate::store::member(&authority, device) && *device != authority.root() {
             return Err(RelayError::NotAMember);
         }
         sqlx::query("DELETE FROM challenges WHERE route = $1 AND expires_at < $2")
@@ -101,11 +101,14 @@ impl Relay {
         // Using up the challenge commits even when the answer is refused.
         let fresh = used.is_some_and(|expires| expires >= ms(now));
         let authority = route_authority(&mut tx, route, &row).await?;
+        // A member's enrolled key, or for the root's ID the root key: a
+        // recovering device's session (#42).
         let key = authority
             .members()
             .ok()
             .and_then(|m| m.into_iter().find(|m| m.id == *device))
-            .map(|m| m.signing_key);
+            .map(|m| m.signing_key)
+            .or_else(|| (*device == authority.root()).then(|| authority.root_key().clone()));
         let verified = match (&key, fresh) {
             (Some(key), true) => {
                 authority::verify_session(key, route, device, challenge, signature).is_ok()
@@ -142,6 +145,18 @@ impl Relay {
     /// The device a bearer `token` authenticates on `route`: unexpired,
     /// for this route, and still a member.
     pub async fn authenticate(&self, route: &Route, token: &[u8], now: u64) -> Result<Hash> {
+        self.authenticate_as(route, token, now, false).await
+    }
+
+    /// As [`Self::authenticate`], also accepting the route's root, whose
+    /// sessions only read the authority log and publish a root recovery.
+    pub async fn authenticate_as(
+        &self,
+        route: &Route,
+        token: &[u8],
+        now: u64,
+        root_allowed: bool,
+    ) -> Result<Hash> {
         let mut tx = self.pool().begin().await?;
         let row = route_row(&mut tx, route, false).await?;
         let session = sqlx::query_as::<_, (i64, Vec<u8>, i64)>(
@@ -161,7 +176,11 @@ impl Relay {
         }
         let device: Hash = device.try_into().map_err(|_| RelayError::Malformed)?;
         let authority = route_authority(&mut tx, route, &row).await?;
-        if !crate::store::member(&authority, &device) {
+        let root = device == authority.root();
+        if root && !root_allowed {
+            return Err(RelayError::NotAMember);
+        }
+        if !root && !crate::store::member(&authority, &device) {
             return Err(RelayError::Revoked);
         }
         Ok(device)
