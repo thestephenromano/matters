@@ -265,51 +265,133 @@ pub(super) fn open_part(
     Ok(Some((id, sealed, plaintext)))
 }
 
-/// Apply a ready record in one transaction.
+/// Apply a ready record in the caller's transaction: journalled, merged
+/// into the engine, recorded as received and its chain head advanced. The
+/// rows are rebuilt once, before the commit, by the caller (#241).
 fn apply(
-    conn: &mut Connection,
-    engine: &mut Option<Document>,
+    tx: &Connection,
+    doc: &mut Document,
     bytes: &[u8],
     record_id: [u8; 32],
     incarnation: [u8; 32],
     update: &[u8],
 ) -> Result<()> {
-    let Some(doc) = engine.as_mut() else {
-        return Err(MattersError::Validation("sync is off".into()));
-    };
-    let tx = conn.transaction()?;
-    let applied = (|| {
-        tx.execute(
-            "INSERT INTO sync_journal (bytes, outgoing) VALUES (?1, 0)",
-            params![update],
-        )?;
-        doc.merge(update)?;
-        rebuild_rows(&tx, &doc.project()?)?;
-        tx.execute(
-            "INSERT INTO sync_received (record_id, incarnation, digest) VALUES (?1, ?2, ?3)",
-            params![
-                record_id.as_slice(),
-                incarnation.as_slice(),
-                record_hash(bytes).as_slice()
-            ],
-        )?;
-        tx.execute(
-            "INSERT INTO sync_receive_heads (incarnation, head) VALUES (?1, ?2)
-             ON CONFLICT (incarnation) DO UPDATE SET head = excluded.head",
-            params![incarnation.as_slice(), record_hash(bytes).as_slice()],
-        )?;
-        tx.execute(
-            "DELETE FROM sync_pending WHERE record_id = ?1",
-            params![record_id.as_slice()],
-        )?;
-        super::sync::crash_point("receive-before-commit");
-        Ok::<_, MattersError>(tx.commit()?)
-    })();
-    if let Err(error) = applied {
-        *engine = load_engine(conn)?;
-        return Err(error);
-    }
+    tx.execute(
+        "INSERT INTO sync_journal (bytes, outgoing) VALUES (?1, 0)",
+        params![update],
+    )?;
+    doc.merge_unindexed(update)?;
+    tx.execute(
+        "INSERT INTO sync_received (record_id, incarnation, digest) VALUES (?1, ?2, ?3)",
+        params![
+            record_id.as_slice(),
+            incarnation.as_slice(),
+            record_hash(bytes).as_slice()
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO sync_receive_heads (incarnation, head) VALUES (?1, ?2)
+         ON CONFLICT (incarnation) DO UPDATE SET head = excluded.head",
+        params![incarnation.as_slice(), record_hash(bytes).as_slice()],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_pending WHERE record_id = ?1",
+        params![record_id.as_slice()],
+    )?;
     Ok(())
+}
+
+/// Act on one attempt in the caller's transaction. `changed` is set when
+/// the engine took an update, so the rows must be rebuilt.
+fn settle(
+    tx: &Connection,
+    engine: &mut Option<Document>,
+    joined: &Joined,
+    bytes: &[u8],
+    attempt: Attempt,
+    changed: &mut bool,
+) -> Result<Received> {
+    Ok(match attempt {
+        Attempt::Duplicate => {
+            let id = record_id(joined, bytes)?;
+            tx.execute(
+                "DELETE FROM sync_pending WHERE record_id = ?1",
+                params![id.as_slice()],
+            )?;
+            Received::Duplicate
+        }
+        Attempt::Wait(waiting) => {
+            keep(tx, joined, bytes, waiting)?;
+            Received::Pending(waiting)
+        }
+        Attempt::Ready {
+            record_id,
+            incarnation,
+            update,
+        } => {
+            let doc = engine
+                .as_mut()
+                .ok_or_else(|| MattersError::Validation("sync is off".into()))?;
+            apply(tx, doc, bytes, record_id, incarnation, &update)?;
+            *changed = true;
+            Received::Applied
+        }
+        Attempt::Part {
+            record_id,
+            sealed,
+            plaintext,
+        } => Received::Checkpoint(checkpoint::keep_part(
+            tx, engine, joined, &record_id, &sealed, &plaintext,
+        )?),
+    })
+}
+
+/// Receive `records` in order, then retry what was pending, all in one
+/// transaction: the rows are rebuilt once, however many records applied
+/// (#241). A refused record is that record's error; the others go on. Any
+/// other failure rolls the whole batch back, and the engine is reloaded.
+fn receive_all(
+    conn: &mut Connection,
+    engine: &mut Option<Document>,
+    joined: &Joined,
+    records: &[&[u8]],
+) -> Result<Vec<Result<Received>>> {
+    let tx = conn.transaction()?;
+    let received = (|| {
+        let mut changed = false;
+        let mut outcomes = Vec::with_capacity(records.len());
+        for bytes in records {
+            outcomes.push(match attempt(&tx, joined, bytes) {
+                Ok(a) => Ok(settle(&tx, engine, joined, bytes, a, &mut changed)?),
+                Err(refused) => Err(refused),
+            });
+        }
+        drain_in(&tx, engine, joined, &mut changed)?;
+        if changed {
+            let doc = engine
+                .as_ref()
+                .ok_or_else(|| MattersError::Validation("sync is off".into()))?;
+            rebuild_rows(&tx, &doc.project()?)?;
+        }
+        Ok::<_, MattersError>(outcomes)
+    })();
+    match received {
+        Ok(outcomes) => {
+            super::sync::crash_point("receive-before-commit");
+            match tx.commit() {
+                Ok(()) => Ok(outcomes),
+                Err(error) => {
+                    *engine = load_engine(conn)?;
+                    Err(error.into())
+                }
+            }
+        }
+        Err(error) => {
+            drop(tx);
+            *engine = load_engine(conn)?;
+            Err(error)
+        }
+    }
 }
 
 /// The record ID of bytes that parse for this collection's document.
@@ -330,19 +412,21 @@ fn keep(conn: &Connection, joined: &Joined, bytes: &[u8], waiting: Waiting) -> R
     Ok(())
 }
 
-/// Retry the pending records until a pass applies none. Each pass that
-/// applies something shortens the chains it waited on, so at most one pass
-/// per pending record, and one more, can make progress.
-pub(super) fn drain(
-    conn: &mut Connection,
+/// Retry the pending records until a pass applies none, in the caller's
+/// transaction. Each pass that applies something shortens the chains it
+/// waited on, so at most one pass per pending record, and one more, can
+/// make progress.
+fn drain_in(
+    tx: &Connection,
     engine: &mut Option<Document>,
     joined: &Joined,
+    changed: &mut bool,
 ) -> Result<()> {
-    checkpoint::walk_covered(conn, joined)?;
-    let passes: i64 = conn.query_row("SELECT COUNT(*) FROM sync_pending", [], |r| r.get(0))?;
+    checkpoint::walk_covered(tx, joined)?;
+    let passes: i64 = tx.query_row("SELECT COUNT(*) FROM sync_pending", [], |r| r.get(0))?;
     for _ in 0..=passes {
         let pending: Vec<(Vec<u8>, String)> = {
-            let mut stmt = conn.prepare("SELECT bytes, reason FROM sync_pending ORDER BY seq")?;
+            let mut stmt = tx.prepare("SELECT bytes, reason FROM sync_pending ORDER BY seq")?;
             let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
@@ -351,39 +435,28 @@ pub(super) fn drain(
             if reason == Waiting::AfterClose.as_str() {
                 continue;
             }
-            match attempt(conn, joined, &bytes)? {
-                Attempt::Ready {
-                    record_id,
-                    incarnation,
-                    update,
-                } => {
-                    apply(conn, engine, &bytes, record_id, incarnation, &update)?;
-                    progress = true;
-                }
-                Attempt::Duplicate => {
-                    let id = record_id(joined, &bytes)?;
-                    conn.execute(
-                        "DELETE FROM sync_pending WHERE record_id = ?1",
-                        params![id.as_slice()],
-                    )?;
-                }
-                Attempt::Wait(waiting) => keep(conn, joined, &bytes, waiting)?,
-                Attempt::Part {
-                    record_id,
-                    sealed,
-                    plaintext,
-                } => {
-                    checkpoint::keep_part(conn, engine, joined, &record_id, &sealed, &plaintext)?;
-                }
-            }
+            let attempt = attempt(tx, joined, &bytes)?;
+            let applied = matches!(attempt, Attempt::Ready { .. });
+            settle(tx, engine, joined, &bytes, attempt, changed)?;
+            progress |= applied;
         }
         if !progress {
             break;
         }
     }
-    checkpoint::walk_covered(conn, joined)?;
-    checkpoint::finish_waiting(conn, engine, joined)?;
+    checkpoint::walk_covered(tx, joined)?;
+    checkpoint::finish_waiting(tx, engine, joined)?;
     Ok(())
+}
+
+/// Retry what is pending, as after a control or a start from a checkpoint,
+/// in one transaction.
+pub(super) fn drain(
+    conn: &mut Connection,
+    engine: &mut Option<Document>,
+    joined: &Joined,
+) -> Result<()> {
+    receive_all(conn, engine, joined, &[]).map(|_| ())
 }
 
 impl Database {
@@ -391,35 +464,24 @@ impl Database {
     /// can, keeps it pending if it must wait, and refuses forged or
     /// malformed bytes. Then retries whatever was pending.
     pub fn receive_record(&self, bytes: &[u8]) -> Result<Received> {
+        self.receive_records(&[bytes])?
+            .pop()
+            .expect("one outcome for one record")
+    }
+
+    /// Receive a page of records, in order, as `receive_record` does each,
+    /// in one transaction with one rebuild of the rows (#241). Each record
+    /// has its own outcome: a refused one is an error, and the others go on.
+    pub fn receive_records(&self, records: &[&[u8]]) -> Result<Vec<Result<Received>>> {
         self.with_sealing(|conn, engine, sync| {
             let joined = sync
                 .membership
                 .as_ref()
                 .ok_or_else(|| MattersError::Validation("sync is not resumed".into()))?;
-            let outcome = match attempt(conn, joined, bytes)? {
-                Attempt::Duplicate => Received::Duplicate,
-                Attempt::Wait(waiting) => {
-                    keep(conn, joined, bytes, waiting)?;
-                    Received::Pending(waiting)
-                }
-                Attempt::Ready {
-                    record_id,
-                    incarnation,
-                    update,
-                } => {
-                    apply(conn, engine, bytes, record_id, incarnation, &update)?;
-                    Received::Applied
-                }
-                Attempt::Part {
-                    record_id,
-                    sealed,
-                    plaintext,
-                } => Received::Checkpoint(checkpoint::keep_part(
-                    conn, engine, joined, &record_id, &sealed, &plaintext,
-                )?),
-            };
-            drain(conn, engine, joined)?;
-            Ok(outcome)
+            if engine.is_none() {
+                return Err(MattersError::Validation("sync is off".into()));
+            }
+            receive_all(conn, engine, joined, records)
         })
     }
 

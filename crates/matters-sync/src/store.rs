@@ -59,6 +59,13 @@ pub trait LocalStore: Send + Sync {
     /// Receive one record: applied, kept pending, or a duplicate are all
     /// `Ok`; `Err` is a refused record (forged or malformed).
     fn receive_record(&self, record: &[u8]) -> StoreResult<()>;
+    /// Receive a page of records in order, each with its own outcome as
+    /// `receive_record` gives it. The outer `Err` is a store failure that
+    /// applied none of them. A store that can apply a page at once should
+    /// (Matters' database rebuilds its rows once a page, #241).
+    fn receive_records(&self, records: &[Vec<u8>]) -> StoreResult<Vec<StoreResult<()>>> {
+        Ok(records.iter().map(|r| self.receive_record(r)).collect())
+    }
     fn cursor(&self, log: Log) -> StoreResult<Option<Vec<u8>>>;
     /// Save a page's cursor after the page's entries are durably applied.
     fn save_cursor(&self, log: Log, cursor: &[u8]) -> StoreResult<()>;

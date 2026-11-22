@@ -43,7 +43,7 @@ use matters_sync::checkpoint::{
 };
 use matters_sync::record_hash;
 use matters_sync::wire;
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use super::db::Database;
 use super::membership::{Joined, HOME_DOCUMENT};
@@ -351,9 +351,9 @@ fn decided(conn: &Connection, id: &Hash) -> Result<Option<Checkpointed>> {
 }
 
 /// Keep one authenticated, opened part, then judge its checkpoint if it
-/// is complete.
+/// is complete, in the caller's transaction.
 pub(super) fn keep_part(
-    conn: &mut Connection,
+    tx: &Connection,
     engine: &Option<Document>,
     joined: &Joined,
     record_id: &[u8; 32],
@@ -363,7 +363,6 @@ pub(super) fn keep_part(
     let part = format::parse_part(plaintext)
         .map_err(|e| invalid(format!("record refused: checkpoint part: {e}")))?;
     let id = part.id;
-    let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO sync_checkpoint_parts (record_id, checkpoint, author, incarnation, epoch, plaintext)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (record_id) DO NOTHING",
@@ -380,14 +379,12 @@ pub(super) fn keep_part(
         "DELETE FROM sync_pending WHERE record_id = ?1",
         params![record_id.as_slice()],
     )?;
-    let outcome = finish(&tx, engine, joined, &id)?;
-    tx.commit()?;
-    Ok(outcome)
+    finish(tx, engine, joined, &id)
 }
 
 /// Judge checkpoint `id` from its kept parts, if they are complete.
 fn finish(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     engine: &Option<Document>,
     joined: &Joined,
     id: &Hash,
@@ -465,9 +462,10 @@ fn finish(
     Ok(outcome)
 }
 
-/// Judge again every complete checkpoint that waited for a writer.
+/// Judge again every complete checkpoint that waited for a writer, in the
+/// caller's transaction.
 pub(super) fn finish_waiting(
-    conn: &mut Connection,
+    conn: &Connection,
     engine: &Option<Document>,
     joined: &Joined,
 ) -> Result<()> {
@@ -480,9 +478,7 @@ pub(super) fn finish_waiting(
         rows.collect::<rusqlite::Result<_>>()?
     };
     for id in ids {
-        let tx = conn.transaction()?;
-        finish(&tx, engine, joined, &stored(id)?)?;
-        tx.commit()?;
+        finish(conn, engine, joined, &stored(id)?)?;
     }
     Ok(())
 }
@@ -498,7 +494,7 @@ struct Link {
 /// started back from its covered head, by hash, through the pending
 /// records. Each one found is held already, so it is recorded as received
 /// and no longer pending.
-pub(super) fn walk_covered(conn: &mut Connection, joined: &Joined) -> Result<()> {
+pub(super) fn walk_covered(conn: &Connection, joined: &Joined) -> Result<()> {
     let chains: Vec<(Vec<u8>, Vec<u8>)> = {
         let mut stmt =
             conn.prepare("SELECT incarnation, COALESCE(reach, base_head) FROM sync_receive_base")?;
@@ -530,7 +526,7 @@ pub(super) fn walk_covered(conn: &mut Connection, joined: &Joined) -> Result<()>
         }
         out
     };
-    let tx = conn.transaction()?;
+    let tx = conn;
     for (incarnation, reach) in chains {
         let mut at: Hash = stored(reach)?;
         let mut moved = false;
@@ -567,7 +563,6 @@ pub(super) fn walk_covered(conn: &mut Connection, joined: &Joined) -> Result<()>
             )?;
         }
     }
-    tx.commit()?;
     Ok(())
 }
 

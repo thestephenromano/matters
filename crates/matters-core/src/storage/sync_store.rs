@@ -152,6 +152,14 @@ impl LocalStore for Database {
         Ok(())
     }
 
+    fn receive_records(&self, records: &[Vec<u8>]) -> StoreResult<Vec<StoreResult<()>>> {
+        let borrowed: Vec<&[u8]> = records.iter().map(Vec::as_slice).collect();
+        Ok(Database::receive_records(self, &borrowed)?
+            .into_iter()
+            .map(|outcome| outcome.map(|_| ()).map_err(Into::into))
+            .collect())
+    }
+
     fn cursor(&self, log: Log) -> StoreResult<Option<Vec<u8>>> {
         Ok(self.sync_cursor(log)?)
     }
