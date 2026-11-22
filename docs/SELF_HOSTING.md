@@ -41,7 +41,7 @@ docker compose -f packaging/relay/compose.yaml up -d --build
 - the public name (`MATTERS_RELAY_DOMAIN`);
 - the ACME contact address (`MATTERS_RELAY_TLS`);
 - the database URL;
-- optionally the rate limit (`MATTERS_RELAY_RATE`) and the export credential (`MATTERS_RELAY_OPERATOR_TOKEN`).
+- optionally the rate limits (*Limits* below) and the export credential (`MATTERS_RELAY_OPERATOR_TOKEN`).
 
 Neither secrets file is committed (`packaging/relay/.gitignore`). `MATTERS_RELAY_HTTPS_PORT` and `MATTERS_RELAY_HTTP_PORT` change the published ports.
 
@@ -122,6 +122,18 @@ On the device, Matters refuses a database written by a newer Matters (`MattersEr
 | Operator export token | Replace `MATTERS_RELAY_OPERATOR_TOKEN` and restart | The old token stops working at once. |
 | Device sessions | Last 15 minutes and are bound to current membership | A removed device loses access at its next request. |
 | TLS certificates | Renewed by Caddy | — |
+
+## Limits
+
+Requests without a session can come from anyone, so they are limited by default. Behind Caddy every peer address is Caddy's, and the relay trusts no forwarded header, so these limits are per route:
+
+| Setting | Default | Limits |
+| --- | --- | --- |
+| `MATTERS_RELAY_PUBLIC_RATE` | `10/60` | Requests without a session per route: challenges, session answers, mailbox uploads, session-free transitions |
+| `MATTERS_RELAY_CHALLENGE_RATE` | `1/10` | Session challenges per route and device |
+| `MATTERS_RELAY_RATE` | off | Authenticated requests per route and device |
+
+Each is `<per-second>/<burst>`, or `off`. A client over a limit gets `429 rate-limited` and retries after the time it is given.
 
 ## Quotas
 

@@ -50,6 +50,8 @@ The signature covers `CBOR(["matters-sync/v0/relay-session", application, tenant
 
 **The root's session (#42).** A device recovering a collection after every device was lost is no member. It signs the same challenge as the collection's root, with the root key its recovery words derive, using the root's ID as `device`. The relay verifies it with the root key the route was provisioned with. That session may read the authority log, and publish a `root_recovery` and `key_envelope`s (and, as any session may, membership transitions). Every other request gets `403 not-a-member`. Once the relay accepts the recovery, the recovering device is the new generation's admin and signs in as itself.
 
+**Requests without a session** (challenges, session answers, mailbox uploads, session-free transitions) are rate-limited per route, and challenges also per route and claimed device; past either limit they get `429 rate-limited` with `retry-after-ms`. Nothing else identifies them: behind a proxy every peer address is the proxy's, and the relay trusts no forwarded header. Authenticated requests have their own limit per route and device.
+
 A removed device's sessions end when the relay accepts the transition that removes it. The relay enforces upload rights (current roster, signer equals the session's device) independently of the end-to-end checks every client performs; it does not replace them.
 
 ## Operations

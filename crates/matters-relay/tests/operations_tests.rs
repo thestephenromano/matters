@@ -170,6 +170,98 @@ async fn a_rate_limit_answers_429_with_a_retry_time_and_refills() {
     db.finish().await;
 }
 
+fn challenge_body(route: &matters_sync::authority::Route, device: &[u8; 48]) -> Vec<u8> {
+    let mut e = minicbor::Encoder::new(Vec::new());
+    e.map(2).unwrap();
+    e.str("route").unwrap();
+    e.array(3)
+        .unwrap()
+        .bytes(&route.application)
+        .unwrap()
+        .bytes(&route.tenant)
+        .unwrap()
+        .bytes(&route.collection)
+        .unwrap();
+    e.str("device").unwrap().bytes(device).unwrap();
+    e.into_writer()
+}
+
+#[tokio::test]
+async fn requests_without_a_session_are_limited_by_route_and_device() {
+    let Some((db, c)) = provisioned().await else {
+        return;
+    };
+    let clock_at = Arc::new(AtomicU64::new(now()));
+    let read = clock_at.clone();
+    let app = router_with(
+        db.relay.clone(),
+        Arc::new(move || read.load(Ordering::SeqCst)),
+        Options {
+            public_rate_limit: Some(RateLimit {
+                per_second: 1,
+                burst: 3,
+            }),
+            challenge_rate_limit: Some(RateLimit {
+                per_second: 1,
+                burst: 1,
+            }),
+            ..Options::default()
+        },
+    );
+    let post = |app: axum::Router, uri: String, body: Vec<u8>, put: bool| async move {
+        let request = if put {
+            Request::put(uri)
+        } else {
+            Request::post(uri)
+        };
+        app.oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap()
+            .status()
+    };
+    let challenge = |device: [u8; 48]| {
+        (
+            "/v0/session/challenge".to_owned(),
+            challenge_body(&route(), &device),
+            false,
+        )
+    };
+    let root = c.keys.root_id().unwrap();
+    let (uri, body, put) = challenge(c.admin.id());
+    assert_eq!(post(app.clone(), uri, body, put).await, StatusCode::OK);
+    // The device's challenges have their own, smaller allowance.
+    let (uri, body, put) = challenge(c.admin.id());
+    assert_eq!(
+        post(app.clone(), uri, body, put).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let (uri, body, put) = challenge(root);
+    assert_eq!(post(app.clone(), uri, body, put).await, StatusCode::OK);
+    // The route's allowance covers every request without a session.
+    let mailbox = format!("/v0/routes/{}/enrollments/{}", route_hex(), hex(&[1; 16]));
+    assert_eq!(
+        post(app.clone(), mailbox, vec![], true).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Another route has its own.
+    let elsewhere = matters_sync::authority::Route {
+        collection: [8; 16],
+        ..route()
+    };
+    let other = post(
+        app.clone(),
+        "/v0/session/challenge".to_owned(),
+        challenge_body(&elsewhere, &c.admin.id()),
+        false,
+    )
+    .await;
+    assert_eq!(other, StatusCode::NOT_FOUND, "unknown-route, not limited");
+    clock_at.fetch_add(1_000, Ordering::SeqCst);
+    let (uri, body, put) = challenge(c.admin.id());
+    assert_eq!(post(app, uri, body, put).await, StatusCode::OK, "refilled");
+    db.finish().await;
+}
+
 #[tokio::test]
 async fn a_record_quota_refuses_before_storing() {
     let Some((db, c)) = provisioned().await else {

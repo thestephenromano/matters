@@ -55,14 +55,78 @@ pub struct RateLimit {
 pub struct Options {
     /// Commit hints; without them the hints endpoint answers `unavailable`.
     pub hints: Option<crate::hints::Hints>,
+    /// Authenticated requests, per route and device.
     pub rate_limit: Option<RateLimit>,
+    /// Requests without a session, per route: session challenges and
+    /// answers, mailbox uploads and session-free transitions. They are
+    /// limited by route because nothing else identifies them: behind a
+    /// proxy every peer address is the proxy's, and the relay trusts no
+    /// forwarded header.
+    pub public_rate_limit: Option<RateLimit>,
+    /// Session challenges, per route and claimed device, beside the route's
+    /// own limit.
+    pub challenge_rate_limit: Option<RateLimit>,
     /// The operator credential for export, compared as its SHA-384.
     pub operator_token: Option<[u8; 32]>,
     /// Where requests are counted, when metrics are served.
     pub metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
-type Buckets = Arc<std::sync::Mutex<std::collections::HashMap<(Vec<u8>, Hash), (f64, u64)>>>;
+/// Token buckets by key: what is limited (a tag, the route, maybe a
+/// device), with each bucket's tokens, last refill and limit.
+type Buckets = Arc<std::sync::Mutex<std::collections::HashMap<Vec<u8>, Bucket>>>;
+
+#[derive(Clone, Copy)]
+struct Bucket {
+    tokens: f64,
+    last: u64,
+    limit: RateLimit,
+}
+
+impl Bucket {
+    fn refill(&mut self, now: u64) {
+        let burst = f64::from(self.limit.burst.max(1));
+        let rate = f64::from(self.limit.per_second.max(1));
+        let elapsed = now.saturating_sub(self.last) as f64 / 1000.0;
+        self.tokens = (self.tokens + elapsed * rate).min(burst);
+        self.last = now;
+    }
+
+    fn full(&self) -> bool {
+        self.tokens >= f64::from(self.limit.burst.max(1))
+    }
+}
+
+/// The most buckets kept at once. Keys without a session name any route,
+/// provisioned or not, so idle buckets (refilled to their burst, the same
+/// as no bucket) are dropped when the map is full, and while it stays full
+/// of active ones, new keys wait.
+const MAX_BUCKETS: usize = 65_536;
+
+/// What a bucket limits.
+#[derive(Clone, Copy)]
+enum Limited {
+    Session,
+    Public,
+    Challenge,
+}
+
+fn bucket_key(what: Limited, route: &Route, device: Option<&Hash>) -> Vec<u8> {
+    let tag = match what {
+        Limited::Session => 0,
+        Limited::Public => 1,
+        Limited::Challenge => 2,
+    };
+    let mut key = Vec::with_capacity(1 + 48 + 48);
+    key.push(tag);
+    key.extend_from_slice(&route.application);
+    key.extend_from_slice(&route.tenant);
+    key.extend_from_slice(&route.collection);
+    if let Some(device) = device {
+        key.extend_from_slice(device);
+    }
+    key
+}
 
 #[derive(Clone)]
 struct Api {
@@ -263,35 +327,67 @@ async fn authenticated_as(
         .authenticate_as(route, &token, now, root_allowed)
         .await?;
     if let Some(limit) = api.options.rate_limit {
-        admit(&api.buckets, limit, route, &device, now)?;
+        admit(
+            &api.buckets,
+            limit,
+            bucket_key(Limited::Session, route, Some(&device)),
+            now,
+        )?;
     }
     Ok(device)
 }
 
-/// Take one request from the device's token bucket, or say when to retry.
-fn admit(
-    buckets: &Buckets,
-    limit: RateLimit,
-    route: &Route,
-    device: &Hash,
-    now: u64,
-) -> Result<()> {
-    let key = (
-        [route.application, route.tenant, route.collection].concat(),
-        *device,
-    );
+/// Take one request without a session for `route` (and, for a challenge,
+/// for the device it names) from its buckets, or say when to retry.
+fn admit_public(api: &Api, route: &Route, challenged: Option<&Hash>) -> Result<()> {
+    let now = (api.clock)();
+    if let Some(limit) = api.options.public_rate_limit {
+        admit(
+            &api.buckets,
+            limit,
+            bucket_key(Limited::Public, route, None),
+            now,
+        )?;
+    }
+    if let (Some(limit), Some(device)) = (api.options.challenge_rate_limit, challenged) {
+        admit(
+            &api.buckets,
+            limit,
+            bucket_key(Limited::Challenge, route, Some(device)),
+            now,
+        )?;
+    }
+    Ok(())
+}
+
+/// Take one request from the token bucket under `key`, or say when to
+/// retry.
+fn admit(buckets: &Buckets, limit: RateLimit, key: Vec<u8>, now: u64) -> Result<()> {
     let mut buckets = buckets.lock().unwrap_or_else(|e| e.into_inner());
-    let burst = f64::from(limit.burst.max(1));
-    let rate = f64::from(limit.per_second.max(1));
-    let (tokens, last) = buckets.entry(key).or_insert((burst, now));
-    let elapsed = now.saturating_sub(*last) as f64 / 1000.0;
-    *tokens = (*tokens + elapsed * rate).min(burst);
-    *last = now;
-    if *tokens >= 1.0 {
-        *tokens -= 1.0;
+    if buckets.len() >= MAX_BUCKETS && !buckets.contains_key(&key) {
+        buckets.retain(|_, b| {
+            b.refill(now);
+            !b.full()
+        });
+        if buckets.len() >= MAX_BUCKETS {
+            return Err(ApiError(RelayError::RateLimited {
+                retry_after_ms: 1000,
+            }));
+        }
+    }
+    let bucket = buckets.entry(key).or_insert(Bucket {
+        tokens: f64::from(limit.burst.max(1)),
+        last: now,
+        limit,
+    });
+    bucket.limit = limit;
+    bucket.refill(now);
+    if bucket.tokens >= 1.0 {
+        bucket.tokens -= 1.0;
         return Ok(());
     }
-    let retry_after_ms = ((1.0 - *tokens) / rate * 1000.0).ceil() as u64;
+    let rate = f64::from(limit.per_second.max(1));
+    let retry_after_ms = ((1.0 - bucket.tokens) / rate * 1000.0).ceil() as u64;
     Err(ApiError(RelayError::RateLimited {
         retry_after_ms: retry_after_ms.max(1),
     }))
@@ -302,6 +398,7 @@ async fn challenge(State(api): State<Api>, request: Request) -> Result<Response>
     let req = cbor::request(&body, &["route", "device"]).ok_or_else(malformed)?;
     let route = body_route(req.route("route").ok_or_else(malformed)?);
     let device: Hash = req.bytes("device").ok_or_else(malformed)?;
+    admit_public(&api, &route, Some(&device))?;
     let (challenge, expires) = api.relay.challenge(&route, &device, (api.clock)()).await?;
     Ok(cbor_response(
         StatusCode::OK,
@@ -320,6 +417,7 @@ async fn session(State(api): State<Api>, request: Request) -> Result<Response> {
     let device: Hash = req.bytes("device").ok_or_else(malformed)?;
     let challenge: [u8; 32] = req.bytes("challenge").ok_or_else(malformed)?;
     let signature: [u8; SIGNATURE_BYTES] = req.bytes("signature").ok_or_else(malformed)?;
+    admit_public(&api, &route, None)?;
     let s = api
         .relay
         .open_session(&route, &device, &challenge, &signature, (api.clock)())
@@ -380,6 +478,7 @@ async fn put_authority(
     let device = if headers.contains_key(header::AUTHORIZATION) {
         Some(authenticated_as(&api, &route, &headers, true).await?)
     } else {
+        admit_public(&api, &route, None)?;
         None
     };
     let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
@@ -401,6 +500,7 @@ async fn put_enrollment(
 ) -> Result<Response> {
     let route = path_route(&route)?;
     let lookup: [u8; 16] = hex(&lookup)?;
+    admit_public(&api, &route, None)?;
     let body = read(request.into_body(), MAX_AUTHORITY_BODY).await?;
     let created = api.relay.put_enrollment(&route, &lookup, &body).await?;
     let status = if created {
@@ -614,4 +714,28 @@ async fn export(
     }
     let bytes = api.relay.export(&route).await?;
     Ok(cbor_response(StatusCode::OK, bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{admit, Buckets, RateLimit, MAX_BUCKETS};
+
+    #[test]
+    fn buckets_are_bounded_and_idle_ones_make_room() {
+        let buckets = Buckets::default();
+        let limit = RateLimit {
+            per_second: 1,
+            burst: 1,
+        };
+        let key = |n: usize| n.to_le_bytes().to_vec();
+        for n in 0..MAX_BUCKETS {
+            assert!(admit(&buckets, limit, key(n), 0).is_ok());
+        }
+        // Full of buckets in use: a new key waits.
+        assert!(admit(&buckets, limit, key(MAX_BUCKETS), 0).is_err());
+        assert!(admit(&buckets, limit, key(0), 0).is_err(), "still limited");
+        // A second later they have refilled, the same as no bucket.
+        assert!(admit(&buckets, limit, key(MAX_BUCKETS), 1000).is_ok());
+        assert_eq!(buckets.lock().unwrap().len(), 1);
+    }
 }
