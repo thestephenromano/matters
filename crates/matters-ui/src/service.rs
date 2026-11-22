@@ -254,10 +254,9 @@ mod tests {
 
         // The automation interface answers on the name, and a new install
         // allows no client.
-        let caller = zbus::block_on(
-            zbus::connection::Builder::address(bus.address.as_str()).build(),
-        )
-        .unwrap();
+        let caller =
+            zbus::block_on(zbus::connection::Builder::address(bus.address.as_str()).build())
+                .unwrap();
         LAST_CALL.store(0, Ordering::SeqCst);
         let reply = zbus::block_on(caller.call_method(
             Some(BUS_NAME),
