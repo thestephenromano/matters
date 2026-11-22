@@ -68,7 +68,7 @@ Each crash test kills a child process at a named crash point, then reopens the d
   - Copies, reopens and concurrent handles never share one (`sealing_tests.rs`).
   - Each open is a new writer incarnation.
 - **Parsers under fuzzing.** Every parser of outside input has a cargo-fuzz target: records, controls, invitations, typed words and codes, and checkpoint parts. The targets are seeded from independent golden vectors, and the corpora are replayed on stable in the ordinary suite (`fuzz_replay.rs`). CI fuzzes any change to matters-sync for 60 s per target, and the weekly campaign for 600 s.
-- **Independent oracles.** Python standard-library encoders check the record contract, invitations and checkpoints byte for byte, as do the golden vectors.
+- **Independent oracles.** Python encoders check the record contract, key distribution, invitations and checkpoints byte for byte, as do the golden vectors. The invitation and checkpoint oracles (`crates/matters-sync/tests/vectors/`) use only Python's standard library. The record-contract and key-distribution generators (`experiments/sync-prototype/tests/vectors/`) use `cbor2` for CBOR, and the record contract's also uses pyca/cryptography for AES-GCM, HKDF and HMAC. Those two are independent of the Rust implementation, but not of those libraries.
 - **Isolation.** Uploads must match their route and session (`store_tests.rs`, `appends_are_idempotent_conflicts_permanent_and_routing_checked`). Cross-route reads and writes are refused (the conformance scenarios), and export and import keep routes apart.
 
 ## Performance
