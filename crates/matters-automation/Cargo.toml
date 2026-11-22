@@ -1,0 +1,25 @@
+[package]
+name = "matters-automation"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+authors = ["Matters Contributors"]
+description = "Matters' versioned D-Bus automation interface (#203), served by either front end"
+
+[dependencies]
+matters-core = { path = "../matters-core" }
+# The interface itself (decided on #203, 2026-11-22): zbus, already in
+# matters-ui for notifications and the portal. p2p serves a single peer
+# over a socket pair, which the tests use instead of a bus daemon.
+zbus = { version = "6.4", features = ["p2p"] }
+serde = { version = "1.0", features = ["derive"] }
+jiff = "0.2"
+# Client tokens: 32 bytes from the operating system's generator, kept only
+# as their SHA-256 verifier (both already compiled in).
+getrandom = "0.3"
+libcrux-sha2 = "=0.0.9"
+
+[dev-dependencies]
+matters-core = { path = "../matters-core", features = ["test-support"] }
+tempfile = "3.13"
