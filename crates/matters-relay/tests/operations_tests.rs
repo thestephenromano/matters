@@ -120,6 +120,145 @@ async fn a_hint_follows_each_committed_record_and_never_a_duplicate() {
     db.finish().await;
 }
 
+/// A relay with hints on a local port, for WebSocket clients.
+async fn serve_hints(db: &TestDb) -> std::net::SocketAddr {
+    let hints = Hints::start(&db.relay).await.unwrap();
+    let app = router_with(
+        db.relay.clone(),
+        matters_relay::api::system_clock(),
+        Options {
+            hints: Some(hints),
+            ..Options::default()
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn subscribe(
+    addr: std::net::SocketAddr,
+    token: &[u8; 32],
+) -> Result<Socket, tokio_tungstenite::tungstenite::Error> {
+    let url = format!("ws://{addr}/v0/routes/{}/hints", route_hex());
+    let mut request = url.as_str().into_client_request().unwrap();
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {}", hex(token)).parse().unwrap(),
+    );
+    tokio_tungstenite::connect_async(request)
+        .await
+        .map(|(socket, _)| socket)
+}
+
+/// What the socket gets next: a hint's sequence, or the close it ends with.
+async fn next_event(socket: &mut Socket) -> Result<u64, Option<String>> {
+    use tokio_tungstenite::tungstenite::Message;
+    let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .expect("an event within 5 s");
+    match message {
+        Some(Ok(Message::Binary(body))) => {
+            let mut d = minicbor::Decoder::new(&body);
+            d.map().unwrap();
+            assert_eq!(d.str().unwrap(), "sequence");
+            Ok(d.u64().unwrap())
+        }
+        Some(Ok(Message::Close(frame))) => Err(frame.map(|f| f.reason.to_string())),
+        None | Some(Err(_)) => Err(None),
+        Some(Ok(other)) => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_hint_socket_ends_with_its_devices_membership_or_session() {
+    let Some((db, mut c)) = provisioned().await else {
+        return;
+    };
+    let b = device();
+    let add = transition(&c, vec![c.admin.member(true), b.member(false)]);
+    db.relay
+        .put_authority(&route(), &matters_sync::record::record_hash(&add), &add)
+        .await
+        .unwrap();
+    c.authority.apply_membership(&add).unwrap();
+    let addr = serve_hints(&db).await;
+    let append = |n: u8| {
+        let (relay, admin) = (db.relay.clone(), &c.admin);
+        let id = fresh();
+        let bytes = record(admin, id, &[n], &route());
+        async move {
+            relay
+                .append(&route(), &admin.id(), &id, &bytes)
+                .await
+                .unwrap()
+        }
+    };
+    // A's session ends: its socket closes at the next hint, which it never
+    // gets.
+    let a_token = token(&db.relay, &c.admin, now()).await;
+    let mut a_socket = subscribe(addr, &a_token).await.unwrap();
+    let b_token = token(&db.relay, &b, now()).await;
+    let mut b_socket = subscribe(addr, &b_token).await.unwrap();
+    append(1).await;
+    assert_eq!(next_event(&mut a_socket).await, Ok(1));
+    assert_eq!(next_event(&mut b_socket).await, Ok(1));
+    sqlx::query("UPDATE sessions SET expires_at = 0 WHERE token_hash = $1")
+        .bind(matters_sync::record::record_hash(&a_token).as_slice())
+        .execute(db.relay.pool())
+        .await
+        .unwrap();
+    append(2).await;
+    assert_eq!(
+        next_event(&mut a_socket).await,
+        Err(Some("session-expired".to_owned()))
+    );
+    assert_eq!(next_event(&mut b_socket).await, Ok(2));
+    // B is removed: its socket closes before the next hint reaches it.
+    let remove = transition(&c, vec![c.admin.member(true)]);
+    db.relay
+        .put_authority(
+            &route(),
+            &matters_sync::record::record_hash(&remove),
+            &remove,
+        )
+        .await
+        .unwrap();
+    append(3).await;
+    assert_eq!(
+        next_event(&mut b_socket).await,
+        Err(Some("revoked".to_owned()))
+    );
+    // A device keeps a bounded number of sockets.
+    let a_token = token(&db.relay, &c.admin, now()).await;
+    let mut open = Vec::new();
+    for _ in 0..matters_relay::api::MAX_HINT_SOCKETS {
+        open.push(subscribe(addr, &a_token).await.unwrap());
+    }
+    match subscribe(addr, &a_token).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS)
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    // Closing one gives its place back.
+    open.pop().unwrap().close(None).await.unwrap();
+    let mut again = None;
+    for _ in 0..20 {
+        if let Ok(socket) = subscribe(addr, &a_token).await {
+            again = Some(socket);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(again.is_some(), "the closed socket's place is free again");
+    db.finish().await;
+}
+
 #[tokio::test]
 async fn a_rate_limit_answers_429_with_a_retry_time_and_refills() {
     let Some((db, c)) = provisioned().await else {

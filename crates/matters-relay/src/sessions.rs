@@ -159,6 +159,17 @@ impl Relay {
         now: u64,
         root_allowed: bool,
     ) -> Result<Hash> {
+        Ok(self.session_of(route, token, now, root_allowed).await?.0)
+    }
+
+    /// As [`Self::authenticate_as`], with the session's expiry (Unix ms).
+    pub async fn session_of(
+        &self,
+        route: &Route,
+        token: &[u8],
+        now: u64,
+        root_allowed: bool,
+    ) -> Result<(Hash, u64)> {
         let mut tx = self.pool().begin().await?;
         let row = route_row(&mut tx, route, false).await?;
         let session = sqlx::query_as::<_, (i64, Vec<u8>, i64)>(
@@ -186,6 +197,6 @@ impl Relay {
         if !root && !crate::store::member(authority, &device) {
             return Err(RelayError::Revoked);
         }
-        Ok(device)
+        Ok((device, u64::try_from(expires).unwrap_or(0)))
     }
 }

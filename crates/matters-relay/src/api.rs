@@ -128,12 +128,56 @@ fn bucket_key(what: Limited, route: &Route, device: Option<&Hash>) -> Vec<u8> {
     key
 }
 
+/// Open hint sockets by route row and device.
+type Sockets = Arc<std::sync::Mutex<std::collections::HashMap<(i64, Hash), usize>>>;
+
+/// The most hint sockets one device keeps open on one route. A client
+/// needs one; the rest allow for reconnects the relay has not yet seen
+/// close.
+pub const MAX_HINT_SOCKETS: usize = 4;
+/// How often an idle hint socket checks its session and pings its client.
+const HINT_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Clone)]
 struct Api {
     relay: Relay,
     clock: Clock,
     options: Options,
     buckets: Buckets,
+    sockets: Sockets,
+}
+
+/// A device's place among a route's hint sockets, given back on drop.
+struct SocketSlot {
+    sockets: Sockets,
+    key: (i64, Hash),
+}
+
+impl SocketSlot {
+    fn take(sockets: &Sockets, key: (i64, Hash)) -> Option<Self> {
+        let mut open = sockets.lock().unwrap_or_else(|e| e.into_inner());
+        let count = open.entry(key).or_insert(0);
+        if *count >= MAX_HINT_SOCKETS {
+            return None;
+        }
+        *count += 1;
+        Some(Self {
+            sockets: sockets.clone(),
+            key,
+        })
+    }
+}
+
+impl Drop for SocketSlot {
+    fn drop(&mut self) {
+        let mut open = self.sockets.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = open.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                open.remove(&self.key);
+            }
+        }
+    }
 }
 
 /// The v0 API over `relay`, telling time with `clock`, with no hints, rate
@@ -176,6 +220,7 @@ pub fn router_with(relay: Relay, clock: Clock, options: Options) -> Router {
             clock,
             options,
             buckets: Arc::default(),
+            sockets: Arc::default(),
         });
     match metrics {
         Some(metrics) => router.layer(axum::middleware::from_fn_with_state(
@@ -308,6 +353,16 @@ async fn authenticated(api: &Api, route: &Route, headers: &HeaderMap) -> Result<
     authenticated_as(api, route, headers, false).await
 }
 
+/// The bearer token of a request.
+fn bearer(headers: &HeaderMap) -> Result<[u8; 32]> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|t| hex::<32>(t).ok())
+        .ok_or(ApiError(RelayError::Unauthenticated))
+}
+
 /// As [`authenticated`], also accepting a recovering device's root session.
 async fn authenticated_as(
     api: &Api,
@@ -315,12 +370,7 @@ async fn authenticated_as(
     headers: &HeaderMap,
     root_allowed: bool,
 ) -> Result<Hash> {
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .and_then(|t| hex::<32>(t).ok())
-        .ok_or(ApiError(RelayError::Unauthenticated))?;
+    let token = bearer(headers)?;
     let now = (api.clock)();
     let device = api
         .relay
@@ -657,6 +707,13 @@ async fn unknown(request: Request) -> Response {
 
 /// `GET /v0/routes/{route}/hints`: a WebSocket on which the relay sends
 /// `{"sequence", "generation"}` for each committed record of the route.
+///
+/// The socket lasts as long as its session: before each hint, every
+/// [`HINT_CHECK`] while idle, and when the session expires, the session is
+/// checked again (still unexpired, the device still a member), and the
+/// socket closes with a policy close once it fails. Hints already waiting
+/// are coalesced into the newest, so a burst costs one check. A device
+/// keeps at most [`MAX_HINT_SOCKETS`] open on a route.
 async fn hints(
     State(api): State<Api>,
     Path(route): Path<String>,
@@ -664,28 +721,94 @@ async fn hints(
     upgrade: axum::extract::ws::WebSocketUpgrade,
 ) -> Result<Response> {
     let route = path_route(&route)?;
+    let token = bearer(&headers)?;
     authenticated(&api, &route, &headers).await?;
+    let (device, expires) = api
+        .relay
+        .session_of(&route, &token, (api.clock)(), false)
+        .await?;
     let Some(hints) = api.options.hints.clone() else {
         return Err(ApiError(RelayError::Unavailable(sqlx::Error::PoolClosed)));
     };
     let id = api.relay.route_id(&route).await?;
+    let slot =
+        SocketSlot::take(&api.sockets, (id, device)).ok_or(ApiError(RelayError::RateLimited {
+            retry_after_ms: HINT_CHECK.as_millis() as u64,
+        }))?;
     let mut receiver = hints.subscribe();
     Ok(upgrade.on_upgrade(move |mut socket| async move {
-        use axum::extract::ws::Message;
-        loop {
-            match receiver.recv().await {
-                Ok(hint) if hint.route == id => {
+        use axum::extract::ws::{close_code, CloseFrame, Message};
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        let _slot = slot;
+        // Whether the session still holds; the reason to close if not.
+        let check = || async {
+            api.relay
+                .session_of(&route, &token, (api.clock)(), false)
+                .await
+                .err()
+        };
+        let until = |expires: u64| {
+            let left = expires.saturating_sub((api.clock)()).max(1000);
+            tokio::time::Instant::now() + std::time::Duration::from_millis(left)
+        };
+        let mut expiry = until(expires);
+        let mut idle = tokio::time::interval(HINT_CHECK);
+        idle.tick().await;
+        let refused = loop {
+            tokio::select! {
+                received = receiver.recv() => {
+                    let mut newest = match received {
+                        Ok(hint) if hint.route == id => hint,
+                        Ok(_) | Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break None,
+                    };
+                    loop {
+                        match receiver.try_recv() {
+                            Ok(hint) if hint.route == id => newest = hint,
+                            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    if let Some(error) = check().await {
+                        break Some(error);
+                    }
                     let body = cbor::map(vec![
-                        ("sequence", Value::Uint(hint.sequence)),
-                        ("generation", Value::Bytes(&hint.generation)),
+                        ("sequence", Value::Uint(newest.sequence)),
+                        ("generation", Value::Bytes(&newest.generation)),
                     ]);
                     if socket.send(Message::Binary(body.into())).await.is_err() {
                         return;
                     }
                 }
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                incoming = socket.recv() => match incoming {
+                    // The client speaks only to close; pings are answered
+                    // by the socket itself.
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                    Some(Ok(_)) => {}
+                },
+                _ = idle.tick() => {
+                    if let Some(error) = check().await {
+                        break Some(error);
+                    }
+                    if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        return;
+                    }
+                }
+                _ = tokio::time::sleep_until(expiry) => {
+                    if let Some(error) = check().await {
+                        break Some(error);
+                    }
+                    expiry = until(expires);
+                }
             }
+        };
+        if let Some(error) = refused {
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: close_code::POLICY,
+                    reason: error.code().into(),
+                })))
+                .await;
         }
     }))
 }

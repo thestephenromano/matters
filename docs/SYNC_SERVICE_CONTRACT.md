@@ -144,6 +144,8 @@ server → client: {"generation": h'…', "sequence": 57}
 
 A hint says only that the route has committed records up to that sequence. It may be late, coalesced or lost; it never precedes the commit. Clients fetch by cursor on each hint, on reconnect and periodically, so correctness never depends on hints.
 
+The socket lasts as long as its session. The relay checks the session again before each hint, every 30 seconds while idle, and when it expires: once it has expired or the device is no longer a member, the relay closes the socket with close code 1008 and the error code (`session-expired`, `revoked`) as the reason, and sends nothing more. The client signs in again and reconnects, or stops if it was removed. A device keeps at most 4 hint sockets open on a route; another upgrade gets `429 rate-limited`.
+
 ### Export and import
 
 ```text
