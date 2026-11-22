@@ -334,6 +334,12 @@ The first signed entry for an incarnation binds, and a later one changes nothing
 
 **The contract's scope.** An honest admin's frontier closes what the admin has seen. Records the removed device made but the admin never received are not admitted by anyone, even if the device made them before it was removed. A device that applied a removed device's records beyond the frontier before it learned of the removal keeps them, as for a handoff whose prefix it had passed. From then on it admits nothing more of that writer: a receiver refuses a writer's next record once its chain holds the closing head (a null head is held from the start). The frontier therefore bounds every record admitted after the removal is known. As before, a withheld transition is not detectable from a root pin alone.
 
+**Known limit: the authority log is not compacted.** The log only grows. It gains one writer claim of about 3.7 KB per app open, and a transition plus about 4.9 KB of envelope per member per membership change. The relay bounds a route by its byte quota and at most 2,048 transitions ([service contract](SYNC_SERVICE_CONTRACT.md)). A device that reads the whole log holds it in memory, under the client's caps:
+- **Joining or recovering:** the authority log up to 128 MiB. At 4 opens a day on each of 3 devices, this is 134,217,728 / (12 × 3,695 × 365) ≈ 8.3 years of opens. A single device at 4 opens a day has about 25 years. Membership changes add little at this scale: a change with 3 members is about 33 KB.
+- **Recovering:** the relay's content records up to 512 MiB as well. At about 4.8 KB per edit (the #40 workloads), that is about 110,000 edits, or about 6 years at 50 edits a day.
+
+Past either cap, joining or recovery fails with a retry. Nothing is lost, but a device cannot join until the log is compacted. Compaction would replace the claims of retired writers and old epochs' envelopes with a signed summary. It is not implemented.
+
 **Evidence:**
 - `authority_tests.rs`:
   - records within, at and beyond a removal frontier;
