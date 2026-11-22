@@ -3177,6 +3177,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "futures-util",
+ "hyper-util",
  "matters-relay",
  "matters-sync",
  "minicbor",

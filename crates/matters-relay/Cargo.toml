@@ -21,6 +21,9 @@ tokio = { version = "1.54", features = ["sync", "rt-multi-thread", "net", "macro
 # ADR 0003: axum on hyper 1 over HTTP/1.1 and HTTP/2 (TLS terminates at a
 # proxy in front, #44); `ws` for commit hints.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "tokio", "ws", "matched-path"] }
+# The server under axum's router, with the header timeout axum::serve does
+# not set (src/server.rs). Already in the graph through axum.
+hyper-util = { version = "0.1.21", default-features = false, features = ["server-auto", "tokio", "service", "http1", "http2"] }
 base64 = "0.22"
 minicbor = { version = "=2.3.1", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }

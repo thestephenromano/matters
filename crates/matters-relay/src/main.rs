@@ -19,6 +19,11 @@
 //!   a session (default `10/60`; `off` turns it off).
 //! - `MATTERS_RELAY_CHALLENGE_RATE`: session challenges per route and
 //!   device (default `1/10`; `off`).
+//! - `MATTERS_RELAY_HEADER_TIMEOUT`, `MATTERS_RELAY_REQUEST_TIMEOUT`:
+//!   seconds a connection may take to send a request's headers (default
+//!   10), and a request to be answered (default 60).
+//! - `MATTERS_RELAY_MAX_REQUESTS`: requests handled at once (default 256);
+//!   past it a request gets `503 unavailable` at once.
 //! - `MATTERS_RELAY_OPERATOR_TOKEN`: 64 hex digits, the export credential.
 //! - `MATTERS_RELAY_METRICS_LISTEN`: where to serve `GET /metrics`
 //!   (OpenMetrics text), on its own listener; off when unset. Keep it on a
@@ -37,6 +42,7 @@ use std::process::ExitCode;
 
 use matters_relay::api::{self, Options, RateLimit};
 use matters_relay::hints::Hints;
+use matters_relay::server::Limits;
 use matters_relay::Relay;
 use matters_sync::authority::Route;
 use matters_sync::record::VERIFICATION_KEY_BYTES;
@@ -235,6 +241,10 @@ async fn serve(relay: Relay) -> ExitCode {
         Ok(limit) => limit,
         Err(code) => return code,
     };
+    let limits = match limits() {
+        Ok(limits) => limits,
+        Err(code) => return code,
+    };
     let operator_token = match std::env::var("MATTERS_RELAY_OPERATOR_TOKEN") {
         Err(_) => None,
         Ok(text) => match hex_bytes(&text).and_then(|b| <[u8; 32]>::try_from(b).ok()) {
@@ -265,7 +275,12 @@ async fn serve(relay: Relay) -> ExitCode {
             };
             eprintln!("matters-relay: metrics on {address}");
             let app = matters_relay::metrics::router(relay.clone(), metrics.clone());
-            tokio::spawn(async move { axum::serve(listener, app).await });
+            tokio::spawn(matters_relay::server::serve(
+                listener,
+                app,
+                Limits::default(),
+                std::future::pending(),
+            ));
             Some(metrics)
         }
     };
@@ -284,11 +299,32 @@ async fn serve(relay: Relay) -> ExitCode {
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    match axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await
-    {
+    match matters_relay::server::serve(listener, app, limits, shutdown).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => fail(error),
     }
+}
+
+/// The server's limits from the environment, defaults where unset.
+fn limits() -> Result<Limits, ExitCode> {
+    let mut limits = Limits::default();
+    let number = |var: &str| -> Result<Option<u64>, ExitCode> {
+        match std::env::var(var) {
+            Err(_) => Ok(None),
+            Ok(text) => match text.parse::<u64>() {
+                Ok(n) if n > 0 => Ok(Some(n)),
+                _ => Err(fail(format!("{var} must be a positive whole number"))),
+            },
+        }
+    };
+    if let Some(s) = number("MATTERS_RELAY_HEADER_TIMEOUT")? {
+        limits.header_timeout = std::time::Duration::from_secs(s);
+    }
+    if let Some(s) = number("MATTERS_RELAY_REQUEST_TIMEOUT")? {
+        limits.request_timeout = std::time::Duration::from_secs(s);
+    }
+    if let Some(n) = number("MATTERS_RELAY_MAX_REQUESTS")? {
+        limits.max_requests = usize::try_from(n).unwrap_or(usize::MAX);
+    }
+    Ok(limits)
 }

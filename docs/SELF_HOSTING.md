@@ -135,6 +135,16 @@ Requests without a session can come from anyone, so they are limited by default.
 
 Each is `<per-second>/<burst>`, or `off`. A client over a limit gets `429 rate-limited` and retries after the time it is given.
 
+The server bounds slow and long requests and how many run at once:
+
+| Setting | Default | Bounds |
+| --- | --- | --- |
+| `MATTERS_RELAY_HEADER_TIMEOUT` | `10` (seconds) | How long a connection may take to send its first bytes and each request's headers; then it is closed |
+| `MATTERS_RELAY_REQUEST_TIMEOUT` | `60` (seconds) | How long a request may take to be answered, its body included; then `503 unavailable` |
+| `MATTERS_RELAY_MAX_REQUESTS` | `256` | Requests handled at once; past it a request is shed at once with `503 unavailable`, never queued. `/healthz` and `/readyz` are exempt |
+
+Clients retry `503` with backoff, and an upload cut off this way is "not known to be stored", as after any failure. Caddy has its own timeouts in front; these hold for anything that reaches the relay directly.
+
 ## Quotas
 
 ```sh

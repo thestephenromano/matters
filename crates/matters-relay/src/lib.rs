@@ -29,6 +29,7 @@ mod export;
 mod fault;
 pub mod hints;
 pub mod metrics;
+pub mod server;
 mod sessions;
 mod store;
 

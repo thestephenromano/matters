@@ -558,3 +558,82 @@ async fn export_and_import_keep_every_byte_under_a_new_generation() {
     source.finish().await;
     target.finish().await;
 }
+
+#[tokio::test]
+async fn the_server_bounds_slow_peers_long_requests_and_concurrency() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Some((db, _)) = provisioned().await else {
+        return;
+    };
+    let limits = matters_relay::server::Limits {
+        header_timeout: Duration::from_millis(300),
+        request_timeout: Duration::from_millis(600),
+        max_requests: 1,
+    };
+    let app = router_with(
+        db.relay.clone(),
+        matters_relay::api::system_clock(),
+        Options::default(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(matters_relay::server::serve(
+        listener,
+        app,
+        limits,
+        std::future::pending(),
+    ));
+    // Read until the server closes, or give up after 3 s.
+    let closed_by_server = |mut stream: tokio::net::TcpStream| async move {
+        let mut out = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut out))
+            .await
+            .map(|_| String::from_utf8_lossy(&out).into_owned())
+    };
+    // A peer that sends nothing, or only part of its headers, is dropped.
+    let silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    assert_eq!(closed_by_server(silent).await.as_deref(), Ok(""));
+    let mut partial = tokio::net::TcpStream::connect(addr).await.unwrap();
+    partial
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: relay\r\n")
+        .await
+        .unwrap();
+    assert!(closed_by_server(partial).await.is_ok(), "dropped");
+    // A request whose body never arrives is answered `unavailable`.
+    let slow_body = || async {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let path = format!("/v0/routes/{}/enrollments/{}", route_hex(), hex(&[1; 16]));
+        stream
+            .write_all(
+                format!("PUT {path} HTTP/1.1\r\nHost: relay\r\nContent-Length: 1000\r\n\r\nabc")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream
+    };
+    let first = slow_body().await;
+    // Meanwhile the one request allowed at once is taken: another is shed
+    // at once, and health checks still answer.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let get = |path: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: relay\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        closed_by_server(stream).await.unwrap()
+    };
+    let shed = get("/v0/routes/00/records").await;
+    assert!(shed.starts_with("HTTP/1.1 503"), "{shed}");
+    assert!(get("/healthz").await.starts_with("HTTP/1.1 200"));
+    let answered = closed_by_server(first).await.unwrap_or_default();
+    assert!(answered.starts_with("HTTP/1.1 503"), "{answered}");
+    // And then the next request runs.
+    let after = get("/v0/routes/00/records").await;
+    assert!(after.starts_with("HTTP/1.1 400"), "{after}");
+    db.finish().await;
+}
