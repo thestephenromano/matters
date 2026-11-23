@@ -1362,8 +1362,17 @@ impl Authority {
             .find(|m| &m.id == h.author)
             .ok_or(Error::Unauthorized)?;
         // A frozen lineage holds every record of the device for the
-        // document, even one whose competing writer was never admitted.
-        if self.lineage_frozen(*document, h.author) {
+        // document, even one whose competing writer was never admitted,
+        // until a signed closing frontier decides where each of its writers
+        // ends: then the receiver applies only the chain that ends at that
+        // head (docs/SYNC_DURABLE_RECEIVE.md, "Recovering a frozen
+        // lineage").
+        if self.lineage_frozen(*document, h.author)
+            && !matches!(
+                self.admission(*document, *h.incarnation, current),
+                Admission::Closed(Some(_))
+            )
+        {
             verify_record(p, &author.signing_key)?;
             return Err(Error::Fork);
         }

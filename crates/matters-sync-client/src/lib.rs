@@ -8,7 +8,10 @@
 //!    relay refuses for good is set aside, so the round still pulls;
 //! 2. pulls the authority log page by page, pairing each transition with
 //!    this device's envelopes of the new epoch's key;
-//! 3. pulls the record log.
+//! 3. pulls the record log, each page handed to the store with its
+//!    records' places in the log. First the store may move the cursor back,
+//!    to read again records it let go of before it could check them, once
+//!    the authority it just pulled may let it ([`LocalStore::rewind_records`]).
 //!
 //! A page's cursor is saved only after its entries are applied. Applying is
 //! idempotent, so a page interrupted halfway is fetched and replayed whole
@@ -917,8 +920,11 @@ impl<S: LocalStore + 'static> Client<S> {
 
     /// Pull the record log, saving each page's cursor once it is received.
     /// A device that holds nothing yet starts from the newest checkpoint,
-    /// when the relay has one it accepts.
+    /// when the relay has one it accepts. The authority pulled just before
+    /// may let the store take records it let go of: it rewinds the cursor
+    /// to read them again first.
     async fn pull_records(&self, r: &str, report: &mut Report) -> Result<()> {
+        self.on_store(|s| s.rewind_records()).await?;
         let mut cursor = self.on_store(|s| s.cursor(Log::Records)).await?;
         if cursor.is_none()
             && self.on_store(|s| s.wants_checkpoint()).await?
@@ -929,9 +935,13 @@ impl<S: LocalStore + 'static> Client<S> {
         }
         let mut reader = LogReader::new(self, r, "records", cursor);
         while let Some(page) = reader.next().await? {
-            // The whole page at once: the store applies it in one go (#241).
-            let records: Vec<Vec<u8>> = page.entries.into_iter().map(|(_, b)| b).collect();
-            for outcome in self.on_store(move |s| s.receive_records(&records)).await? {
+            // The whole page at once: the store applies it in one go (#241),
+            // knowing where each record is in the log.
+            let (generation, entries) = (page.generation, page.entries);
+            for outcome in self
+                .on_store(move |s| s.receive_page(generation, &entries))
+                .await?
+            {
                 match outcome {
                     Ok(()) => report.received_records += 1,
                     Err(_) => report.refused_records += 1,

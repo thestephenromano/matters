@@ -25,10 +25,14 @@
 //!    writer's admission (`Authority::authenticate_at`). A record a removed
 //!    author signed outside every closing prefix is kept as revoked, never
 //!    applied while so; any other refusal there is final, for this record;
-//! 6. its writer's lineage: frozen here on evidence, closed (by a signed
-//!    handoff or an admin's closing frontier) at a head this device already
-//!    holds, or forked by a second signed successor of one record;
-//! 7. its place in its writer's chain;
+//! 6. its writer's lineage: frozen here on evidence (unless an admin's
+//!    closing frontier recovered its writer and the record lies on the
+//!    closed prefix), closed (by a signed handoff or an admin's closing
+//!    frontier) at a head this device already holds, or forked by a second
+//!    signed successor of one record;
+//! 7. its place in its writer's chain, and for a replacement writer's
+//!    first record, that the closing head of the writer it replaced is
+//!    held here;
 //! 8. that its engine update carries only its writer's actor, and that the
 //!    engine holds every operation it depends on.
 //!
@@ -46,8 +50,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use matters_sync::authority::{self, Boundary, EpochKey, Hash, Member};
-use matters_sync::checkpoint::Sealed;
+use matters_sync::authority::{self, Boundary, EpochKey, Hash, Member, WriterHistory};
+use matters_sync::checkpoint::{Cursor, Sealed};
 use matters_sync::record::{self as sealed_record, record_hash};
 use matters_sync::wire;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -107,10 +111,16 @@ pub enum Waiting {
     /// later transition may name its writer's closing prefix, and tried
     /// again whenever the membership changes.
     Revoked,
-    /// Never: it follows its writer's signed closing head.
+    /// Never: it follows its writer's signed closing head, or lies off
+    /// the closed prefix of a frozen lineage.
     AfterClose,
-    /// Never, unless recovered: its writer's lineage froze on a fork.
+    /// Never, unless recovered: its writer's lineage froze on a fork. An
+    /// admin's closing frontier recovers it, and it is tried again
+    /// whenever the membership changes.
     Frozen,
+    /// For the closing head of an earlier writer of its lineage: a
+    /// replacement writer's content waits until that chain is applied here.
+    Handoff,
 }
 
 impl Waiting {
@@ -123,6 +133,7 @@ impl Waiting {
             Self::Revoked => "revoked",
             Self::AfterClose => "after-close",
             Self::Frozen => "frozen",
+            Self::Handoff => "handoff",
         }
     }
 }
@@ -224,11 +235,10 @@ enum Attempt {
         plaintext: Vec<u8>,
     },
     /// Signed evidence against its writer's lineage: the lineage freezes,
-    /// and the record is kept as `waiting`.
+    /// and the record is kept as frozen.
     Fork {
         reason: &'static str,
         held: Option<Hash>,
-        waiting: Waiting,
     },
 }
 
@@ -245,6 +255,17 @@ fn wait(waiting: Waiting, awaits: Option<Vec<u8>>, authenticated: bool) -> Attem
         awaits,
         authenticated,
     }
+}
+
+/// Wait as frozen, tagged with the manifest it was tried under: a closing
+/// frontier that may recover it comes with a membership transition, which
+/// changes the manifest.
+fn frozen(joined: &Joined, authenticated: bool) -> Attempt {
+    wait(
+        Waiting::Frozen,
+        Some(joined.authority.manifest().to_vec()),
+        authenticated,
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -359,6 +380,166 @@ fn locally_frozen(conn: &Connection, author: &Hash) -> Result<bool> {
         .is_some())
 }
 
+/// The closing head an admin decided for a writer of a frozen lineage: a
+/// signed closing prefix that admits something of it, once its device is
+/// no longer a member, so a closing frontier (or a handoff its writers
+/// signed before one) set it. A member's own handoff decides nothing
+/// about its fork.
+fn recovered(joined: &Joined, history: Option<&WriterHistory>, author: &Hash) -> Option<Hash> {
+    let Some(Boundary::Closed(Some(closing))) = history?.closed else {
+        return None;
+    };
+    let member = roster_at(joined, &joined.authority.manifest())
+        .is_some_and(|(_, roster)| roster.iter().any(|m| m.id == *author));
+    (!member).then_some(closing)
+}
+
+/// Where a record of a recovered writer stands against its closed prefix.
+enum Place {
+    /// On the chain that ends at the closing head, leading on from what
+    /// this device applied: it applies in its chain's order.
+    On,
+    /// Off it: never applied.
+    Off,
+    /// Not known until more of the chain arrives.
+    Unknown,
+}
+
+/// How far the walk back from a closing head has come.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum End {
+    /// The next record to meet, not kept here yet (`None`: the chain's
+    /// start).
+    Next(Option<Hash>),
+    /// This device's head of the chain: the records met lead on from it.
+    Head,
+    /// Another record this device holds, or the chain's start while it
+    /// holds some of the chain: the closed prefix does not lead on from
+    /// what it applied, so nothing on it can apply here.
+    Elsewhere,
+}
+
+/// The records met walking back from a closing head, and where the walk
+/// stands. Once it ends, the answer stands for good: the chain is linked
+/// by hashes, and only records on it apply.
+struct Prefix {
+    on: BTreeSet<Hash>,
+    end: End,
+}
+
+/// Where `f` stands against the closed prefix of its writer, which ends
+/// at `closing`: walked back from that head, by hash, through the records
+/// this device keeps, as far as they reach.
+fn place(
+    tx: &Connection,
+    joined: &Joined,
+    prefixes: &mut BTreeMap<[u8; 32], Prefix>,
+    retry: &mut Retry,
+    f: &Facts,
+    closing: Hash,
+) -> Result<Place> {
+    let mut prefix = prefixes.remove(&f.incarnation).unwrap_or(Prefix {
+        on: BTreeSet::new(),
+        end: End::Next(Some(closing)),
+    });
+    let head = head(tx, &f.incarnation)?;
+    // Each step meets a record further back on a chain linked by hashes,
+    // which cannot loop; a record met twice ends the walk all the same.
+    while let End::Next(at) = prefix.end {
+        prefix.end = match at {
+            _ if at == head => End::Head,
+            None => End::Elsewhere,
+            Some(d) if holds_record(tx, &f.incarnation, &d)? => End::Elsewhere,
+            Some(d) => match link(tx, joined, retry, f, &d)? {
+                // Not here yet: the walk goes on when it arrives.
+                None => break,
+                Some(previous) => {
+                    if prefix.on.insert(d) {
+                        End::Next(previous)
+                    } else {
+                        End::Elsewhere
+                    }
+                }
+            },
+        };
+    }
+    let place = match prefix.end {
+        End::Elsewhere => Place::Off,
+        _ if prefix.on.contains(&f.digest) => Place::On,
+        End::Head => Place::Off,
+        End::Next(_) => Place::Unknown,
+    };
+    prefixes.insert(f.incarnation, prefix);
+    Ok(place)
+}
+
+/// The predecessor named by record `digest` of `f`'s chain, if it is `f`
+/// or a record this device keeps. A kept record still frozen is tried
+/// again, since the walk now places it.
+fn link(
+    tx: &Connection,
+    joined: &Joined,
+    retry: &mut Retry,
+    f: &Facts,
+    digest: &Hash,
+) -> Result<Option<Option<Hash>>> {
+    if *digest == f.digest {
+        return Ok(Some(f.previous));
+    }
+    let row: Option<(i64, String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT seq, reason, bytes FROM sync_pending WHERE digest = ?1",
+            params![digest.as_slice()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((seq, reason, bytes)) = row else {
+        return Ok(None);
+    };
+    let Ok(kept) = facts(joined, &bytes) else {
+        return Ok(None);
+    };
+    if kept.incarnation != f.incarnation {
+        return Ok(None);
+    }
+    if reason == Waiting::Frozen.as_str() {
+        retry.push(seq);
+    }
+    Ok(Some(kept.previous))
+}
+
+/// What the first record of a writer's chain waits for: the nearest
+/// nonempty closing head among the earlier writers of its lineage, while
+/// this device does not hold it (`incarnation || head`). Writers closed
+/// empty are passed over. The earlier ones were waited for when that
+/// head's own chain began, so the nearest is enough.
+fn handoff_gate(
+    tx: &Connection,
+    joined: &Joined,
+    history: Option<&WriterHistory>,
+) -> Result<Option<Vec<u8>>> {
+    let mut earlier = history.and_then(|h| h.predecessor).map(|(id, _)| id);
+    while let Some(incarnation) = earlier {
+        let Ok(h) = joined.authority.writer_history(HOME_DOCUMENT, incarnation) else {
+            break;
+        };
+        match h.closed {
+            Some(Boundary::Closed(Some(head))) => {
+                if holds_record(tx, &incarnation, &head)? {
+                    break;
+                }
+                let mut awaits = incarnation.to_vec();
+                awaits.extend(head);
+                return Ok(Some(awaits));
+            }
+            Some(Boundary::Closed(None)) => earlier = h.predecessor.map(|(id, _)| id),
+            // A legacy replacement signed no closing head to wait for.
+            _ => break,
+        }
+    }
+    Ok(None)
+}
+
 /// The roster of an accepted manifest: the one place receiving reads it,
 /// to check a record it holds no key for yet.
 fn roster_at<'a>(joined: &'a Joined, manifest: &Hash) -> Option<(u64, &'a [Member])> {
@@ -423,16 +604,34 @@ struct Page<'a> {
     changed: bool,
     /// Check each update's effect on the document on its own.
     careful: bool,
-    /// Pending rows to try again, by `seq`, each once while queued.
+    retry: Retry,
+    /// The relay's storage generation the page was read from, and where in
+    /// its record log the record being received is: kept with the record,
+    /// so one let go of can be read again.
+    generation: Option<[u8; 16]>,
+    origin: Option<i64>,
+    /// The closed prefix of each frozen lineage's writer met in this page.
+    prefixes: BTreeMap<[u8; 32], Prefix>,
+}
+
+/// Pending rows to try again, by `seq`, each once while queued.
+#[derive(Default)]
+struct Retry {
     queue: VecDeque<i64>,
     queued: BTreeSet<i64>,
 }
 
-impl Page<'_> {
-    fn enqueue(&mut self, seq: i64) {
+impl Retry {
+    fn push(&mut self, seq: i64) {
         if self.queued.insert(seq) {
             self.queue.push_back(seq);
         }
+    }
+}
+
+impl Page<'_> {
+    fn enqueue(&mut self, seq: i64) {
+        self.retry.push(seq);
     }
 }
 
@@ -490,9 +689,7 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
         }
         // A frozen writer lineage verifies the signature first; a frozen
         // authority does not.
-        Err(authority::Error::Fork) => {
-            return Ok(wait(Waiting::Frozen, None, !joined.authority.is_forked()))
-        }
+        Err(authority::Error::Fork) => return Ok(frozen(joined, !joined.authority.is_forked())),
         // Signed, by an author since removed: kept, tagged with its author
         // and the manifest it was last tried under.
         Err(authority::Error::Revoked) => {
@@ -510,10 +707,15 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
             true,
         ));
     }
-    if locally_frozen(tx, &f.author)? {
-        return Ok(wait(Waiting::Frozen, None, true));
-    }
+    let history = joined
+        .authority
+        .writer_history(HOME_DOCUMENT, f.incarnation)
+        .ok();
+    let frozen_here = locally_frozen(tx, &f.author)? || history.as_ref().is_some_and(|h| h.frozen);
     if f.kind == wire::Kind::Snapshot {
+        if frozen_here {
+            return Ok(frozen(joined, true));
+        }
         return Ok(match authenticated.open() {
             Ok(plaintext) => Attempt::Part {
                 sealed: Sealed {
@@ -526,24 +728,38 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
             Err(e) => refuse(e.to_string(), true),
         });
     }
+    // A frozen lineage applies nothing more, until an admin's closing
+    // frontier decides where its writer ends: then only the records on the
+    // chain that ends there, leading on from what this device applied.
+    if frozen_here {
+        let Some(closing) = recovered(joined, history.as_ref(), &f.author) else {
+            return Ok(frozen(joined, true));
+        };
+        match place(tx, joined, &mut cx.prefixes, &mut cx.retry, f, closing)? {
+            Place::On => {}
+            Place::Off => return Ok(wait(Waiting::AfterClose, None, true)),
+            Place::Unknown => return Ok(frozen(joined, true)),
+        }
+    }
     let head = head(tx, &f.incarnation)?;
     // A retired writer's records end at its signed closing head, by a
     // handoff or an admin's closing frontier: nothing new of it applies
     // once this device holds that head, or holds anything when the chain
     // closed empty. A removed device may have signed on before it learnt
     // of its removal, so that is no fork: the record is kept, never applied.
-    if let Ok(history) = joined
-        .authority
-        .writer_history(HOME_DOCUMENT, f.incarnation)
-    {
-        if let Some(Boundary::Closed(closing)) = history.closed {
-            let past = match closing {
-                None => true,
-                Some(c) => head == Some(c) || holds_record(tx, &f.incarnation, &c)?,
-            };
-            if past {
-                return Ok(wait(Waiting::AfterClose, None, true));
-            }
+    if let Some(Boundary::Closed(closing)) = history.as_ref().and_then(|h| h.closed) {
+        let past = match closing {
+            None => true,
+            Some(c) => head == Some(c) || holds_record(tx, &f.incarnation, &c)?,
+        };
+        if past {
+            return Ok(wait(Waiting::AfterClose, None, true));
+        }
+    }
+    // A replacement writer's content follows its lineage's earlier chains.
+    if f.previous.is_none() {
+        if let Some(awaits) = handoff_gate(tx, joined, history.as_ref())? {
+            return Ok(wait(Waiting::Handoff, Some(awaits), true));
         }
     }
     if f.previous != head {
@@ -551,7 +767,6 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
             return Ok(Attempt::Fork {
                 reason: "a second signed successor of one record",
                 held: Some(held),
-                waiting: Waiting::Frozen,
             });
         }
         return Ok(wait(
@@ -705,6 +920,17 @@ fn apply(
         for seq in rows {
             unblocked.push(seq?);
         }
+        // A replacement writer's first record, if this was the closing head
+        // it waited for.
+        let mut closing = f.incarnation.to_vec();
+        closing.extend(f.digest);
+        let mut stmt = tx.prepare_cached(
+            "SELECT seq FROM sync_pending WHERE reason = 'handoff' AND awaits = ?1",
+        )?;
+        let rows = stmt.query_map(params![closing], |r| r.get::<_, i64>(0))?;
+        for seq in rows {
+            unblocked.push(seq?);
+        }
         let mut stmt = tx.prepare_cached(
             "SELECT seq, awaits FROM sync_pending
              WHERE reason = 'dependencies' AND awaits BETWEEN ?1 AND ?2",
@@ -736,32 +962,36 @@ fn unkeep(tx: &Connection, f: &Facts) -> Result<()> {
     Ok(())
 }
 
-/// Keep `bytes` waiting, or update the reason of the row that holds them.
+/// Keep `bytes` waiting, or update the reason of the row that holds them,
+/// with where in the relay's log they were read, if that is known.
 fn keep(
-    tx: &Connection,
+    cx: &Page,
     f: &Facts,
     bytes: &[u8],
     reason: &str,
     awaits: Option<&[u8]>,
     authenticated: bool,
 ) -> Result<()> {
+    let tx = cx.tx;
     tx.execute(
-        "INSERT INTO sync_pending (record_id, digest, bytes, reason, awaits, authenticated)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO sync_pending (record_id, digest, bytes, reason, awaits, authenticated, origin)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (record_id, digest) DO UPDATE SET
              reason = excluded.reason, awaits = excluded.awaits,
-             authenticated = MAX(authenticated, excluded.authenticated)",
+             authenticated = MAX(authenticated, excluded.authenticated),
+             origin = COALESCE(excluded.origin, origin)",
         params![
             f.record_id.as_slice(),
             f.digest.as_slice(),
             bytes,
             reason,
             awaits,
-            authenticated
+            authenticated,
+            cx.origin
         ],
     )?;
     if !authenticated {
-        evict_unauthenticated(tx)?;
+        evict_unauthenticated(cx)?;
     }
     if reason == Waiting::Revoked.as_str() {
         evict_revoked(tx, &f.author)?;
@@ -808,12 +1038,41 @@ fn beyond_budget(filter: &str, rows: &str, bytes: &str) -> String {
 /// Hold the records kept without authentication to their budget, the
 /// oldest evicted first. Carried records are received again in the same
 /// transaction that kept them, so they are outside it.
-fn evict_unauthenticated(tx: &Connection) -> Result<()> {
+///
+/// An evicted record may be genuine, its manifest not here yet. The
+/// earliest place in the relay's log of those evicted is remembered, with
+/// the manifest current now: once the manifest changes, the client reads
+/// the log again from there ([`Database::rewind_records`]).
+fn evict_unauthenticated(cx: &Page) -> Result<()> {
+    let tx = cx.tx;
+    let beyond = beyond_budget("authenticated = 0 AND reason != 'carried'", "?1", "?2");
+    if let Some(generation) = cx.generation {
+        let earliest: Option<i64> = tx.query_row(
+            &format!("SELECT MIN(origin) FROM sync_pending WHERE seq IN ({beyond})"),
+            params![UNAUTHENTICATED_ROWS, UNAUTHENTICATED_BYTES],
+            |r| r.get(0),
+        )?;
+        if let Some(sequence) = earliest {
+            // The earliest in this generation; the manifest of the first.
+            tx.execute(
+                "INSERT INTO sync_rewind (id, generation, sequence, manifest)
+                 VALUES (1, ?1, ?2, ?3)
+                 ON CONFLICT (id) DO UPDATE SET
+                     sequence = CASE WHEN generation = excluded.generation
+                         THEN MIN(sequence, excluded.sequence) ELSE excluded.sequence END,
+                     manifest = CASE WHEN generation = excluded.generation
+                         THEN manifest ELSE excluded.manifest END,
+                     generation = excluded.generation",
+                params![
+                    generation.as_slice(),
+                    sequence,
+                    cx.joined.authority.manifest().as_slice()
+                ],
+            )?;
+        }
+    }
     tx.execute(
-        &format!(
-            "DELETE FROM sync_pending WHERE seq IN ({})",
-            beyond_budget("authenticated = 0 AND reason != 'carried'", "?1", "?2")
-        ),
+        &format!("DELETE FROM sync_pending WHERE seq IN ({beyond})"),
         params![UNAUTHENTICATED_ROWS, UNAUTHENTICATED_BYTES],
     )?;
     Ok(())
@@ -899,7 +1158,7 @@ fn settle(
             authenticated,
         } => {
             keep(
-                cx.tx,
+                cx,
                 &f,
                 bytes,
                 waiting.as_str(),
@@ -947,14 +1206,18 @@ fn settle(
                 }
             }
         }
-        Attempt::Fork {
-            reason,
-            held,
-            waiting,
-        } => {
+        Attempt::Fork { reason, held } => {
             freeze(cx.tx, &f, bytes, reason, held)?;
-            keep(cx.tx, &f, bytes, waiting.as_str(), None, true)?;
-            Ok(Received::Pending(waiting))
+            let manifest = cx.joined.authority.manifest();
+            keep(
+                cx,
+                &f,
+                bytes,
+                Waiting::Frozen.as_str(),
+                Some(manifest.as_slice()),
+                true,
+            )?;
+            Ok(Received::Pending(Waiting::Frozen))
         }
     })
 }
@@ -1016,10 +1279,13 @@ fn seed(cx: &mut Page) -> Result<()> {
     }
     {
         // A closing frontier arrives with a membership transition, which
-        // changes the manifest: only then may a revoked record pass.
+        // changes the manifest: only then may a revoked record pass, or a
+        // frozen lineage's writer be recovered.
         let mut stmt = tx.prepare(
             "SELECT seq FROM sync_pending
-             WHERE reason = 'revoked' AND substr(awaits, 49) != ?1 ORDER BY seq",
+             WHERE (reason = 'revoked' AND substr(awaits, 49) != ?1)
+                OR (reason = 'frozen' AND awaits IS NOT ?1)
+             ORDER BY seq",
         )?;
         let rows = stmt.query_map(params![joined.authority.manifest().as_slice()], |r| {
             r.get::<_, i64>(0)
@@ -1058,8 +1324,8 @@ fn seed(cx: &mut Page) -> Result<()> {
 
 /// Try the queued rows again, and whatever each one applied unblocks.
 fn run_queue(cx: &mut Page) -> Result<()> {
-    while let Some(seq) = cx.queue.pop_front() {
-        cx.queued.remove(&seq);
+    while let Some(seq) = cx.retry.queue.pop_front() {
+        cx.retry.queued.remove(&seq);
         let row: Option<(Vec<u8>, String, bool)> = cx
             .tx
             .query_row(
@@ -1071,7 +1337,9 @@ fn run_queue(cx: &mut Page) -> Result<()> {
         let Some((bytes, reason, authenticated)) = row else {
             continue;
         };
-        let kept = authenticated && reason != CARRIED;
+        // A carried row was never authenticated here. A frozen one is
+        // judged whole again, so a recovered lineage's verdict is final.
+        let kept = authenticated && reason != CARRIED && reason != Waiting::Frozen.as_str();
         let (f, a) = attempt(cx, &bytes, kept)?;
         // A kept row's outcome is its own; nobody waits for it.
         let _outcome = settle(cx, &bytes, f, a)?;
@@ -1131,11 +1399,20 @@ struct Unsettled;
 
 type Outcomes = Vec<Result<Received>>;
 
+/// Records to receive, in order, and where they were read: the relay's
+/// storage generation, and each record's sequence in its log (none when
+/// they did not come from it, or the caller does not say).
+struct Delivery<'a> {
+    records: &'a [&'a [u8]],
+    generation: Option<[u8; 16]>,
+    origins: &'a [i64],
+}
+
 fn run_page(
     conn: &mut Connection,
     engine: &mut Option<Document>,
     joined: &Joined,
-    records: &[&[u8]],
+    delivery: &Delivery,
     careful: bool,
 ) -> Result<std::result::Result<Outcomes, Unsettled>> {
     let tx = conn.transaction()?;
@@ -1155,13 +1432,17 @@ fn run_page(
             keys: BTreeMap::new(),
             changed: false,
             careful,
-            queue: VecDeque::new(),
-            queued: BTreeSet::new(),
+            retry: Retry::default(),
+            generation: delivery.generation,
+            origin: None,
+            prefixes: BTreeMap::new(),
         };
-        let mut outcomes = Vec::with_capacity(records.len());
-        for bytes in records {
+        let mut outcomes = Vec::with_capacity(delivery.records.len());
+        for (n, bytes) in delivery.records.iter().enumerate() {
+            cx.origin = delivery.origins.get(n).copied();
             outcomes.push(receive_one(&mut cx, bytes)?);
         }
+        cx.origin = None;
         drain_in(&mut cx)?;
         if cx.changed {
             let doc = engine
@@ -1209,11 +1490,11 @@ fn receive_all(
     conn: &mut Connection,
     engine: &mut Option<Document>,
     joined: &Joined,
-    records: &[&[u8]],
+    delivery: &Delivery,
 ) -> Result<Outcomes> {
-    match run_page(conn, engine, joined, records, false)? {
+    match run_page(conn, engine, joined, delivery, false)? {
         Ok(outcomes) => Ok(outcomes),
-        Err(Unsettled) => match run_page(conn, engine, joined, records, true)? {
+        Err(Unsettled) => match run_page(conn, engine, joined, delivery, true)? {
             Ok(outcomes) => Ok(outcomes),
             Err(Unsettled) => Err(MattersError::Engine(
                 "the received records leave the document unreadable".into(),
@@ -1229,7 +1510,12 @@ pub(super) fn drain(
     engine: &mut Option<Document>,
     joined: &Joined,
 ) -> Result<()> {
-    receive_all(conn, engine, joined, &[]).map(|_| ())
+    let nothing = Delivery {
+        records: &[],
+        generation: None,
+        origins: &[],
+    };
+    receive_all(conn, engine, joined, &nothing).map(|_| ())
 }
 
 /// Keep `bytes`, a record a checkpoint carried, for the next drain to
@@ -1316,6 +1602,35 @@ impl Database {
     /// reason, and the others go on. The outer `Err` is a failure of the
     /// store, which applied none of the page.
     pub fn receive_records(&self, records: &[&[u8]]) -> Result<Outcomes> {
+        self.receive_delivery(&Delivery {
+            records,
+            generation: None,
+            origins: &[],
+        })
+    }
+
+    /// Receive a page of the relay's record log of storage `generation`,
+    /// as `receive_records` does: each record with its sequence in the
+    /// log. A record kept without authentication remembers where it was
+    /// read, so if the budget lets it go it is read again once something
+    /// arrives that may authenticate it ([`Self::rewind_records`]).
+    pub fn receive_page(&self, generation: [u8; 16], records: &[(u64, &[u8])]) -> Result<Outcomes> {
+        let bytes: Vec<&[u8]> = records.iter().map(|(_, b)| *b).collect();
+        let origins = records
+            .iter()
+            .map(|(sequence, _)| {
+                i64::try_from(*sequence)
+                    .map_err(|_| MattersError::Validation("a relay sequence past i64".into()))
+            })
+            .collect::<Result<Vec<i64>>>()?;
+        self.receive_delivery(&Delivery {
+            records: &bytes,
+            generation: Some(generation),
+            origins: &origins,
+        })
+    }
+
+    fn receive_delivery(&self, delivery: &Delivery) -> Result<Outcomes> {
         self.with_sealing(|conn, engine, sync| {
             let joined = sync
                 .membership
@@ -1324,7 +1639,64 @@ impl Database {
             if engine.is_none() {
                 return Err(MattersError::Validation("sync is off".into()));
             }
-            receive_all(conn, engine, joined, records)
+            receive_all(conn, engine, joined, delivery)
+        })
+    }
+
+    /// Before the relay's record log is read: if records kept without
+    /// authentication were let go of, and the manifest has changed since
+    /// the first was (a transition that may let this device authenticate
+    /// them), move the records cursor back to just before the earliest of
+    /// them, in the same storage generation. Each change rewinds once:
+    /// what is let go of again waits for the next change. True if it moved
+    /// the cursor.
+    pub fn rewind_records(&self) -> Result<bool> {
+        self.with_sealing(|conn, _, sync| {
+            let joined = sync
+                .membership
+                .as_ref()
+                .ok_or_else(|| MattersError::Validation("sync is not resumed".into()))?;
+            let tx = conn.transaction()?;
+            let rewind: Option<(Vec<u8>, i64, Vec<u8>)> = tx
+                .query_row(
+                    "SELECT generation, sequence, manifest FROM sync_rewind",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            let Some((generation, sequence, manifest)) = rewind else {
+                return Ok(false);
+            };
+            if manifest == joined.authority.manifest() {
+                return Ok(false);
+            }
+            tx.execute("DELETE FROM sync_rewind", [])?;
+            let cursor: Option<Vec<u8>> = tx
+                .query_row(
+                    "SELECT cursor FROM sync_cursors WHERE log = 'records'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let at = cursor.as_deref().and_then(Cursor::from_relay_cursor);
+            let rewound = match at {
+                Some(at)
+                    if at.generation[..] == generation[..] && sequence <= at.sequence as i64 =>
+                {
+                    let back = Cursor {
+                        generation: at.generation,
+                        sequence: (sequence - 1) as u64,
+                    };
+                    tx.execute(
+                        "UPDATE sync_cursors SET cursor = ?1 WHERE log = 'records'",
+                        params![back.relay_cursor()],
+                    )?;
+                    true
+                }
+                _ => false,
+            };
+            tx.commit()?;
+            Ok(rewound)
         })
     }
 
