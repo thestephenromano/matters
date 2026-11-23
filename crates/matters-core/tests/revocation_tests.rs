@@ -468,6 +468,119 @@ fn an_older_handle_is_fenced_once_a_newer_open_takes_over_the_writer() {
     assert!(matches!(stale, Err(MattersError::Superseded)), "{stale:?}");
 }
 
+/// A handle another open superseded starts over in place (#45): the app's
+/// Reload. It reads in what the other open wrote, seals as the writer
+/// again once resumed, and loses nothing: the refused write changed
+/// nothing, and every edit sealed before is still queued.
+#[test]
+fn a_superseded_handle_reopens_in_place_and_becomes_the_writer_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.db");
+    let keys = MemoryKeyStore::default();
+    let app = Database::open(&path).unwrap();
+    app.create_collection(&keys, route()).unwrap();
+    app.add_task(&mut Task::new(id(1), "before", 0.0)).unwrap();
+    let queued = records(&app);
+    // matters-syncd, or another Matters, opens the same database and edits.
+    let other = Database::open(&path).unwrap();
+    other.resume_sync(&keys).unwrap();
+    other
+        .add_task(&mut Task::new(id(2), "elsewhere", 1.0))
+        .unwrap();
+    assert!(matches!(
+        app.add_task(&mut Task::new(id(3), "refused", 2.0)),
+        Err(MattersError::Superseded)
+    ));
+    // Resuming alone keeps the old writer: still refused.
+    app.resume_sync(&keys).unwrap();
+    assert!(matches!(
+        app.add_task(&mut Task::new(id(3), "refused", 2.0)),
+        Err(MattersError::Superseded)
+    ));
+
+    // Reopened, a clone of the handle (the app shares one) sees it too.
+    // Until its keys are loaded again it seals nothing, so writes wait.
+    let shared = app.clone();
+    shared.reopen().unwrap();
+    assert!(app.writer_incarnation().is_none());
+    assert!(app
+        .add_task(&mut Task::new(id(3), "unsealed?", 2.0))
+        .is_err());
+    assert!(!has(&app, 3), "nothing written without its keys");
+    app.resume_sync(&keys).unwrap();
+    app.add_task(&mut Task::new(id(4), "after reload", 3.0))
+        .unwrap();
+    assert!(has(&app, 1) && has(&app, 2) && has(&app, 4) && !has(&app, 3));
+    let after = records(&app);
+    assert!(queued.iter().all(|r| after.contains(r)), "nothing lost");
+    // Its engine is the journal's: what the other open recorded included.
+    let fresh = Database::open(&path).unwrap();
+    assert_eq!(
+        app.engine_snapshot().unwrap(),
+        fresh.engine_snapshot().unwrap()
+    );
+    // The other open is now the stale one.
+    assert!(matches!(
+        other.add_task(&mut Task::new(id(5), "stale", 4.0)),
+        Err(MattersError::Superseded)
+    ));
+}
+
+/// Reopening a database a newer Matters has written since is refused, and
+/// the handle goes on as it was.
+#[test]
+fn a_reopen_refuses_a_newer_schema_and_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.db");
+    let keys = MemoryKeyStore::default();
+    let app = Database::open(&path).unwrap();
+    app.create_collection(&keys, route()).unwrap();
+    let writer = app.writer_incarnation();
+    let newer = matters_core::storage::db::LATEST_SCHEMA + 1;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+            [newer],
+        )
+        .unwrap();
+    assert!(matches!(
+        app.reopen(),
+        Err(MattersError::NewerSchema { found, .. }) if found == newer
+    ));
+    assert_eq!(app.writer_incarnation(), writer);
+    app.add_task(&mut Task::new(id(1), "still writes", 0.0))
+        .unwrap();
+}
+
+/// An in-memory database reopens too: the engine and sync state start over
+/// on the same connection, and a local-only one stays local-only.
+#[test]
+fn an_in_memory_database_reopens_on_its_connection() {
+    let keys = MemoryKeyStore::default();
+    let local = Database::open_in_memory().unwrap();
+    local.add_task(&mut Task::new(id(1), "local", 0.0)).unwrap();
+    local.reopen().unwrap();
+    assert!(!local.sync_enabled());
+    local
+        .add_task(&mut Task::new(id(2), "still local", 1.0))
+        .unwrap();
+    assert!(has(&local, 1) && has(&local, 2));
+
+    let synced = Database::open_in_memory().unwrap();
+    synced.create_collection(&keys, route()).unwrap();
+    let before = synced.writer_incarnation().unwrap();
+    synced.reopen().unwrap();
+    assert!(synced.sync_enabled());
+    synced.resume_sync(&keys).unwrap();
+    assert_ne!(synced.writer_incarnation().unwrap(), before, "a new writer");
+    let sealed = records(&synced).len();
+    synced
+        .add_task(&mut Task::new(id(3), "sealed", 0.0))
+        .unwrap();
+    assert_eq!(records(&synced).len(), sealed + 1);
+}
+
 /// The last control of `kind` that `db` signed.
 fn last_signed(db: &Database, kind: fn(&Body) -> bool) -> Vec<u8> {
     db.outgoing_controls()

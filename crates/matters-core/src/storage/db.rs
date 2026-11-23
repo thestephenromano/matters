@@ -7,8 +7,8 @@ use super::batch::Writer;
 use super::schema::{
     MIGRATION_V10, MIGRATION_V11, MIGRATION_V12, MIGRATION_V13, MIGRATION_V14, MIGRATION_V15,
     MIGRATION_V16, MIGRATION_V17, MIGRATION_V18, MIGRATION_V19, MIGRATION_V2, MIGRATION_V20,
-    MIGRATION_V21, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6, MIGRATION_V7,
-    MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
+    MIGRATION_V21, MIGRATION_V22, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
+    MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, SCHEMA_V1,
 };
 use super::trash;
 use crate::domain::{
@@ -51,6 +51,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (19, MIGRATION_V19),
     (20, MIGRATION_V20),
     (21, MIGRATION_V21),
+    (22, MIGRATION_V22),
 ];
 
 /// The newest schema version this build migrates to: the last migration's.
@@ -207,18 +208,7 @@ impl Database {
             params![now],
         )?;
 
-        let version: i64 =
-            conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
-                r.get(0)
-            })?;
-        // A newer Matters wrote this database: refuse it, rather than write
-        // around tables (sync's among them) this version does not know.
-        if version > LATEST_SCHEMA {
-            return Err(MattersError::NewerSchema {
-                found: version,
-                supported: LATEST_SCHEMA,
-            });
-        }
+        let version = Self::schema_version(&conn)?;
         for &(target, migration) in MIGRATIONS {
             if version < target {
                 let tx = conn.transaction()?;
@@ -231,6 +221,49 @@ impl Database {
             }
         }
         Ok(())
+    }
+
+    /// The schema version `conn` holds. A newer Matters wrote this
+    /// database when it is past [`LATEST_SCHEMA`]: refuse it, rather than
+    /// write around tables (sync's among them) this version does not know.
+    fn schema_version(conn: &Connection) -> Result<i64> {
+        let version: i64 =
+            conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })?;
+        if version > LATEST_SCHEMA {
+            return Err(MattersError::NewerSchema {
+                found: version,
+                supported: LATEST_SCHEMA,
+            });
+        }
+        Ok(version)
+    }
+
+    /// Start this open over from the database as it is now (#45), as a
+    /// fresh open would: the sync engine is rebuilt from the journal, and
+    /// this open's sealing writer and membership are dropped. Every clone
+    /// of this handle sees it. The SQLite connection is kept: it already
+    /// reads what other opens commit.
+    ///
+    /// This is how a handle that another open superseded
+    /// ([`MattersError::Superseded`]) goes on: nothing is lost, since each
+    /// refused write changed nothing. A joined device then calls
+    /// `resume_sync` again, which makes this open its writer once more;
+    /// until then its writes wait for the keys, as after any open.
+    ///
+    /// A database a newer Matters has written since is refused with
+    /// [`MattersError::NewerSchema`], and nothing changes.
+    pub fn reopen(&self) -> Result<()> {
+        self.with_sealing(|conn, engine, sync| {
+            Self::schema_version(conn)?;
+            let fresh = super::sync::load_engine(conn)?;
+            let required = super::membership::joined_and_active(conn)?;
+            *engine = fresh;
+            *sync = Default::default();
+            sync.required = required;
+            Ok(())
+        })
     }
 
     /// Read through the connection. SQLite refuses any write for the

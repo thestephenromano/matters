@@ -129,6 +129,9 @@ pub struct View {
     pub unsent: usize,
     /// The invitation to show the new device, while adding one.
     pub invitation: Option<String>,
+    /// An invitation is being registered with the relay, before it is
+    /// shown.
+    pub inviting: bool,
     /// Shown once after a collection is created, until acknowledged.
     pub kit: Option<RecoveryKit>,
     pub provisioning: Option<Provisioning>,
@@ -304,25 +307,65 @@ impl SyncApp {
                 endpoint_changed: Box::new(endpoint_changed),
             }),
         };
-        let db = &app.inner.db;
+        app.resume(endpoint)?;
+        Ok(app)
+    }
+
+    /// Carry on as the database stands: syncing with `endpoint` when it
+    /// has joined a collection, or waiting to join.
+    fn resume(&self, endpoint: Option<String>) -> Result<(), String> {
+        let db = &self.inner.db;
         match endpoint {
-            Some(endpoint) if db.sync_enabled() => match db.resume_sync(app.inner.keys.as_ref()) {
+            Some(endpoint) if db.sync_enabled() => match db.resume_sync(self.inner.keys.as_ref()) {
                 // A saved address the client refuses (plain http) leaves the
                 // app working locally, with the reason shown.
                 Ok(_) => {
-                    if let Err(error) = app.start(&endpoint) {
-                        app.update(|v| v.error = Some(error));
+                    if let Err(error) = self.start(&endpoint) {
+                        self.update(|v| v.error = Some(error));
                     }
                 }
-                Err(error) => app.update(|v| v.error = Some(plain(error))),
+                Err(error) => self.update(|v| v.error = Some(plain(error))),
             },
             Some(endpoint) if db.enrolling().map_err(plain)?.is_some() => {
-                app.update(|v| v.phase = Phase::Joining);
-                app.wait_to_join(endpoint);
+                self.update(|v| {
+                    v.phase = Phase::Joining;
+                    v.endpoint = Some(endpoint.clone());
+                });
+                self.wait_to_join(endpoint);
             }
             _ => {}
         }
-        Ok(app)
+        Ok(())
+    }
+
+    /// Open the database again in this process (#45), after another open
+    /// of it (matters-syncd, or another Matters) took over as this
+    /// device's writer and this one's writes were refused
+    /// ([`MattersError::Superseded`]). It reads in what that open wrote and
+    /// becomes the writer again; the other open's writes are refused from
+    /// then on. Nothing is lost: refused writes changed nothing, and edits
+    /// not yet on the relay stay queued. A recovery kit still to be shown
+    /// is kept; an invitation being shown is withdrawn.
+    pub fn reload(&self) -> Result<(), String> {
+        // Refused (a newer Matters wrote the database), nothing changes.
+        self.inner.db.reopen().map_err(|e| self.fail(e))?;
+        self.next_attempt();
+        self.stop();
+        let endpoint = {
+            let mut view = self.inner.view.lock().unwrap();
+            let endpoint = view.endpoint.clone();
+            *view = View {
+                endpoint: endpoint.clone(),
+                kit: view.kit.take(),
+                provisioning: view.provisioning.take(),
+                ..View::default()
+            };
+            endpoint
+        };
+        (self.inner.changed)();
+        self.resume(endpoint).map_err(|e| self.fail(e))?;
+        self.refresh();
+        Ok(())
     }
 
     /// What to show now.
@@ -513,9 +556,15 @@ impl SyncApp {
         self.update(|v| v.kit = None);
     }
 
-    /// Show an invitation for a new device, and add the device when its
+    /// Make an invitation for a new device, and add the device when its
     /// request arrives through the relay. Admin only.
-    pub fn invite(&self) -> Result<String, String> {
+    ///
+    /// The relay takes a joining device's request only under an invitation
+    /// its admin registered, so the invitation is registered first, on the
+    /// session's runtime: this returns at once, with the view's `inviting`
+    /// set. The view then shows the invitation, or the error that kept it
+    /// from being registered.
+    pub fn invite(&self) -> Result<(), String> {
         let client = self
             .client()
             .ok_or_else(|| self.fail("this device does not sync"))?;
@@ -525,20 +574,33 @@ impl SyncApp {
             .secret
             .lookup(&invitation.route)
             .map_err(|e| self.fail(e))?;
-        // The relay takes a joining device's request only under an
-        // invitation its admin registered, so register it before showing it.
-        self.inner
-            .runtime
-            .block_on(client.register_invitation(&lookup))
-            .map_err(|e| self.fail(e))?;
         let attempt = self.next_attempt();
-        let shown = text.clone();
         self.update(|v| {
-            v.invitation = Some(shown);
+            v.invitation = None;
+            v.inviting = true;
             v.error = None;
         });
         let app = self.clone();
         self.inner.runtime.spawn(async move {
+            let registered = client.register_invitation(&lookup).await;
+            // Checked under the view's lock: a cancel in between wins.
+            let mut shown = false;
+            app.update(|v| {
+                if !app.current(attempt) {
+                    return;
+                }
+                v.inviting = false;
+                match &registered {
+                    Ok(()) => {
+                        v.invitation = Some(text);
+                        shown = true;
+                    }
+                    Err(error) => v.error = Some(plain(error)),
+                }
+            });
+            if !shown {
+                return;
+            }
             let deadline = tokio::time::Instant::now() + INVITATION_TTL;
             while app.current(attempt) && tokio::time::Instant::now() < deadline {
                 if let Ok(Some(request)) = client.fetch_enrollment(&lookup).await {
@@ -559,13 +621,17 @@ impl SyncApp {
                 app.update(|v| v.invitation = None);
             }
         });
-        Ok(text)
+        Ok(())
     }
 
-    /// Stop showing the invitation; a request made with it is not added.
+    /// Stop showing the invitation, or registering it; a request made with
+    /// it is not added.
     pub fn cancel_invitation(&self) {
         self.next_attempt();
-        self.update(|v| v.invitation = None);
+        self.update(|v| {
+            v.invitation = None;
+            v.inviting = false;
+        });
     }
 
     fn next_attempt(&self) -> u64 {
@@ -701,15 +767,20 @@ impl SyncApp {
     /// have not reached the relay, this refuses unless `discard_unsent`
     /// says the user chose to keep them here only.
     pub fn leave(&self, discard_unsent: bool) -> Result<(), LeaveRefused> {
-        self.next_attempt();
         let db = &self.inner.db;
         if db.sync_enabled() {
             match db.leave_collection(discard_unsent) {
                 Ok(_) => {}
-                Err(MattersError::UnsentWork(n)) => return Err(LeaveRefused::Unsent(n)),
+                Err(MattersError::UnsentWork(n)) => {
+                    // The count shown may be behind: show what is unsent now.
+                    self.refresh();
+                    return Err(LeaveRefused::Unsent(n));
+                }
                 Err(error) => return Err(LeaveRefused::Failed(self.fail(error))),
             }
         }
+        // Refused, nothing changed; leaving, stop any invitation or join.
+        self.next_attempt();
         self.stop();
         (self.inner.endpoint_changed)(None);
         self.update(|v| *v = View::default());

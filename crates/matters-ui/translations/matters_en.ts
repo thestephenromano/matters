@@ -295,6 +295,18 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>Matters was opened again elsewhere, for example by matters-syncd, so changes here are not being saved. Everything saved before is kept. Reload to continue with the latest.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reload</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reload the database</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Dismiss</source>
         <translation type="unfinished"></translation>
     </message>
@@ -544,6 +556,10 @@
     </message>
     <message>
         <source>Add a device</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Preparing the invitation with the relay…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

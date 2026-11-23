@@ -270,6 +270,47 @@ async fn a_generation_change_republishes_every_known_control() {
     assert!(!mock.unauthenticated_puts.lock().unwrap().is_empty());
 }
 
+/// The republishing a generation change starts survives a restart (#45):
+/// the store keeps it, not the client. B's store has handled the change
+/// and the app stops before the round that republishes; a new client on
+/// the same database still sends A's transition, and only once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_generation_change_republishes_after_a_restart() {
+    let p = pair();
+    let mock = Arc::new(Mock::default());
+    *mock.authority.lock().unwrap() = published(&p.a);
+    let endpoint = serve(mock.clone()).await;
+    Client::new(&endpoint, p.b.clone())
+        .unwrap()
+        .sync_once()
+        .await
+        .unwrap();
+    // The store took the change; the process ends before pushing.
+    p.b.sync_generation_changed().unwrap();
+    mock.control_puts.lock().unwrap().clear();
+    let restarted = Client::new(&endpoint, p.b.clone()).unwrap();
+    restarted.sync_once().await.unwrap();
+    let a_signed: Vec<Vec<u8>> =
+        p.b.sync_controls()
+            .unwrap()
+            .into_iter()
+            .filter(|c| matches!(parse(c).unwrap().message.body, Body::Membership(_)))
+            .collect();
+    assert!(!a_signed.is_empty());
+    let puts = mock.control_puts.lock().unwrap().clone();
+    for control in &a_signed {
+        assert!(
+            puts.contains(control),
+            "A's transition re-sent after the restart"
+        );
+    }
+    assert!(!p.b.sync_republish_pending().unwrap(), "done once");
+    mock.control_puts.lock().unwrap().clear();
+    restarted.sync_once().await.unwrap();
+    let puts = mock.control_puts.lock().unwrap().clone();
+    assert!(a_signed.iter().all(|c| !puts.contains(c)), "and not again");
+}
+
 /// A relay whose log was reset within its generation (high-water below the
 /// device's cursor) is handled as a restore: the device re-sends.
 #[tokio::test(flavor = "multi_thread")]

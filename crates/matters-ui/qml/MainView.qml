@@ -2236,6 +2236,40 @@ Item {
                     }
                 }
 
+                // Another open of the database took over as this device's
+                // writer (#45): changes here are refused until it reloads.
+                Rectangle {
+                    objectName: "supersededBanner"
+                    visible: controller.databaseSuperseded
+                    Layout.fillWidth: true
+                    implicitHeight: supersededRow.implicitHeight + 16
+                    radius: 8
+                    color: root.colDangerBg
+
+                    RowLayout {
+                        id: supersededRow
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 8
+
+                        Text {
+                            objectName: "supersededText"
+                            text: qsTr("Matters was opened again elsewhere, for example by matters-syncd, so changes here are not being saved. Everything saved before is kept. Reload to continue with the latest.")
+                            color: root.colDanger
+                            font.pixelSize: 13
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+
+                        Button {
+                            objectName: "reloadDatabase"
+                            text: qsTr("Reload")
+                            Accessible.name: qsTr("Reload the database")
+                            onClicked: controller.reloadDatabase()
+                        }
+                    }
+                }
+
                 // Error banner: failed commands are reported, never dropped.
                 Rectangle {
                     id: errorBanner
@@ -4566,8 +4600,25 @@ Item {
             Button {
                 objectName: "syncInvite"
                 visible: controller.syncPhase === "on" && controller.syncAdmin && controller.syncInvitation === ""
+                         && !controller.syncInviting
                 text: qsTr("Add a device")
                 onClicked: controller.syncInvite()
+            }
+            // The relay registers the invitation before it is shown (#45).
+            RowLayout {
+                visible: controller.syncInviting
+                Layout.fillWidth: true
+                Label {
+                    objectName: "syncInviting"
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: qsTr("Preparing the invitation with the relay…")
+                }
+                Button {
+                    objectName: "syncCancelInviting"
+                    text: qsTr("Cancel")
+                    onClicked: controller.syncCancelInvitation()
+                }
             }
             ColumnLayout {
                 visible: controller.syncInvitation !== ""
@@ -4648,8 +4699,11 @@ Item {
                     objectName: "syncLeaveConfirm"
                     text: controller.syncUnsent > 0 ? qsTr("Stop and keep changes here only") : qsTr("Stop syncing")
                     onClicked: {
-                        controller.syncLeave(controller.syncUnsent > 0)
-                        syncLeaveDialog.close()
+                        // Refused when changes not yet on the relay came in
+                        // since the dialog opened: it stays, with their
+                        // count, for the choice to be made again.
+                        if (controller.syncLeave(controller.syncUnsent > 0) <= 0)
+                            syncLeaveDialog.close()
                     }
                 }
             }
