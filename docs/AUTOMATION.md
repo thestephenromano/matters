@@ -120,6 +120,14 @@ Returns one task, project or area by its ID.
 
 Return the open projects and the areas that aren't trashed, in sidebar order.
 
+## Writes and batches (coming)
+
+The write methods arrive in the next step of #203. The core they use is in `matters-core` already (`storage/batch.rs`):
+- **`Database::batch`** runs many operations through a `Writer` in one SQLite transaction. With sync on, they are recorded as one journal row and one sealed record. If any operation fails, nothing changes: not the rows, the journal or the engine. Every write in Matters goes through this path; a single edit is a batch of one.
+- **Operations in a batch see each other's changes.** Each one's engine commands are worked out right after its own SQL, so moving or reordering a task created earlier in the same batch places it correctly.
+- **Size.** A batch whose update would be larger than one sync record (`MAX_BATCH_BYTES`, 1 MiB) is refused whole with `BatchTooLarge`. It is never split; the caller sends smaller batches.
+- **Retries.** `Database::batch_once` takes a request ID and a digest of the request. A retry with the same ID and digest returns the first result and changes nothing; the same ID with a different digest is refused. Request IDs are kept on this device for a day and never synced.
+
 ## Errors
 
 | Name | When |

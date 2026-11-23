@@ -45,6 +45,11 @@ pub enum MattersError {
     #[error("This database was opened again elsewhere; reload it to keep editing")]
     Superseded,
 
+    /// A batch of changes would record more than one sync record holds:
+    /// nothing changed. It is never split; send smaller batches (#203).
+    #[error("These changes are too large to record at once ({bytes} bytes; the limit is {limit})")]
+    BatchTooLarge { bytes: usize, limit: usize },
+
     /// A sync control record, envelope or key was refused (#37). Carries
     /// no key material.
     #[error("Sync authority error: {0}")]

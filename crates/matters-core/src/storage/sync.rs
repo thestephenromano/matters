@@ -83,60 +83,17 @@ impl Database {
             .unwrap_or(None)
     }
 
-    /// Run `apply` in one write transaction. With sync on, also apply the
-    /// commands `commands` derives from its result to the engine at time
-    /// `at`, and journal the update, before the same commit.
+    /// Run `apply` as a batch of one operation (`super::batch`). With sync
+    /// on, also apply the commands `commands` derives from its result to
+    /// the engine at time `at`, and journal the update, before the same
+    /// commit.
     pub(crate) fn write<T>(
         &self,
         at: i64,
         apply: impl FnOnce(&Transaction<'_>) -> Result<T>,
         commands: impl FnOnce(&Transaction<'_>, &T) -> Result<Vec<Command>>,
     ) -> Result<T> {
-        self.with_sealing(|conn, engine, keys| {
-            // A joined, active device seals every write; until its keys are
-            // loaded nothing is written, so nothing is left to seal later.
-            if keys.required && keys.sealing.is_none() {
-                return Err(MattersError::Validation(
-                    "sync keys are not loaded; resume sync first".into(),
-                ));
-            }
-            let tx = conn.transaction()?;
-            // Another open of this database took over the writer: refuse
-            // before anything is written, so the caller can reload (#45).
-            if let Some(sealing) = keys.sealing.as_ref() {
-                super::sealing::fence(&tx, sealing)?;
-            }
-            let value = apply(&tx)?;
-            let Some(doc) = engine.as_mut() else {
-                tx.commit()?;
-                return Ok(value);
-            };
-            let committed = (|| {
-                let commands = commands(&tx, &value)?;
-                if !commands.is_empty() {
-                    let before = doc.version();
-                    doc.apply(&commands, at)?;
-                    let update = doc.updates_since(&before)?;
-                    tx.execute(
-                        "INSERT INTO sync_journal (bytes, outgoing) VALUES (?1, 1)",
-                        params![update],
-                    )?;
-                    // Sealed in this transaction: the record commits with
-                    // the edit or not at all (#36).
-                    if let Some(sealing) = keys.sealing.as_ref() {
-                        super::sealing::seal_update(&tx, sealing, tx.last_insert_rowid(), &update)?;
-                    }
-                }
-                crash_point("before-commit");
-                Ok::<_, MattersError>(tx.commit()?)
-            })();
-            if let Err(error) = committed {
-                *engine = load_engine(conn)?;
-                return Err(error);
-            }
-            crash_point("after-commit");
-            Ok(value)
-        })
+        self.batch(|w| w.write(at, apply, commands))
     }
 }
 

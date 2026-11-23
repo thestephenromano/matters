@@ -1,5 +1,5 @@
 use jiff::civil::Date;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::domain::{Area, Heading, Project, ProjectProgress, Tag, Task, View};
@@ -264,8 +264,37 @@ const LOGBOOK_ORDER: &str = "completed_at DESC, updated_at DESC, id ASC";
 /// Trash order: most recently trashed first.
 const TRASH_ORDER: &str = "trashed_at DESC, id ASC";
 
+/// Where a [`QueryEngine`] reads: through the database's lock, or in a
+/// batch's transaction (`crate::storage::Writer`), which already holds it.
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    Db(&'a Database),
+    Conn(&'a Connection),
+}
+
+impl Source<'_> {
+    fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        match self {
+            Source::Db(db) => db.with_conn(f),
+            Source::Conn(conn) => f(conn),
+        }
+    }
+
+    fn list_areas(&self) -> Result<Vec<Area>> {
+        self.with_conn(Database::live_areas_in)
+    }
+
+    fn list_projects(&self) -> Result<Vec<Project>> {
+        self.with_conn(Database::open_projects_in)
+    }
+
+    fn list_headings_for_project(&self, project_id: &str) -> Result<Vec<Heading>> {
+        self.with_conn(|conn| Database::headings_of(conn, project_id))
+    }
+}
+
 pub struct QueryEngine<'a> {
-    db: &'a Database,
+    db: Source<'a>,
     /// Finished tasks are logged up to this time (milliseconds); `None`:
     /// all of them.
     logged_until: Option<i64>,
@@ -275,7 +304,16 @@ impl<'a> QueryEngine<'a> {
     /// Queries in which every finished task is in the Logbook.
     pub fn new(db: &'a Database) -> Self {
         Self {
-            db,
+            db: Source::Db(db),
+            logged_until: None,
+        }
+    }
+
+    /// Queries in `conn`, a batch's transaction: they see what the batch
+    /// has changed so far.
+    pub(crate) fn within(conn: &'a Connection) -> Self {
+        Self {
+            db: Source::Conn(conn),
             logged_until: None,
         }
     }
@@ -646,7 +684,9 @@ impl<'a> QueryEngine<'a> {
             View::Project(id) => id,
             _ => return Ok(tasks.into_iter().map(ListRow::Task).collect()),
         };
-        let headings = self.db.list_headings_for_project(project_id)?;
+        let headings = self
+            .db
+            .with_conn(|conn| Database::headings_of(conn, project_id))?;
         // Group 0 is above the headings; group i + 1 is heading i. A task
         // under a heading that no longer exists is above them.
         let mut groups: Vec<Vec<Task>> = vec![Vec::new(); headings.len() + 1];
@@ -722,7 +762,11 @@ impl<'a> QueryEngine<'a> {
     /// this visit, `crate::Visit`) keeps its place after the projects
     /// finished before the task above it.
     fn logbook_rows(&self, tasks: Vec<Task>) -> Result<Vec<ListRow>> {
-        let mut projects = self.db.list_finished_projects()?.into_iter().peekable();
+        let mut projects = self
+            .db
+            .with_conn(Database::finished_projects_in)?
+            .into_iter()
+            .peekable();
         let mut rows = Vec::new();
         for task in tasks {
             while let Some(project) = projects.next_if(|p| p.completed_at > task.completed_at) {
@@ -773,7 +817,7 @@ impl<'a> QueryEngine<'a> {
     /// they are nested under, so a parent can be chosen too. In tag-list
     /// order (`Database::list_tags`).
     pub fn tags_present(&self, tasks: &[Task]) -> Result<Vec<Tag>> {
-        let all = self.db.list_tags()?;
+        let all = self.db.with_conn(crate::storage::tags::tags_in)?;
         let mut present: std::collections::HashSet<String> = std::collections::HashSet::new();
         self.db.with_conn(|conn| {
             let mut stmt = conn.prepare_cached(

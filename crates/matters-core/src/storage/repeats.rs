@@ -24,6 +24,7 @@ use jiff::civil::Date;
 use jiff::ToSpan;
 use rusqlite::{params, OptionalExtension, Transaction};
 
+use super::batch::Writer;
 use super::db::{Database, TASK_COLUMNS};
 use super::task_actions::{checklist, key_after, live_task};
 use super::trash::LIVE_TASK;
@@ -180,48 +181,59 @@ impl Database {
     /// occurrence of a series that repeats after completion, the next
     /// occurrence is created in the same change.
     pub fn complete_task_on(&self, id: &str, today: Date) -> Result<()> {
-        let now = crate::clock::now_millis();
-        self.write(
-            now,
-            |tx| {
-                let changed = tx.execute(
-                    "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1,
+        self.batch(|w| w.complete_task_on(id, today))
+    }
+}
+
+impl Writer<'_> {
+    /// [`Database::complete_task_on`], in this batch.
+    pub fn complete_task_on(&mut self, id: &str, today: Date) -> Result<()> {
+        self.op(|w| {
+            let now = crate::clock::now_millis();
+            w.write(
+                now,
+                |tx| {
+                    let changed = tx.execute(
+                        "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1,
                         closed_by_project = 0 WHERE id = ?2",
-                    params![now, id],
-                )? > 0;
-                let mut commands = Vec::new();
-                if !changed {
-                    return Ok(commands);
-                }
-                commands.push(Command::SetStatus {
-                    id: id.into(),
-                    status: crate::domain::Status::Completed,
-                    completed_at: Some(now),
-                    closed_by_project: false,
-                });
-                let head = tx
-                    .query_row(
-                        &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND {LIVE_TASK}"),
-                        params![id],
-                        Database::map_task_row,
-                    )
-                    .optional()?;
-                if let Some(head) = head {
-                    if let Some(rule) = head
-                        .repeat
-                        .as_ref()
-                        .filter(|r| r.after_completion && !r.paused)
-                    {
-                        if let Some(date) = rule.after_completed(today) {
-                            create_occurrence(tx, &head, date, now, &mut commands)?;
+                        params![now, id],
+                    )? > 0;
+                    let mut commands = Vec::new();
+                    if !changed {
+                        return Ok(commands);
+                    }
+                    commands.push(Command::SetStatus {
+                        id: id.into(),
+                        status: crate::domain::Status::Completed,
+                        completed_at: Some(now),
+                        closed_by_project: false,
+                    });
+                    let head = tx
+                        .query_row(
+                            &format!(
+                                "SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND {LIVE_TASK}"
+                            ),
+                            params![id],
+                            Database::map_task_row,
+                        )
+                        .optional()?;
+                    if let Some(head) = head {
+                        if let Some(rule) = head
+                            .repeat
+                            .as_ref()
+                            .filter(|r| r.after_completion && !r.paused)
+                        {
+                            if let Some(date) = rule.after_completed(today) {
+                                create_occurrence(tx, &head, date, now, &mut commands)?;
+                            }
                         }
                     }
-                }
-                Ok(commands)
-            },
-            |_, commands| Ok(commands.clone()),
-        )
-        .map(|_| ())
+                    Ok(commands)
+                },
+                |_, commands| Ok(commands.clone()),
+            )
+            .map(|_| ())
+        })
     }
 }
 
