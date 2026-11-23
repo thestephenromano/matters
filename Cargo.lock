@@ -2830,6 +2830,7 @@ dependencies = [
  "matters-core",
  "matters-sync",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

@@ -33,8 +33,14 @@
 //! 7. its place in its writer's chain, and for a replacement writer's
 //!    first record, that the closing head of the writer it replaced is
 //!    held here;
-//! 8. that its engine update carries only its writer's actor, and that the
-//!    engine holds every operation it depends on.
+//! 8. that the engine checker decoded its update within its budget
+//!    (`crdt::isolation`), that the update carries only its writer's actor,
+//!    and that the engine holds every operation it depends on.
+//!
+//! The engine checker decodes a page's updates in one batch, before the
+//! first record's turn: each fresh data record of the page is
+//! authenticated and opened ahead, once, and keeps what that found for its
+//! turn. A record kept waiting meets its verdict again when it applies.
 //!
 //! The record then applies: merged, journalled, recorded with its
 //! predecessor and position, and its writer's chain head advanced. Once
@@ -60,6 +66,7 @@ use super::checkpoint::{self, Checkpointed};
 use super::db::Database;
 use super::membership::{Joined, HOME_DOCUMENT};
 use super::sync::{load_engine, rebuild_rows};
+use crate::crdt::isolation::{self, Blob, Verdict};
 use crate::crdt::Document;
 use crate::error::{MattersError, Result};
 
@@ -206,6 +213,37 @@ fn facts(joined: &Joined, bytes: &[u8]) -> std::result::Result<Facts, String> {
         previous: h.previous.copied(),
         digest: record_hash(bytes),
     })
+}
+
+/// What authenticating a record found: kept for the page, so a record
+/// opened ahead of its turn is authenticated once.
+enum Authed {
+    /// Signed by a member, by an admitted writer pinned to `actor`: its
+    /// plaintext, or why it does not open.
+    Opened {
+        actor: u64,
+        plaintext: std::result::Result<Vec<u8>, String>,
+    },
+    Refused(authority::Error),
+}
+
+/// Authenticate a data record or checkpoint part, and open it.
+fn authenticate(joined: &Joined, bytes: &[u8], kind: wire::Kind, key: &EpochKey) -> Authed {
+    counted();
+    let authenticated = if kind == wire::Kind::Snapshot {
+        joined
+            .authority
+            .authenticate_snapshot_at(bytes, key, &HOME_DOCUMENT)
+    } else {
+        joined.authority.authenticate_at(bytes, key, &HOME_DOCUMENT)
+    };
+    match authenticated {
+        Ok(a) => Authed::Opened {
+            actor: a.actor(),
+            plaintext: a.open().map_err(|e| e.to_string()),
+        },
+        Err(error) => Authed::Refused(error),
+    }
 }
 
 /// Why a record was refused, and whether a member's signature on it was
@@ -612,6 +650,8 @@ struct Page<'a> {
     origin: Option<i64>,
     /// The closed prefix of each frozen lineage's writer met in this page.
     prefixes: BTreeMap<[u8; 32], Prefix>,
+    /// Records of the page authenticated ahead of their turn, by digest.
+    authed: BTreeMap<Hash, Authed>,
 }
 
 /// Pending rows to try again, by `seq`, each once while queued.
@@ -671,35 +711,35 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
             ));
         }
     }
-    let Some(key) = epoch_key(&mut cx.keys, tx, joined, &f.manifest)? else {
-        return Ok(key_wait(joined, bytes, f));
+    let authed = match cx.authed.remove(&f.digest) {
+        Some(authed) => authed,
+        None => {
+            let Some(key) = epoch_key(&mut cx.keys, tx, joined, &f.manifest)? else {
+                return Ok(key_wait(joined, bytes, f));
+            };
+            authenticate(joined, bytes, f.kind, key)
+        }
     };
-    counted();
-    let authenticated = if f.kind == wire::Kind::Snapshot {
-        joined
-            .authority
-            .authenticate_snapshot_at(bytes, key, &HOME_DOCUMENT)
-    } else {
-        joined.authority.authenticate_at(bytes, key, &HOME_DOCUMENT)
-    };
-    let authenticated = match authenticated {
-        Ok(a) => a,
-        Err(authority::Error::MissingWriter) => {
+    let (actor, plaintext) = match authed {
+        Authed::Opened { actor, plaintext } => (actor, plaintext),
+        Authed::Refused(authority::Error::MissingWriter) => {
             return Ok(wait(Waiting::Writer, Some(f.incarnation.to_vec()), true))
         }
         // A frozen writer lineage verifies the signature first; a frozen
         // authority does not.
-        Err(authority::Error::Fork) => return Ok(frozen(joined, !joined.authority.is_forked())),
+        Authed::Refused(authority::Error::Fork) => {
+            return Ok(frozen(joined, !joined.authority.is_forked()))
+        }
         // Signed, by an author since removed: kept, tagged with its author
         // and the manifest it was last tried under.
-        Err(authority::Error::Revoked) => {
+        Authed::Refused(authority::Error::Revoked) => {
             let mut awaits = f.author.to_vec();
             awaits.extend(joined.authority.manifest());
             return Ok(wait(Waiting::Revoked, Some(awaits), true));
         }
         // Every other refusal is final, for this record: forged, not a
         // member, stale, revoked.
-        Err(error) => return Ok(refuse(error.to_string(), false)),
+        Authed::Refused(error) => return Ok(refuse(error.to_string(), false)),
     };
     if held == Known::Other {
         return Ok(refuse(
@@ -716,7 +756,7 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
         if frozen_here {
             return Ok(frozen(joined, true));
         }
-        return Ok(match authenticated.open() {
+        return Ok(match plaintext {
             Ok(plaintext) => Attempt::Part {
                 sealed: Sealed {
                     author: f.author,
@@ -725,7 +765,7 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
                 },
                 plaintext,
             },
-            Err(e) => refuse(e.to_string(), true),
+            Err(e) => refuse(e, true),
         });
     }
     // A frozen lineage applies nothing more, until an admin's closing
@@ -775,12 +815,16 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
             true,
         ));
     }
-    let update = match authenticated.open() {
+    let update = match plaintext {
         Ok(u) => u,
-        Err(e) => return Ok(refuse(e.to_string(), true)),
+        Err(e) => return Ok(refuse(e, true)),
     };
+    // Nothing member-authored is decoded here before the checker has.
+    if let Verdict::Refuse(reason) = isolation::vet_one(Blob::Update, &update)? {
+        return Ok(refuse(reason, true));
+    }
     match crate::crdt::update_peers(&update) {
-        Ok(peers) if peers == BTreeSet::from([authenticated.actor()]) => {}
+        Ok(peers) if peers == BTreeSet::from([actor]) => {}
         Ok(_) => {
             return Ok(refuse(
                 "its update carries another actor than its writer's",
@@ -794,10 +838,7 @@ fn attempt_facts(cx: &mut Page, bytes: &[u8], f: &Facts, kept: bool) -> Result<A
         .as_ref()
         .ok_or_else(|| MattersError::Validation("sync is off".into()))?;
     Ok(match doc.missing_dependency(&update) {
-        Ok(None) => Attempt::Ready {
-            actor: authenticated.actor(),
-            update,
-        },
+        Ok(None) => Attempt::Ready { actor, update },
         Ok(Some((peer, counter))) => {
             wait(Waiting::Dependencies, Some(dependency(peer, counter)), true)
         }
@@ -1222,6 +1263,46 @@ fn settle(
     })
 }
 
+/// Authenticate and open the page's fresh data records ahead of their
+/// turn, and have the engine checker decode all their updates at once:
+/// one child process for the page, not one for each record. What each
+/// authentication found is kept for the record's turn, and the verdicts by
+/// the checker. A record this skips is authenticated in its turn, as
+/// before.
+fn vet_ahead(cx: &mut Page, records: &[&[u8]]) -> Result<()> {
+    for bytes in records {
+        let Ok(f) = facts(cx.joined, bytes) else {
+            continue;
+        };
+        if f.kind != wire::Kind::Data
+            || cx.authed.contains_key(&f.digest)
+            || known(cx.tx, &f.record_id, &f.digest)? == Known::Same
+        {
+            continue;
+        }
+        let Some(key) = epoch_key(&mut cx.keys, cx.tx, cx.joined, &f.manifest)? else {
+            continue;
+        };
+        let authed = authenticate(cx.joined, bytes, f.kind, key);
+        cx.authed.insert(f.digest, authed);
+    }
+    let updates: Vec<&[u8]> = cx
+        .authed
+        .values()
+        .filter_map(|a| match a {
+            Authed::Opened {
+                plaintext: Ok(update),
+                ..
+            } => Some(update.as_slice()),
+            _ => None,
+        })
+        .collect();
+    if !updates.is_empty() {
+        isolation::vet(Blob::Update, &updates)?;
+    }
+    Ok(())
+}
+
 /// Receive one record fresh, in the page's transaction.
 fn receive_one(cx: &mut Page, bytes: &[u8]) -> Result<Result<Received>> {
     let (f, a) = attempt(cx, bytes, false)?;
@@ -1436,7 +1517,9 @@ fn run_page(
             generation: delivery.generation,
             origin: None,
             prefixes: BTreeMap::new(),
+            authed: BTreeMap::new(),
         };
+        vet_ahead(&mut cx, delivery.records)?;
         let mut outcomes = Vec::with_capacity(delivery.records.len());
         for (n, bytes) in delivery.records.iter().enumerate() {
             cx.origin = delivery.origins.get(n).copied();

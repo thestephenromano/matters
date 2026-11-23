@@ -10,6 +10,7 @@
 //!
 //! [ADR 0001]: https://github.com/thestephenromano/matters/blob/main/docs/decisions/0001-crdt-adoption.md
 
+pub mod isolation;
 mod projection;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -478,6 +479,14 @@ impl Document {
             }
         }
         Ok(None)
+    }
+
+    /// Decode every block of the engine's history, which Loro otherwise
+    /// decodes only when something reads it: what an engine checker must
+    /// see finish ([`isolation::decode`]).
+    fn read_history(&self) {
+        self.doc
+            .with_oplog(|log| log.change_store().visit_all_changes(&mut |_| {}));
     }
 
     /// Whether this document holds operation `counter` of `peer`.

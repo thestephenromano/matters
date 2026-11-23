@@ -29,6 +29,9 @@ serde_json = "1"
 matters-sync = { path = "../matters-sync" }
 # Wipes recovery words held while recovering (#45).
 zeroize = "1"
+# The engine checker's child limits its own address space and processor
+# time (#45, `crdt::isolation`); already in the lockfile through tempfile.
+rustix = { version = "1.1", features = ["process", "time"] }
 
 [features]
 # Raw read-write SQL for tests that stage states the typed operations
@@ -42,3 +45,10 @@ fuzzing = ["test-support"]
 tempfile = "3.13"
 # The integration tests use `test-support`.
 matters-core = { path = ".", features = ["test-support", "fuzzing"] }
+
+# Its own engine checker (#45): `main` calls the child entry first, as
+# Matters' binaries do, so the harness does not run it.
+[[test]]
+name = "engine_isolation"
+path = "tests/engine_isolation.rs"
+harness = false
