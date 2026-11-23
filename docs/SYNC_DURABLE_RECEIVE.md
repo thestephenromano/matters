@@ -65,7 +65,7 @@ An update applies only when the engine holds every operation it depends on, so t
 
 The page's updates are merged unindexed. At the page's end the document is reindexed and projected once. If that fails, the page is rolled back and received again with each update's effect on the document checked on its own. The update that leaves the document unreadable is refused, so the engine and the rows stay in step. That second pass costs one projection per applied record of the page. A document that cannot be projected before the page is reported as the page's failure.
 
-Engine work on member-authored bytes runs under `catch_unwind`: decoding an update's metadata, importing it, reading a snapshot's version, reindexing and projecting. A panic there refuses the record, and the engine is rebuilt from the journal, keeping its engine actor. A panic elsewhere, while the database's locks are held, poisons them. The next call takes them back: it rolls back any transaction the panicking call left open, clears `query_only`, and rebuilds the engine from the journal. The sealing state is kept as last set; a membership the panicking call had taken out reads as sync not resumed until the next resume.
+Engine work on member-authored bytes runs under `catch_unwind`: decoding an update's metadata, importing it, reading a snapshot's version, reindexing and projecting. A panic there refuses the record, and the engine is rebuilt from the journal, keeping its engine actor. An engine that panicked can hold poisoned locks, on which Loro's own drop panics again, so a document's engine is dropped under `catch_unwind` too (`Document`'s `Drop`). A panic elsewhere, while the database's locks are held, poisons them. The next call takes them back: it rolls back any transaction the panicking call left open, clears `query_only`, and rebuilds the engine from the journal. The sealing state is kept as last set; a membership the panicking call had taken out reads as sync not resumed until the next resume.
 
 ## Forks, closing heads and duplicates
 
@@ -111,6 +111,8 @@ A writer's first record waits, as `handoff`, until this device holds the closing
 - a panic while every lock is held leaving the database working, with its writer's actor;
 - a removed device's records kept as revoked within their budget.
 
+`crates/matters-core/tests/crdt_tests.rs` covers a 90-byte update on which Loro asserts being refused, and the document it poisoned dropping without a panic.
+
 `crates/matters-core/tests/revocation_tests.rs` covers records within and past an admin's closing frontier.
 
 `crates/matters-core/tests/receive_limits_tests.rs` covers:
@@ -135,7 +137,7 @@ The `receive` fuzz target drives a joined database through fuzzed sequences of r
 - **Fork evidence** keeps the contradicting record's signed bytes, and only the digest of the record already applied: signed bytes are not retained once applied.
 - **Recovering a frozen lineage** needs the admin to remove the device. A device that applied another branch before the fork became visible keeps it, and applies nothing more of that writer. Of a lineage frozen on competing handoffs, only writers this device admitted are recovered: the records of a writer whose claim it refused stay frozen. A record whose place was unknown when it was tried stays frozen until the next membership change, unless the walk reaches it first.
 - **Replacement writers.** A refused or frozen record in a closed prefix blocks the replacement's content for good, as in the prototype.
-- **Engine resources.** Decompression and memory during a Loro import are not bounded by the engine; see [checkpoints](SYNC_CHECKPOINTS.md#limits).
+- **Engine resources.** A Loro decode has no memory or CPU bound, and no input cap supplies one: a member-signed update under 100 bytes can decode to gigabytes. The measurements are in [checkpoints](SYNC_CHECKPOINTS.md#limits).
 
 ## The earlier experiment
 
