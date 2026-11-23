@@ -6,6 +6,11 @@
 #
 # Usage: ci/flatpak.sh [work-dir]   (default target/flatpak)
 #
+# MATTERS_FLATPAK_BUNDLE=<file> also writes the build as a single-file bundle
+# (flatpak build-bundle), the build the checks below then install and start.
+# Use it only if the script succeeds: the release workflow publishes these
+# bundles, and only from a run that passed.
+#
 # Needs flatpak, flatpak-builder (or the org.flatpak.Builder Flatpak),
 # desktop-file-validate, appstreamcli, sqlite3, dbus-run-session, curl and a
 # Python 3 with aiohttp and tomlkit for the cargo source generator
@@ -19,6 +24,7 @@ app=io.github.thestephenromano.Matters
 manifest="packaging/flatpak/$app.yml"
 work="${1:-target/flatpak}"
 python="${MATTERS_FLATPAK_PYTHON:-python3}"
+bundle="${MATTERS_FLATPAK_BUNDLE:-}"
 # flatpak-builder-tools' cargo generator, pinned by commit and checksum.
 generator_commit=41c20aa10819cdb2a4f3ca171758a96d1955c018
 generator_sha256=0a2db6be87d75910facef28ab46d4d6460802e8419ab850d0caa6a364d26b380
@@ -66,6 +72,18 @@ flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/fl
     --state-dir="$work/state" --repo="$work/repo" "$work/build" "$manifest" \
     || refuse "the Flatpak did not build"
 endgroup
+
+if [ -n "$bundle" ]; then
+    group "bundle"
+    # The bundle names Flathub as the runtime's source, so installing it
+    # fetches the KDE runtime from there.
+    mkdir -p "$(dirname "$bundle")"
+    flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+        "$work/repo" "$bundle" "$app" \
+        || refuse "could not write the bundle $bundle"
+    ls -l "$bundle"
+    endgroup
+fi
 
 group "install"
 flatpak remote-add --user --no-gpg-verify --if-not-exists matters-local "$work/repo"

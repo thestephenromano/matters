@@ -54,11 +54,13 @@ Each gate is a script in `ci/` that runs the same locally and in CI. A gate that
 - `ci/style-check.sh`: Matters' control style holds under the desktop's Qt platform theme, COSMIC's included.
 - `ci/coverage.sh`: matters-core's line coverage, held to a floor set just under the measured figure. It writes an lcov report.
 - `ci/mutants.sh`: mutation testing of the matters-core code a branch changes, relative to `origin/main`. Every mutant must be caught; one that cannot change behaviour is excluded in `.cargo/mutants.toml`, with the reason. `ci/mutants.sh --all` mutates the whole crate.
-- `ci/flatpak.sh`: validates the desktop entry and AppStream metainfo, builds the Flatpak (`packaging/flatpak`) offline, installs it, and checks that Matters starts in the sandbox, keeps its database at the sandbox's XDG data path, and keeps that data across a `flatpak update`.
+- `ci/flatpak.sh`: validates the desktop entry and AppStream metainfo, builds the Flatpak (`packaging/flatpak`) offline, installs it, and checks that Matters starts in the sandbox, keeps its database at the sandbox's XDG data path, and keeps that data across a `flatpak update`. CI runs it on x86_64 and on aarch64, each on its own hosted runner.
 
 Matters skips its animations when the desktop asks for reduced motion (KDE's instant animation speed, or GNOME's animations turned off). `MATTERS_REDUCE_MOTION=1` or `=0` overrides that.
 
 CI (`.github/workflows/ci.yml`) runs these scripts as parallel jobs in a `fedora:44` container on every pull request and every push to `main`. The required check, "clippy and tests", passes only when every job passes. A weekly workflow (`.github/workflows/weekly.yml`) checks main's dependencies against new advisories and runs each UI lane three times to catch tests that pass only sometimes.
+
+A tag `v*` runs the release workflow (`.github/workflows/release.yml`): Flatpak bundles for x86_64 and aarch64 and the relay image, each with build provenance. [docs/RELEASING.md](docs/RELEASING.md) describes how a release is cut and how to verify one.
 
 ## License
 
