@@ -115,6 +115,9 @@ fn join(admin: &Database, joiner: &Database, store: &MemoryKeyStore) {
             .unwrap(),
         SyncStanding::Active
     );
+    // Its writer is claimed, as its first seal would claim it: the tests
+    // close, fence and copy a known writer.
+    joiner.claim_writer_now().unwrap();
 }
 
 struct Three {
@@ -138,6 +141,7 @@ fn three() -> Three {
         MemoryKeyStore::default(),
     );
     a.create_collection(&a_keys, route()).unwrap();
+    a.claim_writer_now().unwrap();
     join(&a, &b, &b_keys);
     join(&a, &c, &c_keys);
     // B learns of C; A and C learn of B's writer.
@@ -197,6 +201,7 @@ fn a_removed_devices_records_apply_only_within_the_admins_signed_frontier() {
     drop(t.b);
     let b = Database::open(t.dir.path().join("b.db")).unwrap();
     b.resume_sync(&t.b_keys).unwrap();
+    b.claim_writer_now().unwrap();
     let claim = b
         .outgoing_controls()
         .unwrap()
@@ -269,6 +274,7 @@ fn a_recovery_closes_the_lost_generations_writers_at_what_it_holds() {
     drop(a);
     let a = Database::open(dir.path().join("a.db")).unwrap();
     a.resume_sync(&a_keys).unwrap();
+    a.claim_writer_now().unwrap();
     let claim = a.outgoing_controls().unwrap().pop().unwrap();
     assert!(matches!(
         parse(&claim.bytes).unwrap().message.body,
@@ -607,7 +613,8 @@ fn copy_of(dir: &std::path::Path, name: &str, copy: &str) -> Database {
 fn a_removal_closes_a_removed_writer_that_wrote_nothing_at_null() {
     let t = three();
     let (a_id, b_id) = (device_id(&t.a_keys), device_id(&t.b_keys));
-    // B never wrote: A holds nothing of its writer, and still closes it.
+    // B's writer is claimed but sealed no data record (as after a
+    // checkpoint): A holds nothing of it, and still closes it.
     t.a.remove_member(&b_id).unwrap();
     let removal = last_signed(&t.a, |b| matches!(b, Body::Membership(_)));
     let Body::Membership(m) = parse(&removal).unwrap().message.body else {
@@ -635,6 +642,7 @@ fn a_competing_claim_past_a_frozen_lineage_is_not_kept() {
         .iter()
         .map(|db| {
             db.resume_sync(&t.b_keys).unwrap();
+            db.claim_writer_now().unwrap();
             last_signed(db, |b| matches!(b, Body::WriterHandoff(_)))
         })
         .collect();
@@ -659,6 +667,7 @@ fn a_claim_reaching_an_authority_a_membership_fork_froze_stops_it() {
     let a1 = copy_of(t.dir.path(), "a.db", "a1.db");
     let a2 = copy_of(t.dir.path(), "a.db", "a2.db");
     a1.resume_sync(&t.a_keys).unwrap();
+    a1.claim_writer_now().unwrap();
     a2.resume_sync(&t.a_keys).unwrap();
     a1.remove_member(&b_id).unwrap();
     a2.rotate_epoch().unwrap();

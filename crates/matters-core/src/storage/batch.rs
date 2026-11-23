@@ -182,6 +182,7 @@ impl Database {
             });
             let changed = writer.changed;
             let committed = value.and_then(|value| {
+                let mut claimed = None;
                 if let (true, Some(doc), Some(before)) = (changed, engine.as_ref(), &before) {
                     let update = doc.updates_since(before)?;
                     within_record(update.len())?;
@@ -189,25 +190,37 @@ impl Database {
                         "INSERT INTO sync_journal (bytes, outgoing) VALUES (?1, 1)",
                         params![update],
                     )?;
+                    let seq = tx.last_insert_rowid();
                     // Sealed in this transaction: the record commits with
-                    // the edits or not at all (#36).
-                    if let Some(sealing) = keys.sealing.as_ref() {
-                        super::sealing::seal_update(&tx, sealing, tx.last_insert_rowid(), &update)?;
+                    // the edits or not at all (#36). This open's first seal
+                    // also claims its writer, here, as the actor its
+                    // records carry (#45).
+                    if let (Some(sealing), Some(claim)) =
+                        (keys.sealing.as_ref(), keys.claim(&tx, doc.peer())?)
+                    {
+                        super::sealing::seal_update(&tx, sealing, &claim, seq, &update)?;
+                        claimed = Some(claim);
                     }
                 }
                 super::sync::crash_point("before-commit");
                 tx.commit()?;
-                Ok(value)
+                Ok((value, claimed))
             });
             match committed {
-                Ok(value) => {
+                Ok((value, claimed)) => {
+                    if let Some(claim) = claimed {
+                        keys.claimed(claim);
+                    }
                     super::sync::crash_point("after-commit");
                     Ok(value)
                 }
                 Err(error) => {
-                    // The transaction rolled back; so must the engine.
+                    // The transaction rolled back; so must the engine. It
+                    // keeps its actor: a claimed writer's records carry
+                    // only the actor its claim names, and nothing the
+                    // rolled-back operations used left the process.
                     if changed {
-                        *engine = super::sync::load_engine(conn)?;
+                        super::receive::reload(conn, engine)?;
                     }
                     Err(error)
                 }

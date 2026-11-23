@@ -11,10 +11,17 @@
 //! Each open that seals is a new writer incarnation with its own record
 //! chain: a record's `previous` is the SHA-384 of the incarnation's previous
 //! record. Keys live only in memory; the database stores none.
+//!
+//! An open's writer is claimed in the authority log by the transaction of
+//! its first seal, not when it opens (#45, `super::membership::claim`): an
+//! open that never seals leaves no signed trace. Every sealing function
+//! takes the [`Claim`] that transaction made or found, so nothing seals
+//! before its writer's claim is stored.
 
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use super::db::Database;
+use super::membership::Claim;
 use crate::error::{MattersError, Result};
 use matters_sync::{wire, ContentKey, SigningKey};
 
@@ -59,6 +66,8 @@ pub(crate) struct SyncKeys {
 pub(crate) struct Sealing {
     identity: SealingIdentity,
     incarnation: [u8; 32],
+    /// This incarnation's signed claim is stored: a commit sealed under it.
+    pub(super) claimed: bool,
 }
 
 /// A sealed record waiting for, or past, delivery.
@@ -86,10 +95,11 @@ pub(crate) fn random32() -> [u8; 32] {
 }
 
 /// Refuse a write from a handle whose writer another open of the same
-/// database has since replaced (#45). That open signed a handoff closing
-/// this writer's chain at its head, so a record sealed here now would be
-/// accepted by the relay but never applied anywhere: refuse it instead, so
-/// the caller can reload. The newest writer row is the active incarnation.
+/// database has since replaced (#45). That open's first seal claims a
+/// handoff closing this writer's chain at its head, so a record sealed here
+/// now could be accepted by the relay but never applied anywhere: refuse
+/// it instead, so the caller can reload. The newest writer row is the
+/// active incarnation, claimed or not: an unclaimed one fences as well.
 pub(crate) fn fence(tx: &Transaction<'_>, sealing: &Sealing) -> Result<()> {
     let newest: Option<Vec<u8>> = tx
         .query_row(
@@ -109,10 +119,12 @@ fn sealing_error(error: matters_sync::Error) -> MattersError {
 }
 
 /// Seal journal row `seq` (local update `update`) as the next record of this
-/// open's writer, store it and advance the writer's chain head, all in `tx`.
+/// open's writer, store it and advance the writer's chain head, all in `tx`,
+/// whose `_claim` stored or found the writer's claim.
 pub(crate) fn seal_update(
     tx: &Transaction<'_>,
     sealing: &Sealing,
+    _claim: &Claim,
     seq: i64,
     update: &[u8],
 ) -> Result<()> {
@@ -166,9 +178,11 @@ pub(crate) fn seal_update(
 /// Seal one checkpoint part (#40) as a `snapshot` record of this open's
 /// writer. Snapshot records stand outside the writer's data chain: no
 /// predecessor, and the chain head does not move. Every part of one
-/// checkpoint shares `batch`. Returns the record ID and bytes.
+/// checkpoint shares `batch`. `_claim` stored or found the writer's claim
+/// in the caller's transaction. Returns the record ID and bytes.
 pub(crate) fn seal_snapshot(
     sealing: &Sealing,
+    _claim: &Claim,
     batch: &[u8; 32],
     plaintext: &[u8],
 ) -> Result<([u8; 32], Vec<u8>)> {
@@ -209,7 +223,8 @@ impl Sealing {
     /// Start sealing as `identity` under a new writer incarnation, which
     /// becomes the database's active one: an older handle's writer stops
     /// sealing (see `fence`). Its opening time never precedes the newest
-    /// writer's, so the order holds even if the clock steps back.
+    /// writer's, so the order holds even if the clock steps back. The row
+    /// is local: the incarnation is claimed with its first seal.
     pub(crate) fn begin(conn: &rusqlite::Connection, identity: SealingIdentity) -> Result<Self> {
         let incarnation = random32();
         conn.execute(
@@ -220,6 +235,7 @@ impl Sealing {
         Ok(Self {
             identity,
             incarnation,
+            claimed: false,
         })
     }
 
@@ -237,7 +253,8 @@ impl Sealing {
 impl Database {
     /// Seal this open's writes as `identity`, as a new writer incarnation.
     /// Sync must be on. Each open that seals calls this again, so a copied
-    /// or restored database never continues another copy's chain.
+    /// or restored database never continues another copy's chain. With no
+    /// membership there is no authority log, so nothing is claimed.
     #[cfg(feature = "test-support")]
     pub fn start_sealing(&self, identity: SealingIdentity) -> Result<()> {
         self.with_sealing(|conn, engine, keys| {

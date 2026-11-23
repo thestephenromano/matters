@@ -115,6 +115,9 @@ fn join(admin: &Database, path: &std::path::Path) -> (Database, MemoryKeyStore) 
             .unwrap(),
         SyncStanding::Active
     );
+    // Its writer is claimed, as its first seal would claim it, so tests can
+    // forge, withhold and reorder its records.
+    joiner.claim_writer_now().unwrap();
     (joiner, keys)
 }
 
@@ -707,6 +710,7 @@ fn a_branch_before_the_closing_head_freezes_once_the_closed_chain_meets_it() {
     drop(p.b);
     let b_db = Database::open(p.dir.path().join("b.db")).unwrap();
     b_db.resume_sync(&p.b_keys).unwrap();
+    b_db.claim_writer_now().unwrap();
     deliver_controls(&b_db, &p.a);
     // The closed chain's own second record meets the branch: a fork.
     assert_eq!(
@@ -1344,11 +1348,12 @@ fn a_forged_record_out_of_order_is_refused_on_arrival() {
     assert!(quarantined(&p.b, &bad).is_some());
 }
 
-/// A reopened on the same file: a new writer incarnation, which B has not
-/// heard of.
+/// A reopened on the same file: a new writer incarnation, claimed (as its
+/// first seal would claim it), which B has not heard of.
 fn reopened(p: &Pair) -> Database {
     let a = Database::open(p.dir.path().join("a.db")).unwrap();
     a.resume_sync(&p.a_keys).unwrap();
+    a.claim_writer_now().unwrap();
     a
 }
 

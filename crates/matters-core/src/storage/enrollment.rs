@@ -133,7 +133,7 @@ impl Database {
         &self,
         change: impl FnOnce(&Joined) -> Result<(Vec<Member>, Option<Hash>)>,
     ) -> Result<()> {
-        self.with_sealing(|conn, engine, sync| {
+        self.with_sealing(|conn, _, sync| {
             let joined = sync.membership.as_ref().ok_or_else(not_resumed)?;
             joined.require_admin()?;
             let (mut roster, newcomer) = change(joined)?;
@@ -218,8 +218,7 @@ impl Database {
             tx.commit()?;
             let mut joined = sync.membership.take().ok_or_else(not_resumed)?;
             joined.authority = next;
-            let actor = engine.as_ref().map_or(0, |d| d.peer());
-            sync.settle(conn, actor, joined)?;
+            sync.settle(conn, joined)?;
             Ok(())
         })
     }
@@ -647,11 +646,9 @@ mod joining {
                 }
                 super::super::sync::crash_point("recovery-before-commit");
                 tx.commit()?;
-                let actor = doc.peer();
                 *engine = Some(doc);
                 let standing = sync.settle(
                     conn,
-                    actor,
                     Joined {
                         route,
                         document: HOME_DOCUMENT,
@@ -844,11 +841,9 @@ mod joining {
                 tx.execute("DELETE FROM sync_enrolling", [])?;
                 super::super::sync::crash_point("enrollment-before-commit");
                 tx.commit()?;
-                let actor = doc.peer();
                 *engine = Some(doc);
                 sync.settle(
                     conn,
-                    actor,
                     Joined {
                         route,
                         document: HOME_DOCUMENT,

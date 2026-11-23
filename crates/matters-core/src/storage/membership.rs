@@ -322,23 +322,25 @@ fn set_standing(tx: &Transaction<'_>, standing: SyncStanding) -> Result<()> {
     Ok(())
 }
 
-/// Sign, admit, store and queue the writer control for `incarnation`:
-/// a handoff from this device's active admitted incarnation, with the
-/// exact closing head of its record chain, or the device's first start.
+/// Sign, admit into `authority`, store and queue the writer control for
+/// `incarnation`: a handoff from this device's active admitted incarnation,
+/// with the exact closing head of its record chain, or the device's first
+/// start. Only claimed incarnations are admitted, so the predecessor is the
+/// last one claimed, never an open that sealed nothing.
 fn claim_writer(
     conn: &Connection,
-    joined: &mut Joined,
+    joined: &Joined,
+    authority: &mut Authority,
     incarnation: [u8; 32],
     actor: u64,
 ) -> Result<()> {
     let me = joined.device.id();
-    let previous = joined
-        .authority
+    let previous = authority
         .writer_histories(HOME_DOCUMENT)
         .into_iter()
         .find(|(_, h)| h.device == me && h.closed.is_none())
         .map(|(id, _)| id);
-    let manifest = joined.authority.manifest();
+    let manifest = authority.manifest();
     let body = match previous {
         None => Body::WriterStart(WriterStart {
             manifest,
@@ -388,7 +390,7 @@ fn claim_writer(
         body,
     };
     let control = authority::sign(&message, joined.device.signing_key(), random32())?;
-    joined.authority.admit_writer(&control, HOME_DOCUMENT)?;
+    authority.admit_writer(&control, HOME_DOCUMENT)?;
     conn.execute(
         "INSERT INTO sync_controls (bytes) VALUES (?1)",
         params![control],
@@ -400,26 +402,67 @@ fn claim_writer(
     Ok(())
 }
 
+/// Proof that a transaction about to seal holds its writer's claim (#45):
+/// the claim was already stored, or this transaction just stored it. Every
+/// sealing function takes one, and only [`claim`] makes one. A claim made
+/// here carries the authority that admits it, kept by
+/// [`SyncKeys::claimed`] once the transaction commits; if it rolls back,
+/// the claim is dropped with it and the next seal makes another.
+pub(crate) struct Claim(Option<Box<Authority>>);
+
+/// Claim `sealing`'s writer in `tx`, before its first seal: sign its
+/// handoff (or start) as engine actor `actor`, and store it and queue it to
+/// publish in the seal's own transaction. The claim and the records then
+/// commit together or not at all: a crash between them is impossible, and
+/// no record is ever sealed under an unclaimed incarnation. Without a
+/// membership (sealing in tests) there is no log to claim in.
+pub(super) fn claim(
+    tx: &Connection,
+    sealing: &Sealing,
+    joined: Option<&Joined>,
+    actor: u64,
+) -> Result<Claim> {
+    match joined {
+        Some(joined) if !sealing.claimed => {
+            let mut authority = joined.authority.clone();
+            claim_writer(tx, joined, &mut authority, sealing.incarnation(), actor)?;
+            Ok(Claim(Some(Box::new(authority))))
+        }
+        _ => Ok(Claim(None)),
+    }
+}
+
 impl SyncKeys {
-    /// Seal (or stop sealing) for `joined`'s standing after a change.
-    /// `actor` is the engine actor this open's writes carry: a new sealing
-    /// writer claims it in a signed writer control, queued to publish.
-    pub(super) fn settle(
-        &mut self,
-        conn: &Connection,
-        actor: u64,
-        mut joined: Joined,
-    ) -> Result<SyncStanding> {
+    /// [`claim`] this open's writer, in `tx`.
+    pub(crate) fn claim(&self, tx: &Connection, actor: u64) -> Result<Option<Claim>> {
+        self.sealing
+            .as_ref()
+            .map(|sealing| claim(tx, sealing, self.membership.as_ref(), actor))
+            .transpose()
+    }
+
+    /// After the transaction that made `claim` commits: the writer is
+    /// claimed, and the authority admits it.
+    pub(crate) fn claimed(&mut self, claim: Claim) {
+        let Some(authority) = claim.0 else {
+            return;
+        };
+        if let (Some(sealing), Some(joined)) = (self.sealing.as_mut(), self.membership.as_mut()) {
+            sealing.claimed = true;
+            joined.authority = *authority;
+        }
+    }
+
+    /// Seal (or stop sealing) for `joined`'s standing after a change. A
+    /// new sealing writer is only a local row until its first seal claims
+    /// it ([`claim`]).
+    pub(super) fn settle(&mut self, conn: &Connection, joined: Joined) -> Result<SyncStanding> {
         let standing = joined.standing();
         if standing == SyncStanding::Active {
             let identity = joined.identity(conn)?;
             match self.sealing.as_mut() {
                 Some(sealing) => sealing.rekey(identity),
-                None => {
-                    let sealing = Sealing::begin(conn, identity)?;
-                    claim_writer(conn, &mut joined, sealing.incarnation(), actor)?;
-                    self.sealing = Some(sealing);
-                }
+                None => self.sealing = Some(Sealing::begin(conn, identity)?),
             }
         } else {
             self.sealing = None;
@@ -500,7 +543,7 @@ impl Database {
             )?;
             // Seal as this device from the start, and bring every existing
             // row into the engine as this writer's first records.
-            let mut joined = Joined {
+            let joined = Joined {
                 route,
                 document,
                 seeds,
@@ -508,8 +551,9 @@ impl Database {
                 authority,
             };
             let sealing = Sealing::begin(&tx, joined.identity(&tx)?)?;
-            claim_writer(&tx, &mut joined, sealing.incarnation(), doc.peer())?;
-            super::import::import_rows(&tx, &mut doc, &sealing)?;
+            // The first record imported claims the writer; with no rows,
+            // nothing is sealed and nothing claimed.
+            let claim = super::import::import_rows(&tx, &mut doc, &sealing, &joined)?;
             super::import::verify(&tx, &doc, &before)?;
             super::sync::crash_point("collection-before-commit");
             tx.commit()?;
@@ -518,6 +562,9 @@ impl Database {
             sync.sealing = Some(sealing);
             sync.required = true;
             sync.membership = Some(joined);
+            if let Some(claim) = claim {
+                sync.claimed(claim);
+            }
             Ok(words)
         })
     }
@@ -587,10 +634,12 @@ impl Database {
     }
 
     /// Load this device's keys from `store` and its authority from the
-    /// stored controls, and start sealing as a new writer incarnation.
-    /// Call once after each open of a joined database; until then writes
-    /// are refused. Missing keys are an explicit error and change nothing:
-    /// the journal and every unsent edit stay as they are.
+    /// stored controls, and start sealing as a new writer incarnation. It
+    /// fences older handles at once, but is claimed in the authority log
+    /// only by its first seal (#45): an open that writes nothing signs
+    /// nothing. Call once after each open of a joined database; until then
+    /// writes are refused. Missing keys are an explicit error and change
+    /// nothing: the journal and every unsent edit stay as they are.
     pub fn resume_sync(&self, store: &dyn KeyStore) -> Result<SyncStanding> {
         self.with_sealing(|conn, engine, sync| {
             if engine.is_none() {
@@ -644,10 +693,8 @@ impl Database {
                 ));
             }
             let authority = replay(conn, &route, root)?;
-            let actor = engine.as_ref().map_or(0, |d| d.peer());
             sync.settle(
                 conn,
-                actor,
                 Joined {
                     route,
                     document,
@@ -656,6 +703,26 @@ impl Database {
                     authority,
                 },
             )
+        })
+    }
+
+    /// Claim this open's writer now, as its first seal would, without
+    /// writing: for tests that need it admitted before they forge or
+    /// withhold its records. Changes nothing once it is claimed.
+    #[cfg(feature = "test-support")]
+    pub fn claim_writer_now(&self) -> Result<()> {
+        self.with_sealing(|conn, engine, sync| {
+            let sealing = sync
+                .sealing
+                .as_ref()
+                .ok_or_else(|| MattersError::Validation("this device does not write".into()))?;
+            let actor = engine.as_ref().map_or(0, |d| d.peer());
+            let tx = conn.transaction()?;
+            super::sealing::fence(&tx, sealing)?;
+            let claim = claim(&tx, sealing, sync.membership.as_ref(), actor)?;
+            tx.commit()?;
+            sync.claimed(claim);
+            Ok(())
         })
     }
 
@@ -739,8 +806,7 @@ impl Database {
             })();
             match result {
                 Ok(true) => {
-                    let actor = engine.as_ref().map_or(0, |d| d.peer());
-                    let standing = sync.settle(conn, actor, joined)?;
+                    let standing = sync.settle(conn, joined)?;
                     // Records may have waited for this writer or epoch.
                     if let Some(joined) = sync.membership.as_ref() {
                         super::receive::drain(conn, engine, joined)?;

@@ -195,6 +195,9 @@ fn fixture() -> &'static Fixture {
             .collect();
         b.finish_enrollment(&b_keys, &a.sync_controls().expect("controls"), &envelopes)
             .expect("fixture enrollment");
+        // B's writer is claimed as its first seal would claim it, so the
+        // fixture can seal records as that writer.
+        b.claim_writer_now().expect("fixture claim");
         deliver(&b, &a);
         let device = keys_of(&b_keys);
         let membership = b.sync_membership().expect("fixture membership");
