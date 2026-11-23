@@ -5,6 +5,9 @@
 #   ci/fedora-deps.sh                   build, test and lint
 #   ci/fedora-deps.sh --desktop-themes  also COSMIC's Qt platform theme and the
 #                                       KDE desktop style, for ci/style-check.sh
+#   ci/fedora-deps.sh --flatpak         only what ci/flatpak.sh needs: the
+#                                       manifest brings its own toolchain and
+#                                       the runtime brings Qt
 set -euo pipefail
 
 packages=(
@@ -22,6 +25,13 @@ packages=(
 )
 if [ "${1:-}" = "--desktop-themes" ]; then
     packages+=(cutecosmic-qt6 kf6-qqc2-desktop-style)
+elif [ "${1:-}" = "--flatpak" ]; then
+    packages=(
+        git curl tar xz
+        flatpak flatpak-builder desktop-file-utils appstream sqlite dbus-daemon
+        # The cargo source generator.
+        python3-aiohttp python3-tomlkit
+    )
 fi
 
 dnf -y install --setopt=install_weak_deps=False "${packages[@]}"
