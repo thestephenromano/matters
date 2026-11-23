@@ -16,6 +16,12 @@ app-id: io.github.thestephenromano.Matters
 runtime: org.kde.Platform
 runtime-version: '6.11'
 sdk: org.kde.Sdk
+# LLD, for linking matters-ui. cxx-qt's generated initializers do not link
+# with GNU ld.bfd, the SDK's only linker, on aarch64 (undefined
+# cxx_qt_init_crate_* references); on x86_64 rustc links with its own LLD
+# anyway. cxx-qt finds ld.lld on the path and links with it.
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.llvm22
 command: matters-ui
 finish-args:
   - --share=ipc
@@ -37,7 +43,7 @@ modules:
   - name: matters
     buildsystem: simple
     build-options:
-      append-path: /run/build/matters/rust/bin
+      append-path: /usr/lib/sdk/llvm22/bin:/run/build/matters/rust/bin
       env:
         CARGO_HOME: /run/build/matters/cargo
         CARGO_NET_OFFLINE: 'true'
@@ -48,6 +54,7 @@ modules:
       - sh rust-dist/cargo/install.sh --prefix=/run/build/matters/rust --disable-ldconfig
       - sh rust-dist/rust-std/install.sh --prefix=/run/build/matters/rust --disable-ldconfig
       - cargo --version
+      - ld.lld --version
       - cargo build --release --locked --offline -p matters-ui
       - install -Dm755 target/release/matters-ui /app/bin/matters-ui
       - install -Dm644 packaging/linux/${FLATPAK_ID}.desktop /app/share/applications/${FLATPAK_ID}.desktop
