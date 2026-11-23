@@ -22,8 +22,8 @@ pub enum Permission {
     Organise,
     /// Create, rename and order areas.
     Areas,
-    /// Move items to the Trash and put them back, and delete headings and
-    /// checklist items. Never emptying the Trash.
+    /// Move items to the Trash and put them back. Nothing is ever deleted
+    /// permanently, and the Trash is never emptied.
     Trash,
 }
 
@@ -64,6 +64,16 @@ impl Permissions {
         self.0 & permission.bit() != 0
     }
 }
+
+/// The ID of the client `matters://` links use (#69). Whatever it was
+/// allowed, it never trashes anything or changes areas (#203's fixed
+/// limits): a link anyone can send must not be able to.
+///
+/// The ID is reserved: a client store gives it only to the Links client
+/// it makes itself ([`MemoryClients::add_links`]), never to a client
+/// added, imported or renamed, or that client would silently lose Trash
+/// and Areas. #200's store must keep this.
+pub const LINKS_CLIENT: &str = "links";
 
 /// A client as the app knows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,9 +155,22 @@ pub struct MemoryClients(std::sync::Mutex<Vec<(Verifier, Client)>>);
 impl MemoryClients {
     /// Add a client and return its token.
     pub fn add(&self, name: &str, permissions: Permissions) -> std::io::Result<Token> {
+        let id = format!(
+            "client-{}",
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).len() + 1
+        );
+        self.add_as(&id, name, permissions)
+    }
+
+    /// Add the Links client, under its reserved ID ([`LINKS_CLIENT`]).
+    pub fn add_links(&self, permissions: Permissions) -> std::io::Result<Token> {
+        self.add_as(LINKS_CLIENT, "Links", permissions)
+    }
+
+    fn add_as(&self, id: &str, name: &str, permissions: Permissions) -> std::io::Result<Token> {
         let (token, verifier) = Token::generate()?;
         let mut clients = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let id = format!("client-{}", clients.len() + 1);
+        let id = id.to_owned();
         clients.push((
             verifier,
             Client {

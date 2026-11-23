@@ -146,55 +146,12 @@ impl Database {
         &self,
         task_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<Tag>>> {
-        let order: std::collections::HashMap<String, (usize, Tag)> = self
-            .list_tags()?
-            .into_iter()
-            .enumerate()
-            .map(|(i, t)| (t.id.clone(), (i, t)))
-            .collect();
-        let mut found: std::collections::HashMap<String, Vec<(usize, Tag)>> =
-            std::collections::HashMap::new();
-        self.with_conn(|conn| {
-            for chunk in task_ids.chunks(500) {
-                let marks = vec!["?"; chunk.len()].join(",");
-                let mut stmt = conn.prepare_cached(&format!(
-                    "SELECT task_id, tag_id FROM task_tags WHERE task_id IN ({marks})"
-                ))?;
-                let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })?;
-                for row in rows {
-                    let (task, tag) = row?;
-                    if let Some(entry) = order.get(&tag) {
-                        found.entry(task).or_default().push(entry.clone());
-                    }
-                }
-            }
-            Ok(())
-        })?;
-        Ok(found
-            .into_iter()
-            .map(|(task, mut tags)| {
-                tags.sort_by_key(|(i, _)| *i);
-                (task, tags.into_iter().map(|(_, t)| t).collect())
-            })
-            .collect())
+        self.with_conn(|conn| tags_of_tasks_in(conn, task_ids))
     }
 
     /// The tag named `name`, ignoring case, if there is one.
     pub fn tag_named(&self, name: &str) -> Result<Option<Tag>> {
-        let Some(name) = Task::clean_title(name) else {
-            return Ok(None);
-        };
-        self.with_conn(|conn| {
-            Ok(conn
-                .query_row(
-                    &format!("SELECT {TAG_COLUMNS} FROM tags WHERE name = ?1 COLLATE NOCASE"),
-                    params![name],
-                    map_tag_row,
-                )
-                .optional()?)
-        })
+        self.with_conn(|conn| tag_named_in(conn, name))
     }
 
     /// The tags given to `item` itself, in tag-list order (not what a task
@@ -304,6 +261,56 @@ impl Writer<'_> {
             .map(|_| ())
         })
     }
+}
+
+/// [`Database::tags_of_tasks`] in `conn`.
+pub(crate) fn tags_of_tasks_in(
+    conn: &Connection,
+    task_ids: &[&str],
+) -> Result<std::collections::HashMap<String, Vec<Tag>>> {
+    let order: std::collections::HashMap<String, (usize, Tag)> = tags_in(conn)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.clone(), (i, t)))
+        .collect();
+    let mut found: std::collections::HashMap<String, Vec<(usize, Tag)>> =
+        std::collections::HashMap::new();
+    for chunk in task_ids.chunks(500) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT task_id, tag_id FROM task_tags WHERE task_id IN ({marks})"
+        ))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (task, tag) = row?;
+            if let Some(entry) = order.get(&tag) {
+                found.entry(task).or_default().push(entry.clone());
+            }
+        }
+    }
+    Ok(found
+        .into_iter()
+        .map(|(task, mut tags)| {
+            tags.sort_by_key(|(i, _)| *i);
+            (task, tags.into_iter().map(|(_, t)| t).collect())
+        })
+        .collect())
+}
+
+/// [`Database::tag_named`] in `conn`.
+pub(crate) fn tag_named_in(conn: &Connection, name: &str) -> Result<Option<Tag>> {
+    let Some(name) = Task::clean_title(name) else {
+        return Ok(None);
+    };
+    Ok(conn
+        .query_row(
+            &format!("SELECT {TAG_COLUMNS} FROM tags WHERE name = ?1 COLLATE NOCASE"),
+            params![name],
+            map_tag_row,
+        )
+        .optional()?)
 }
 
 /// Every tag in `conn`, in [`Database::list_tags`] order.

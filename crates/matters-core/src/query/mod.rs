@@ -318,6 +318,42 @@ impl<'a> QueryEngine<'a> {
         }
     }
 
+    /// A task by its ID.
+    pub fn task(&self, id: &str) -> Result<Option<Task>> {
+        self.db.with_conn(|conn| Database::task_in(conn, id))
+    }
+
+    /// A project by its ID, wherever it is (finished or trashed too).
+    pub fn project(&self, id: &str) -> Result<Option<Project>> {
+        self.db.with_conn(|conn| Database::project_in(conn, id))
+    }
+
+    /// An area by its ID, trashed or not.
+    pub fn area(&self, id: &str) -> Result<Option<Area>> {
+        self.db.with_conn(|conn| Database::area_in(conn, id))
+    }
+
+    /// The tag named `name`, ignoring case ([`Database::tag_named`]).
+    pub fn tag_named(&self, name: &str) -> Result<Option<Tag>> {
+        self.db
+            .with_conn(|conn| crate::storage::tags::tag_named_in(conn, name))
+    }
+
+    /// [`Database::tags_of_tasks`], as these queries see the data.
+    pub fn tags_of_tasks(&self, task_ids: &[&str]) -> Result<HashMap<String, Vec<Tag>>> {
+        self.db
+            .with_conn(|conn| crate::storage::tags::tags_of_tasks_in(conn, task_ids))
+    }
+
+    /// [`Database::checklist_progress`], as these queries see the data.
+    pub fn checklist_progress(
+        &self,
+        task_ids: &[&str],
+    ) -> Result<HashMap<String, crate::domain::ChecklistProgress>> {
+        self.db
+            .with_conn(|conn| Database::checklist_progress_in(conn, task_ids))
+    }
+
     /// Queries in which only the tasks finished up to `until` (milliseconds
     /// since the Unix epoch) are in the Logbook: those finished later stay
     /// in their lists, shown done, until they are logged (#67,

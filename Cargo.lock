@@ -2814,6 +2814,7 @@ dependencies = [
  "matters-core",
  "serde",
  "tempfile",
+ "uuid",
  "zbus",
 ]
 

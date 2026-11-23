@@ -53,6 +53,12 @@ impl<'a> Writer<'a> {
         f(self.tx)
     }
 
+    /// Queries that see what this batch has changed so far: a caller can
+    /// check, inside the batch, that a view is still as it was read.
+    pub fn query(&self) -> crate::query::QueryEngine<'a> {
+        crate::query::QueryEngine::within(self.tx)
+    }
+
     /// [`Database::list_projects`], in this batch.
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         Database::open_projects_in(self.tx)

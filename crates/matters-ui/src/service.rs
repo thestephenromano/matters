@@ -64,6 +64,25 @@ fn touch() {
     LAST_CALL.store(now_ms(), Ordering::SeqCst);
 }
 
+/// What a change made over the interface does: set by the controller,
+/// which reloads its lists as it does when sync receives changes.
+static CHANGED_LISTENER: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
+
+/// Route changes made over the interface to the window, from any thread.
+pub fn on_changed(listener: Box<dyn Fn() + Send>) {
+    *CHANGED_LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
+}
+
+fn changed() {
+    if let Some(listener) = CHANGED_LISTENER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        listener();
+    }
+}
+
 /// Route `Activate` to the window, from any thread.
 pub fn on_activate(listener: Box<dyn Fn() + Send>) {
     *ACTIVATE_LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
@@ -175,7 +194,9 @@ pub async fn claim_on(address: Option<&str>, background: bool) -> zbus::Result<C
 /// allowed until preferences can allow one (#200): agent access is off on a
 /// new install, so every call is refused with `UnknownToken`.
 pub fn serve_automation(conn: &Connection, db: Database) -> zbus::Result<()> {
-    let automation = Automation::new(db, Arc::new(MemoryClients::default())).with_activity(touch);
+    let automation = Automation::new(db, Arc::new(MemoryClients::default()))
+        .with_activity(touch)
+        .with_changed(changed);
     zbus::block_on(conn.object_server().at(OBJECT_PATH, automation))?;
     Ok(())
 }

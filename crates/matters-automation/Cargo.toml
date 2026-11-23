@@ -19,6 +19,9 @@ jiff = "0.2"
 # as their SHA-256 verifier (both already compiled in).
 getrandom = "0.3"
 libcrux-sha2 = "=0.0.9"
+# IDs of what a change creates (already in the lockfile through
+# matters-core).
+uuid = { version = "1.10", features = ["v4"] }
 
 [dev-dependencies]
 matters-core = { path = "../matters-core", features = ["test-support"] }

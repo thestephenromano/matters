@@ -1165,6 +1165,11 @@ impl cxx_qt::Initialize for qobject::AppController {
         crate::service::on_activate(Box::new(move || {
             let _ = thread.queue(|controller| controller.activate_requested());
         }));
+        // Changes an agent made over D-Bus (#203): reload, as after sync.
+        let thread = self.qt_thread();
+        crate::service::on_changed(Box::new(move || {
+            let _ = thread.queue(|controller| controller.external_changed());
+        }));
         let problem = settings().problem.clone();
         if let Some(problem) = problem {
             self.report(problem.message());
@@ -1263,6 +1268,16 @@ impl qobject::AppController {
         if let Err(err) = saved {
             self.report(not_saved(&err));
         }
+    }
+
+    /// Reload the lists after a change made outside the window, over the
+    /// automation interface (#203), as after sync receives changes.
+    fn external_changed(mut self: Pin<&mut Self>) {
+        if let Err(err) = self.as_mut().refresh_sidebar_and_header() {
+            self.as_mut().report(err.to_string());
+        }
+        let next = self.revision.wrapping_add(1);
+        self.set_revision(next);
     }
 
     /// Show the sync session's view (#42), and reload the lists: what other

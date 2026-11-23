@@ -47,13 +47,13 @@ Every call carries the caller's client token as its first argument. Each client 
 | Create | Adding tasks, projects, headings and checklist items |
 | Organise | Changing, scheduling, completing, moving and ordering items |
 | Areas | Creating, renaming and ordering areas |
-| Trash | Moving items to the Trash and putting them back; deleting headings and checklist items |
+| Trash | Moving items to the Trash and putting them back (an area needs Areas too) |
 
 The rules for tokens:
 - **Format:** a token is `matters1_` followed by 64 lower-case hex digits, which encode 32 bytes from the operating system's random generator.
 - **Storage:** the app keeps only each token's SHA-256, never the token itself. A fast hash is enough because a token has nothing to guess.
 - **Scope:** clients belong to this device and are not synced. Where their records are kept is decided on #200.
-- **Fixed limits:** whatever a client is allowed, no method empties the Trash or permanently deletes anything.
+- **Fixed limits:** whatever a client is allowed, no method empties the Trash or permanently deletes anything, and the Links client never trashes or changes areas.
 
 ## Items
 
@@ -120,13 +120,45 @@ Returns one task, project or area by its ID.
 
 Return the open projects and the areas that aren't trashed, in sidebar order.
 
-## Writes and batches (coming)
+### `Apply(token s, changes aa{sv}, options a{sv}) → aa{sv}`
 
-The write methods arrive in the next step of #203. The core they use is in `matters-core` already (`storage/batch.rs`):
-- **`Database::batch`** runs many operations through a `Writer` in one SQLite transaction. With sync on, they are recorded as one journal row and one sealed record. If any operation fails, nothing changes: not the rows, the journal or the engine. Every write in Matters goes through this path; a single edit is a batch of one.
-- **Operations in a batch see each other's changes.** Each one's engine commands are worked out right after its own SQL, so moving or reordering a task created earlier in the same batch places it correctly.
-- **Size.** A batch whose update would be larger than one sync record (`MAX_BATCH_BYTES`, 1 MiB) is refused whole with `BatchTooLarge`. It is never split; the caller sends smaller batches.
-- **Retries.** `Database::batch_once` takes a request ID and a digest of the request. A retry with the same ID and digest returns the first result and changes nothing; the same ID with a different digest is refused. Request IDs are kept on this device for a day and never synced.
+**Needs:** each change's own permission (below), and Read when `options` names a revision.
+
+Makes `changes` in order, as one batch: all of them or none. Every change is parsed and its permission checked before anything changes. If any change is refused, or the batch is too large, nothing changes: the batch runs in one transaction and, with sync on, is recorded as one sealed record. Returns one dictionary per change, in order, with the `id` of what it created (empty for a change that creates nothing). After a batch, the window reloads its lists.
+
+**Options**, all optional:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `view`, `revision` | s, s | The view and the revision `GetView` gave when the changes were built. If the view has changed since, the batch is refused with `StaleRevision`. The check runs inside the batch's transaction, so nothing can change in between. Both or neither. |
+| `request` | s | A request ID, 1 to 128 bytes. A retry with the same ID and the same changes returns the first answer and changes nothing; the same ID with other changes is refused. IDs are this client's own, kept on this device for a day. A retry is matched within one version of Matters: after an update, a retry of an earlier request may be refused as different. |
+
+**Limits.** A batch has 1 to 200 changes (`MAX_CHANGES`). A batch whose sync record would be larger than 1 MiB is refused with `BatchTooLarge`; it is never split, so send smaller batches. No operation empties the Trash or permanently deletes anything.
+
+**Changes.** Each change is a dictionary with `op`, the operation, and its arguments, all strings unless shown. A key the operation doesn't take is refused, so a misspelt argument is never ignored.
+
+| `op` | Needs | Arguments |
+|---|---|---|
+| `create_task` | Create | `title`; optional `notes`, `when`, `deadline`, `tags` (as, names of existing tags), and `area_id` or `project_id` (with `heading_id`). Without a home it goes to the Inbox. |
+| `create_project` | Create | `title`; optional `notes`, `when`, `deadline`, `area_id` |
+| `create_heading` | Create | `project_id`, `title` |
+| `add_checklist_item` | Create | `task_id`, `title` |
+| `create_area` | Areas | `title` |
+| `rename_area` | Areas | `id`, `title` |
+| `update` | Organise | `id` of a task or project; any of `title`, `notes`, `when`, `deadline` |
+| `complete`, `cancel` | Organise | `id`. A project needs `open_tasks`: `complete` or `cancel`, for its open tasks. |
+| `reopen` | Organise | `id` of a finished task or project |
+| `move` | Organise | `id`, `to`: a task goes to `inbox`, `area:<id>` or `project:<id>` (with `heading_id`); a project to `area:<id>` or `none` |
+| `place` | Organise | `id` of a task, `view` (`inbox`, `today`, `project:<id>` or `area:<id>`), optional `after`: the task it follows. Without `after` it goes first. |
+| `tag`, `untag` | Organise | `id` of a task, project or area; `tag`, an existing tag's name |
+| `check` | Organise | `id` of a checklist item; optional `done` (b, default true) |
+| `trash`, `restore` | Trash | `id` of a task, project or area. An area needs Areas too. |
+
+**Refs.** A change that creates something may give it a `ref`. A later change in the same batch can then name it as `ref:<name>`, wherever it takes an ID. That makes "a project with its tasks" one batch.
+
+**Dates.** `when` takes what the When field takes: `today`, `evening`, `someday`, `anytime` (no date), a date such as `2026-12-01`, or a phrase such as `tomorrow` or `fri`. `deadline` takes the same days, or `none` to clear it. A numeric date that reads as different days month first and day first (`3/4`) is refused, because a program has no locale to settle it; use `YYYY-MM-DD`.
+
+**The Links client** (`matters://` links, #69) never trashes or restores anything and never changes areas, whatever it was allowed.
 
 ## Errors
 
@@ -135,8 +167,11 @@ The write methods arrive in the next step of #203. The core they use is in `matt
 | `UnknownToken` | No token was given, or no client of this device has it |
 | `RevokedToken` | The client was revoked and needs setting up again in preferences |
 | `PermissionDenied` | The client lacks the permission the method needs; the message names it |
-| `InvalidArgument` | An argument the method doesn't accept, such as an unknown view |
-| `NotFound` | No item has that ID |
+| `InvalidArgument` | An argument the method doesn't accept, such as an unknown view, an unknown option or a reused request ID |
+| `NotFound` | No item has that ID; in a batch, the message names the change (`change 2: …`, counting from 0) |
+| `InvalidChange` | A change in a batch isn't one Matters can make: an unknown operation or key, a missing argument, a blank title, an unreadable date. The message names the change. |
+| `StaleRevision` | The view a batch was built from has changed; read it again |
+| `BatchTooLarge` | The batch is too large to record at once; send smaller batches |
 | `Failed` | Matters couldn't complete the call, for example because its database failed |
 
 ## Tests
@@ -155,3 +190,17 @@ The write methods arrive in the next step of #203. The core they use is in `matt
 - revisions;
 - unknown views and IDs;
 - for every method, refusal of a missing, unknown or revoked token and of a missing permission.
+
+`crates/matters-automation/tests/writes.rs` serves the interface the same way. The tests cover:
+- every operation, and refs across a batch;
+- a batch with one refused change, or refused while parsing, leaves every view as it was, and doesn't reload the window;
+- a stale revision refuses the batch;
+- each change's own permission, an area's trash needing Areas, and Read for a revision check;
+- the Links client's limits;
+- refusal of a missing, unknown or revoked token;
+- retried requests, and request IDs being each client's own;
+- the limits on changes and options;
+- dates that read differently by locale;
+- with sync on, a batch is one journal row and the engine agrees with the rows.
+
+In `matters-core`, `tests/batch_tests.rs` covers the batches themselves: one record, all or nothing, the size cap and request IDs.
