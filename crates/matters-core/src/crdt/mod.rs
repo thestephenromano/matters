@@ -311,8 +311,9 @@ pub fn snapshot_version(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     if !matches!(meta.mode, loro::EncodedBlobMode::Snapshot) {
         return Err(invalid("not a full-history snapshot"));
     }
-    guarded("importing a snapshot", || {
-        let doc = LoroDoc::new();
+    // Made outside the guard: unwinding must not drop it (see `discard`).
+    let doc = LoroDoc::new();
+    let version = guarded("importing a snapshot", || {
         let status = doc.import(snapshot).map_err(engine)?;
         if status.pending.is_some() {
             return Err(invalid("a snapshot that waits for operations it lacks"));
@@ -321,7 +322,9 @@ pub fn snapshot_version(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
             encode_version(&doc.oplog_vv()),
             encode_frontiers(&doc.oplog_frontiers()),
         ))
-    })
+    });
+    discard(doc);
+    version
 }
 
 /// Run `f`, which decodes or imports member-authored engine bytes, turning
@@ -332,6 +335,15 @@ pub fn snapshot_version(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
 pub(crate) fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or_else(|_| Err(MattersError::Engine(format!("the engine panicked {what}"))))
+}
+
+/// Drop an engine document that a guarded import may have left with
+/// poisoned locks. Loro's `Drop` commits, which panics on a poisoned lock:
+/// dropped in the open, a contained engine panic would escape the receiver
+/// that rebuilds the document, and dropped while unwinding it would abort
+/// the process (#45).
+fn discard(doc: LoroDoc) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(doc)));
 }
 
 /// The engine actors whose operations an update carries, so a receiver
@@ -364,6 +376,12 @@ pub struct Document {
     /// (Loro keeps them aside as pending). Receiving never leaves it so
     /// (#45); a document that is so makes no checkpoint.
     pending: bool,
+}
+
+impl Drop for Document {
+    fn drop(&mut self) {
+        discard(std::mem::replace(&mut self.doc, LoroDoc::new()));
+    }
 }
 
 impl Document {

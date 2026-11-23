@@ -1297,3 +1297,26 @@ fn an_update_names_the_first_operation_it_waits_for() {
         "an update B already holds waits for nothing"
     );
 }
+
+/// A 90-byte engine update a member can sign: one change whose ops column
+/// run-length encodes 4,000 zero-length map deletions ahead of one insert.
+/// Loro 1.18 asserts while splitting it into its change store, leaving the
+/// document's locks poisoned (#45).
+const ASSERTING_UPDATE: &str = "6c6f726f000000000000000000000000f89c8418000443000100010110010100000000000000010100000000000501000001000601040100000204016b016d0016010403c23e0003c23e0005c03e08010b05c03e000101000100";
+
+fn unhex(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_document_whose_engine_panicked_is_refused_and_drops_quietly() {
+    let update = unhex(ASSERTING_UPDATE);
+    let mut doc = Document::new(2).unwrap();
+    let err = doc.merge_unindexed(&update).unwrap_err();
+    assert!(err.to_string().contains("panicked"), "{err}");
+    // The caller rebuilds the document after the error, dropping this one.
+    drop(doc);
+}
