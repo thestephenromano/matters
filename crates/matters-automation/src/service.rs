@@ -341,6 +341,9 @@ impl Automation {
             self.allows(client, change.needs()).map_err(numbered(i))?;
         }
         let areas = self.allows(client, Permission::Areas).is_ok();
+        // `run` holds the database's lock for the batch: everything in it
+        // reads through `w`, never `self.db`, which would deadlock (the
+        // lock is not re-entrant).
         // The batch's error, kept here: `matters_core` carries only its own.
         let mut refused: Option<Error> = None;
         let mut run =

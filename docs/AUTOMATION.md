@@ -131,7 +131,7 @@ Makes `changes` in order, as one batch: all of them or none. Every change is par
 | Key | Type | Meaning |
 |---|---|---|
 | `view`, `revision` | s, s | The view and the revision `GetView` gave when the changes were built. If the view has changed since, the batch is refused with `StaleRevision`. The check runs inside the batch's transaction, so nothing can change in between. Both or neither. |
-| `request` | s | A request ID, 1 to 128 bytes. A retry with the same ID and the same changes returns the first answer and changes nothing; the same ID with other changes is refused. IDs are this client's own, kept on this device for a day. |
+| `request` | s | A request ID, 1 to 128 bytes. A retry with the same ID and the same changes returns the first answer and changes nothing; the same ID with other changes is refused. IDs are this client's own, kept on this device for a day. A retry is matched within one version of Matters: after an update, a retry of an earlier request may be refused as different. |
 
 **Limits.** A batch has 1 to 200 changes (`MAX_CHANGES`). A batch whose sync record would be larger than 1 MiB is refused with `BatchTooLarge`; it is never split, so send smaller batches. No operation empties the Trash or permanently deletes anything.
 

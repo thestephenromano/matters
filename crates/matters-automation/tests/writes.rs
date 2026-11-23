@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 use jiff::civil::{date, Date};
 use matters_automation::{
-    Automation, Item, MemoryClients, Permission, Permissions, LINKS_CLIENT, MAX_CHANGES,
-    OBJECT_PATH,
+    Automation, Item, MemoryClients, Permission, Permissions, MAX_CHANGES, OBJECT_PATH,
 };
 use matters_core::{Area, Database, Tag, Task};
 use zbus::{connection, proxy, Connection, OwnedVariant, Str};
@@ -515,12 +514,7 @@ fn each_change_needs_its_own_permission() {
 #[test]
 fn the_links_client_never_trashes_or_changes_areas() {
     let f = fixture();
-    let links = f
-        .clients
-        .add_as(LINKS_CLIENT, "Links", every())
-        .unwrap()
-        .as_str()
-        .to_owned();
+    let links = f.clients.add_links(every()).unwrap().as_str().to_owned();
     let made = f
         .apply_as(
             &links,
@@ -538,6 +532,15 @@ fn the_links_client_never_trashes_or_changes_areas() {
             "PermissionDenied",
         );
     }
+    // The limit follows the reserved ID, not a name: an ordinary client
+    // that calls itself "links" keeps what it was allowed.
+    let named_links = f.clients.add("links", every()).unwrap().as_str().to_owned();
+    f.apply_as(
+        &named_links,
+        vec![dict(&[("op", "trash"), ("id", &task)])],
+        Dict::new(),
+    )
+    .unwrap();
 }
 
 #[test]

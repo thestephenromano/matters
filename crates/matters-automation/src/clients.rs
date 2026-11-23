@@ -68,6 +68,11 @@ impl Permissions {
 /// The ID of the client `matters://` links use (#69). Whatever it was
 /// allowed, it never trashes anything or changes areas (#203's fixed
 /// limits): a link anyone can send must not be able to.
+///
+/// The ID is reserved: a client store gives it only to the Links client
+/// it makes itself ([`MemoryClients::add_links`]), never to a client
+/// added, imported or renamed, or that client would silently lose Trash
+/// and Areas. #200's store must keep this.
 pub const LINKS_CLIENT: &str = "links";
 
 /// A client as the app knows it.
@@ -157,8 +162,12 @@ impl MemoryClients {
         self.add_as(&id, name, permissions)
     }
 
-    /// Add a client with ID `id` ([`LINKS_CLIENT`], say).
-    pub fn add_as(&self, id: &str, name: &str, permissions: Permissions) -> std::io::Result<Token> {
+    /// Add the Links client, under its reserved ID ([`LINKS_CLIENT`]).
+    pub fn add_links(&self, permissions: Permissions) -> std::io::Result<Token> {
+        self.add_as(LINKS_CLIENT, "Links", permissions)
+    }
+
+    fn add_as(&self, id: &str, name: &str, permissions: Permissions) -> std::io::Result<Token> {
         let (token, verifier) = Token::generate()?;
         let mut clients = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let id = id.to_owned();
