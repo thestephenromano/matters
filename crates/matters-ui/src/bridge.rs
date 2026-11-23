@@ -149,6 +149,9 @@ pub mod qobject {
         #[qproperty(QString, sync_endpoint)]
         /// The invitation to show a new device, while adding one.
         #[qproperty(QString, sync_invitation)]
+        /// An invitation is being registered with the relay, before it
+        /// can be shown.
+        #[qproperty(bool, sync_inviting)]
         /// The recovery kit to show once, as JSON `{endpoint, collection,
         /// words}`, or empty.
         #[qproperty(QString, sync_kit_json)]
@@ -158,7 +161,16 @@ pub mod qobject {
         #[qproperty(QString, sync_devices_json)]
         #[qproperty(bool, sync_admin)]
         #[qproperty(QString, sync_error)]
+        /// Another open of the database (matters-syncd, or another
+        /// Matters) took over as this device's writer, so a change here was
+        /// refused (#45): offer `reload_database`.
+        #[qproperty(bool, database_superseded)]
         type AppController = super::AppControllerRust;
+
+        /// Open the database again in this process, as it is now, and
+        /// carry on editing and syncing (#45). Nothing saved is lost.
+        #[qinvokable]
+        fn reload_database(self: Pin<&mut AppController>);
 
         /// Start a new collection syncing with the relay at `endpoint`.
         #[qinvokable]
@@ -1039,6 +1051,8 @@ pub struct AppControllerRust {
     sync_devices_json: QString,
     sync_admin: bool,
     sync_error: QString,
+    sync_inviting: bool,
+    database_superseded: bool,
     visit: i32,
     reorderable: bool,
     accepts_new_tasks: bool,
@@ -1129,6 +1143,8 @@ impl Default for AppControllerRust {
             sync_devices_json: QString::from("[]"),
             sync_admin: false,
             sync_error: QString::default(),
+            sync_inviting: false,
+            database_superseded: false,
             view,
             day: DayTracker::new(local_today()),
             search_query: String::new(),
@@ -1336,6 +1352,7 @@ impl qobject::AppController {
             .set_sync_endpoint(QString::from(v.endpoint.as_deref().unwrap_or("")));
         self.as_mut()
             .set_sync_invitation(QString::from(v.invitation.as_deref().unwrap_or("")));
+        self.as_mut().set_sync_inviting(v.inviting);
         self.as_mut().set_sync_kit_json(QString::from(kit.as_str()));
         self.as_mut().set_sync_provision_command(QString::from(
             v.provisioning.as_ref().map_or("", |p| p.command.as_str()),
@@ -2015,11 +2032,14 @@ impl qobject::AppController {
 
     /// Create the repeating tasks' occurrences due today (#61); the lists
     /// reload if any were.
-    fn advance_repeats(self: Pin<&mut Self>) {
+    fn advance_repeats(mut self: Pin<&mut Self>) {
         match self.db.advance_repeats(local_today()) {
             Ok(created) if created.is_empty() => {}
             Ok(_) => self.changed(),
-            Err(err) => self.report(err.to_string()),
+            Err(err) => {
+                self.as_mut().note_superseded(&err);
+                self.report(err.to_string());
+            }
         }
     }
 
@@ -2543,9 +2563,34 @@ impl qobject::AppController {
     /// Report a command's outcome and publish the new state.
     fn finish(mut self: Pin<&mut Self>, result: matters_core::Result<()>) {
         if let Err(err) = result {
+            self.as_mut().note_superseded(&err);
             self.as_mut()
                 .report(crate::strings::NOT_SAVED.fill(&[&err.to_string()]));
         }
+        self.changed();
+    }
+
+    /// A write refused because another open took over as this device's
+    /// writer (#45): offer to reload.
+    fn note_superseded(self: Pin<&mut Self>, err: &matters_core::MattersError) {
+        if matches!(err, matters_core::MattersError::Superseded) {
+            self.set_database_superseded(true);
+        }
+    }
+
+    pub fn reload_database(mut self: Pin<&mut Self>) {
+        let reloaded = match SYNC.get() {
+            Some(sync) => sync.reload(),
+            None => self.db.reopen().map_err(|err| err.to_string()),
+        };
+        match reloaded {
+            Ok(()) => {
+                self.as_mut().set_database_superseded(false);
+                self.as_mut().clear_error();
+            }
+            Err(err) => self.as_mut().report(err),
+        }
+        self.as_mut().sync_changed();
         self.changed();
     }
 

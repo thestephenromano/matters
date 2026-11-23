@@ -246,6 +246,33 @@ fn cursors_are_per_log_and_a_relay_restore_requeues_everything() {
     assert_eq!(a.outgoing_records().unwrap(), records);
 }
 
+/// A relay restore republishes every control the device knows (#45). The
+/// store keeps that it must, in the same change that forgets the cursors,
+/// so a restart before the round that does it still republishes; and only
+/// that round's end clears it.
+#[test]
+fn a_relay_restore_keeps_republishing_across_a_restart() {
+    let p = pair();
+    let path = p._dir.path().join("b.db");
+    let b = store(&p.b);
+    assert!(!b.republish_pending().unwrap());
+    b.generation_changed().unwrap();
+    assert!(b.republish_pending().unwrap());
+    // Asked again, it is still one pending republish.
+    b.generation_changed().unwrap();
+    // The process restarts before the round.
+    let restarted = Database::open(&path).unwrap();
+    assert!(store(&restarted).republish_pending().unwrap());
+    assert!(restarted.sync_republish_pending().unwrap());
+    store(&restarted).republished().unwrap();
+    assert!(!store(&restarted).republish_pending().unwrap());
+    assert!(!b.republish_pending().unwrap());
+    // Leaving the collection forgets it with the rest of sync's state.
+    p.b.sync_generation_changed().unwrap();
+    p.b.leave_collection(true).unwrap();
+    assert!(!p.b.sync_republish_pending().unwrap());
+}
+
 #[test]
 fn a_joining_device_signs_in_with_its_keys_and_finishes_once_admitted() {
     use matters_core::storage::Enrolling;

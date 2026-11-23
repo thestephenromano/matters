@@ -73,7 +73,10 @@ impl Database {
 
     /// The relay's storage generation changed: forget the cursors, and
     /// where in the old log kept records were read, and queue every sealed
-    /// record, checkpoint part and published control for upload again.
+    /// record, checkpoint part and published control for upload again, and
+    /// every known control for republishing
+    /// ([`Self::sync_republish_pending`]). All of it commits together, so a
+    /// restart before the next round still sends everything.
     /// The relay deduplicates what it still holds.
     pub fn sync_generation_changed(&self) -> Result<()> {
         self.with_sealing(|conn, _, _| {
@@ -84,7 +87,31 @@ impl Database {
             tx.execute("UPDATE sync_records SET acked = 0", [])?;
             tx.execute("UPDATE sync_publish SET acked = 0", [])?;
             tx.execute("UPDATE sync_checkpoint_out SET acked = 0", [])?;
+            tx.execute(
+                "INSERT OR IGNORE INTO sync_republish (singleton) VALUES (1)",
+                [],
+            )?;
             tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Whether every control this device knows, whoever signed it, waits to
+    /// be published again after a relay restore (#45). It stays so, across
+    /// restarts, until [`Self::sync_republished`].
+    pub fn sync_republish_pending(&self) -> Result<bool> {
+        self.with_conn(|conn| {
+            Ok(conn
+                .query_row("SELECT 1 FROM sync_republish", [], |_| Ok(()))
+                .optional()?
+                .is_some())
+        })
+    }
+
+    /// Every known control reached the relay again: stop republishing.
+    pub fn sync_republished(&self) -> Result<()> {
+        self.with_sealing(|conn, _, _| {
+            conn.execute("DELETE FROM sync_republish", [])?;
             Ok(())
         })
     }
@@ -198,6 +225,14 @@ impl LocalStore for Database {
 
     fn generation_changed(&self) -> StoreResult<()> {
         Ok(self.sync_generation_changed()?)
+    }
+
+    fn republish_pending(&self) -> StoreResult<bool> {
+        Ok(self.sync_republish_pending()?)
+    }
+
+    fn republished(&self) -> StoreResult<()> {
+        Ok(self.sync_republished()?)
     }
 
     fn wants_checkpoint(&self) -> StoreResult<bool> {

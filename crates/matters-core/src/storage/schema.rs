@@ -479,3 +479,13 @@ CREATE TABLE IF NOT EXISTS sync_rewind (
     manifest BLOB NOT NULL CHECK (length(manifest) = 48)
 );
 "#;
+
+/// v22: a relay restore's republishing survives a restart (#45). The relay's
+/// storage generation changed, so every control this device knows goes back
+/// to it, whoever signed it. The row stays until a round has published them
+/// all; while it is here, the next round publishes them again.
+pub const MIGRATION_V22: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_republish (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1)
+);
+"#;

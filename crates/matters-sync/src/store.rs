@@ -110,8 +110,17 @@ pub trait LocalStore: Send + Sync {
     /// Save a page's cursor after the page's entries are durably applied.
     fn save_cursor(&self, log: Log, cursor: &[u8]) -> StoreResult<()>;
     /// The relay's storage generation changed (a restore): forget both
-    /// cursors and queue every record and control again for upload.
+    /// cursors and queue every record and control again for upload, and
+    /// mark every known control for republishing (`republish_pending`).
+    /// One durable change: a restart before the next round loses none of
+    /// it.
     fn generation_changed(&self) -> StoreResult<()>;
+    /// Whether every known control waits to be published again since a
+    /// generation change, whoever signed it. Kept by the store, so a
+    /// restart in between still republishes them (#45).
+    fn republish_pending(&self) -> StoreResult<bool>;
+    /// Every known control reached the relay again: stop republishing.
+    fn republished(&self) -> StoreResult<()>;
 
     /// Whether this device holds nothing yet, so it may start from a
     /// checkpoint instead of reading the whole record log (#40).

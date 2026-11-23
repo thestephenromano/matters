@@ -173,9 +173,15 @@ fn a_collection_from_creation_to_recovery() {
         "the interface was told"
     );
 
-    // B joins with the invitation's text.
-    let text = a.app.invite().unwrap();
-    assert_eq!(a.app.view().invitation.as_deref(), Some(text.as_str()));
+    // B joins with the invitation's text, shown once the relay has it.
+    a.app.invite().unwrap();
+    assert!(
+        a.app
+            .wait_for(WAIT, |v| v.invitation.is_some() && !v.inviting),
+        "{:?}",
+        a.app.view()
+    );
+    let text = a.app.view().invitation.unwrap();
     assert!(parse_invitation("not an invitation").is_err());
     let b = device(dir.path(), "b");
     b.app.join(&relayed.endpoint, &text).unwrap();
@@ -230,6 +236,7 @@ fn a_collection_from_creation_to_recovery() {
         .unwrap();
     assert_eq!(a.app.leave(false), Err(LeaveRefused::Unsent(1)));
     assert_eq!(a.app.view().phase, Phase::On, "nothing changed");
+    assert_eq!(a.app.view().unsent, 1, "the count shown is the one refused");
     a.app.leave(true).unwrap();
     assert_eq!(a.app.view().phase, Phase::Off);
     assert_eq!(*a.saved.lock().unwrap(), None, "the endpoint is forgotten");
@@ -302,4 +309,185 @@ fn a_relay_is_reached_over_https_or_on_this_machine_only() {
     a.app.create("http://127.0.0.1:9").unwrap();
     assert_eq!(a.app.view().phase, Phase::On);
     assert!(a.app.view().kit.is_some());
+}
+
+/// A session on `db` with `keys`, its changes and saved address dropped.
+fn session(db: Database, keys: Arc<MemoryKeyStore>, dir: &std::path::Path) -> SyncApp {
+    SyncApp::open(Arc::new(db), keys, None, dir, || {}, |_| {}).unwrap()
+}
+
+fn retrying(v: &matters_sync_app::View) -> bool {
+    matches!(v.health, Health::Retrying(_))
+}
+
+/// Stopping sync while the client retries against a relay it cannot reach
+/// (the Qt tests' setup) leaves at once, whenever it is asked, for a
+/// database in memory or on disk.
+#[test]
+fn leaving_while_the_client_retries_always_leaves() {
+    for (n, wait) in [0, 1500, 0, 1500].into_iter().enumerate() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = if n < 2 {
+            Database::open_in_memory().unwrap()
+        } else {
+            Database::open(dir.path().join("a.db")).unwrap()
+        };
+        db.add_task(&mut Task::new(id(1), "kept", 0.0)).unwrap();
+        let app = session(db, Arc::default(), dir.path());
+        app.create("http://127.0.0.1:9").unwrap();
+        assert!(app.wait_for(WAIT, retrying), "{:?}", app.view());
+        std::thread::sleep(Duration::from_millis(wait));
+        assert_eq!(app.leave(true), Ok(()), "{n}");
+        assert_eq!(app.view().phase, Phase::Off);
+        assert_eq!(title(&app, 1).as_deref(), Some("kept"));
+        // And it can start a collection again, as the Qt tests do.
+        app.create("http://127.0.0.1:9").unwrap();
+        assert_eq!(app.leave(true), Ok(()), "{n}, again");
+    }
+}
+
+/// A refusal to leave says what is unsent now, not what was shown before
+/// the latest edit: the interface asks again with the right count.
+#[test]
+fn a_refused_leave_shows_what_is_unsent_now() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = session(
+        Database::open_in_memory().unwrap(),
+        Arc::default(),
+        dir.path(),
+    );
+    app.create("http://127.0.0.1:9").unwrap();
+    assert!(app.wait_for(WAIT, retrying));
+    let shown = app.view().unsent;
+    app.database()
+        .add_task(&mut Task::new(id(1), "just now", 0.0))
+        .unwrap();
+    assert!(matches!(app.leave(false), Err(LeaveRefused::Unsent(_))));
+    assert_eq!(app.view().unsent, shown + 1);
+    assert_eq!(app.view().phase, Phase::On);
+}
+
+/// Registering an invitation never holds up the caller (the interface's
+/// thread), however long the relay takes: the view says it is pending,
+/// and cancelling it drops whatever the relay answers later.
+#[test]
+fn an_invitation_is_registered_off_the_callers_thread() {
+    // A relay that takes connections and never answers.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", silent.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in silent.incoming() {
+            held.push(stream);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let app = session(
+        Database::open_in_memory().unwrap(),
+        Arc::default(),
+        dir.path(),
+    );
+    app.create(&endpoint).unwrap();
+    let started = std::time::Instant::now();
+    app.invite().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let view = app.view();
+    assert!(view.inviting && view.invitation.is_none() && view.error.is_none());
+    app.cancel_invitation();
+    assert!(!app.view().inviting);
+    assert_eq!(app.view().invitation, None);
+}
+
+/// A relay that refuses the registration leaves no invitation to show,
+/// and says why.
+#[test]
+fn an_invitation_the_relay_cannot_take_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = session(
+        Database::open_in_memory().unwrap(),
+        Arc::default(),
+        dir.path(),
+    );
+    assert!(app.invite().is_err(), "not syncing");
+    app.create("http://127.0.0.1:9").unwrap();
+    app.invite().unwrap();
+    assert!(
+        app.wait_for(WAIT, |v| !v.inviting && v.error.is_some()),
+        "{:?}",
+        app.view()
+    );
+    assert_eq!(app.view().invitation, None);
+}
+
+/// Another open of the database (matters-syncd, or another Matters) took
+/// over as this device's writer: the app's writes are refused until it
+/// reloads, which reads in the other open's work, keeps the recovery kit
+/// still to be shown, and makes the app the writer again.
+#[test]
+fn a_superseded_session_reloads_and_writes_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.db");
+    let keys = Arc::new(MemoryKeyStore::default());
+    let app = session(Database::open(&path).unwrap(), keys.clone(), dir.path());
+    app.create("http://127.0.0.1:9").unwrap();
+    let kit = app.view().kit.clone();
+    assert!(kit.is_some());
+    let db = app.database().clone();
+    db.add_task(&mut Task::new(id(1), "before", 0.0)).unwrap();
+    let other = Database::open(&path).unwrap();
+    other.resume_sync(keys.as_ref()).unwrap();
+    other
+        .add_task(&mut Task::new(id(2), "elsewhere", 1.0))
+        .unwrap();
+    assert!(matches!(
+        db.add_task(&mut Task::new(id(3), "refused", 2.0)),
+        Err(matters_core::MattersError::Superseded)
+    ));
+    app.reload().unwrap();
+    let view = app.view();
+    assert_eq!(view.phase, Phase::On);
+    assert_eq!(view.endpoint.as_deref(), Some("http://127.0.0.1:9"));
+    assert_eq!(view.kit, kit, "the kit is still to be shown");
+    assert_eq!(view.error, None);
+    db.add_task(&mut Task::new(id(4), "after reload", 3.0))
+        .unwrap();
+    assert_eq!(title(&app, 2).as_deref(), Some("elsewhere"));
+    assert_eq!(title(&app, 3), None);
+    assert!(matches!(
+        other.add_task(&mut Task::new(id(5), "stale", 4.0)),
+        Err(matters_core::MattersError::Superseded)
+    ));
+    assert!(
+        app.wait_for(WAIT, retrying),
+        "syncing again: {:?}",
+        app.view()
+    );
+}
+
+/// A database a newer Matters wrote since is not reloaded: the session
+/// says why and goes on as it was.
+#[test]
+fn a_reload_refused_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.db");
+    let app = session(Database::open(&path).unwrap(), Arc::default(), dir.path());
+    app.create("http://127.0.0.1:9").unwrap();
+    // A newer Matters opens it too, and migrates it past this version.
+    Database::open(&path)
+        .unwrap()
+        .with_raw_conn(|c| {
+            c.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+                [matters_core::storage::db::LATEST_SCHEMA + 1],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(app.reload().is_err());
+    let view = app.view();
+    assert_eq!(view.phase, Phase::On);
+    assert!(view.error.is_some());
+    app.database()
+        .add_task(&mut Task::new(id(1), "still writes", 0.0))
+        .unwrap();
 }

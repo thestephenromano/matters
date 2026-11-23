@@ -44,7 +44,6 @@
 //! a network wait, so local editing is never held up by the network.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -488,9 +487,6 @@ pub struct Client<S: LocalStore + 'static> {
     http: reqwest::Client,
     store: Arc<S>,
     token: Mutex<Option<[u8; 32]>>,
-    /// Set by a generation change: the next round publishes every control
-    /// this device knows, not only those it signed.
-    republish: AtomicBool,
     status: watch::Sender<Status>,
     wake: Arc<Notify>,
 }
@@ -538,7 +534,6 @@ impl<S: LocalStore + 'static> Client<S> {
             http,
             store,
             token: Mutex::new(None),
-            republish: AtomicBool::new(false),
             status: watch::channel(Status::Idle).0,
             wake: Arc::new(Notify::new()),
         })
@@ -732,8 +727,9 @@ impl<S: LocalStore + 'static> Client<S> {
     /// transitions first and without a session, so a device the restored
     /// relay does not know yet can sign in.
     async fn generation_changed(&self) -> Result<()> {
+        // The store marks every known control for republishing in the same
+        // change, so a restart from here on still publishes them (#45).
         self.on_store(|s| s.generation_changed()).await?;
-        self.republish.store(true, Ordering::SeqCst);
         self.republish_without_session().await?;
         Ok(())
     }
@@ -786,7 +782,7 @@ impl<S: LocalStore + 'static> Client<S> {
                 }
             }
         }
-        if self.republish.load(Ordering::SeqCst) {
+        if self.on_store(|s| s.republish_pending()).await? {
             for bytes in self.on_store(|s| s.known_controls()).await? {
                 // The genesis is the route's, provisioned by its operator.
                 if matches!(
@@ -800,7 +796,7 @@ impl<S: LocalStore + 'static> Client<S> {
                     Put::Refused => report.set_aside_controls += 1,
                 }
             }
-            self.republish.store(false, Ordering::SeqCst);
+            self.on_store(|s| s.republished()).await?;
         }
         Ok(())
     }
@@ -1323,6 +1319,12 @@ impl<J: JoiningStore> LocalStore for AsLocal<J> {
     fn generation_changed(&self) -> std::result::Result<(), StoreError> {
         Ok(())
     }
+    fn republish_pending(&self) -> std::result::Result<bool, StoreError> {
+        Ok(false)
+    }
+    fn republished(&self) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
 }
 
 /// A device joining a collection through an invitation (#42).
@@ -1501,6 +1503,12 @@ impl<R: RecoveringStore> LocalStore for RootAsLocal<R> {
         Ok(())
     }
     fn generation_changed(&self) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
+    fn republish_pending(&self) -> std::result::Result<bool, StoreError> {
+        Ok(false)
+    }
+    fn republished(&self) -> std::result::Result<(), StoreError> {
         Ok(())
     }
 }
