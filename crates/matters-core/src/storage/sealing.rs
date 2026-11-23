@@ -15,7 +15,7 @@
 //! An open's writer is claimed in the authority log by the transaction of
 //! its first seal, not when it opens (#45, `super::membership::claim`): an
 //! open that never seals leaves no signed trace. Every sealing function
-//! takes the [`Claim`] that transaction made or found, so nothing seals
+//! takes the `Claim` that transaction made or found, so nothing seals
 //! before its writer's claim is stored.
 
 use rusqlite::{params, OptionalExtension, Transaction};
