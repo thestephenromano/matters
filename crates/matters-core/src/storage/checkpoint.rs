@@ -818,8 +818,11 @@ impl Database {
                 return Ok(Some(id));
             }
             let batch: [u8; 32] = id[..32].try_into().expect("48 bytes");
+            // Snapshot records are this open's writer's too: the first
+            // seal claims it (#45).
+            let claim = super::membership::claim(&tx, sealing, Some(joined), doc.peer())?;
             for (index, part) in checkpoint.parts()?.iter().enumerate() {
-                let (record_id, bytes) = seal_snapshot(sealing, &batch, part)?;
+                let (record_id, bytes) = seal_snapshot(sealing, &claim, &batch, part)?;
                 tx.execute(
                     "INSERT INTO sync_checkpoint_out (record_id, checkpoint, part, bytes)
                      VALUES (?1, ?2, ?3, ?4)",
@@ -836,6 +839,7 @@ impl Database {
             )?;
             crash_point("checkpoint-before-commit");
             tx.commit()?;
+            sync.claimed(claim);
             Ok(Some(id))
         })
     }

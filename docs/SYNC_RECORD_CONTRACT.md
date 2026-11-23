@@ -136,7 +136,7 @@ The [active execution record](../experiments/sync-prototype/evidence/record-cont
 
 [`matters_core::storage::receive`](../crates/matters-core/src/storage/receive.rs) (#39, migration v16) is the receiver's half of this contract.
 
-**Writer claims.** Each open that seals is a new writer. It signs a writer control for its incarnation and engine actor (`SYNC_WRITER_LIFECYCLE.md`), admits it locally, and queues it to publish with the device's other controls.
+**Writer claims.** Each open that seals is a new writer. With its first seal, in that seal's transaction, it signs a writer control for its incarnation and engine actor (`SYNC_WRITER_LIFECYCLE.md`), admits it locally, and queues it to publish with the device's other controls. An open that never seals signs nothing.
 - A device's later writers hand off from its active admitted incarnation, naming the exact closing head of its record chain.
 - A copied database therefore names the same predecessor as its original. Two competing handoffs freeze that device's writer lineage on every receiver.
 

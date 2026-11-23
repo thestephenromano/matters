@@ -136,6 +136,10 @@ fn devices() -> Devices {
         .unwrap();
     let (b, b_keys) = join(&a, &dir.path().join("b.db"));
     let (c, _) = join(&a, &dir.path().join("c.db"));
+    // Writers are claimed at their first seal; these fixtures sign records
+    // and handoffs of B's and C's writers directly, so claim them now.
+    b.claim_writer_now().unwrap();
+    c.claim_writer_now().unwrap();
     deliver_controls(&b, &a);
     deliver_controls(&c, &a);
     deliver_controls(&a, &b);
@@ -581,10 +585,11 @@ fn an_admins_closing_frontier_recovers_a_frozen_lineage_up_to_its_head() {
     let (again, _) = join(&f.d.a, &f.d.dir.path().join("b-again.db"));
     deliver_controls(&again, &f.d.a);
     deliver_controls(&f.d.a, c);
-    deliver_controls(&again, c);
     again
         .add_task(&mut Task::new(id(30), "B again", 0.0))
         .unwrap();
+    // Its writer is claimed by that first write.
+    deliver_controls(&again, c);
     let fresh = records(&again).pop().unwrap();
     assert_eq!(c.receive_record(&fresh).unwrap(), Received::Applied);
 }

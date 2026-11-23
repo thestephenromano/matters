@@ -68,7 +68,7 @@ Each crash test kills a child process at a named crash point, then reopens the d
 - **Fresh record IDs.**
   - Every seal draws a fresh record ID, so no key and nonce are ever reused.
   - Copies, reopens and concurrent handles never share one (`sealing_tests.rs`).
-  - Each open is a new writer incarnation. An older handle on the same database is fenced: its writes are refused with `Superseded`, not sealed under a closed writer (`revocation_tests.rs`).
+  - Each open is a new writer incarnation. An older handle on the same database is fenced: its writes are refused with `Superseded`, not sealed under a closed writer (`revocation_tests.rs`). An incarnation is claimed in the authority log at its first seal, in that seal's transaction, so an open that never writes signs nothing; a newer open fences older handles whether or not it has claimed (`writer_claim_tests.rs`).
 - **Parsers under fuzzing.** Each of these has a cargo-fuzz target (`fuzz/README.md` lists what each one checks):
   - the sync codecs: records, controls, invitations, typed words and codes, and checkpoint parts;
   - structure-aware targets that sign with fixture keys, so they reach past the signature: records, controls and checkpoints;

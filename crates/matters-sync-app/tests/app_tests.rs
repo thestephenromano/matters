@@ -363,7 +363,11 @@ fn a_refused_leave_shows_what_is_unsent_now() {
         .add_task(&mut Task::new(id(1), "just now", 0.0))
         .unwrap();
     assert!(matches!(app.leave(false), Err(LeaveRefused::Unsent(_))));
-    assert_eq!(app.view().unsent, shown + 1);
+    // The edit, and the writer claim its first seal made with it.
+    let db = app.database();
+    let now = db.outgoing_records().unwrap().len() + db.outgoing_controls().unwrap().len();
+    assert!(now > shown);
+    assert_eq!(app.view().unsent, now);
     assert_eq!(app.view().phase, Phase::On);
 }
 

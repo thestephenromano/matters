@@ -174,9 +174,11 @@ async fn a_forged_envelope_cannot_make_a_device_skip_a_transition() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_control_is_set_aside_and_the_round_pulls() {
     let p = pair();
+    // The edit is A's first seal since it opened: it queues A's writer claim
+    // with the controls already waiting.
+    p.a.add_task(&mut Task::new(id(1), "an edit", 0.0)).unwrap();
     let queued = p.a.outgoing_controls().unwrap().len();
     assert!(queued > 0);
-    p.a.add_task(&mut Task::new(id(1), "an edit", 0.0)).unwrap();
     let mock = Arc::new(Mock::default());
     mock.behave(|b| b.refuse_controls = true);
     let client = Client::new(&serve(mock.clone()).await, p.a.clone()).unwrap();

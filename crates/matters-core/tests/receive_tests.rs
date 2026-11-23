@@ -116,6 +116,9 @@ fn pair() -> Pair {
             .unwrap(),
         SyncStanding::Active
     );
+    // B's writer is claimed, as its first seal would claim it, so tests can
+    // forge or withhold its records.
+    b.claim_writer_now().unwrap();
     Pair {
         dir,
         a,
@@ -345,6 +348,7 @@ fn a_record_after_its_writers_signed_close_is_kept_and_never_applied() {
     drop(p.b);
     let b = Database::open(p.dir.path().join("b.db")).unwrap();
     b.resume_sync(&p.b_keys).unwrap();
+    b.claim_writer_now().unwrap();
     deliver_controls(&b, &p.a, &keys(&p.a_keys).id());
     for r in records(&b) {
         p.a.receive_record(&r).unwrap();
@@ -381,8 +385,10 @@ fn a_cloned_device_freezes_its_writer_lineage_and_its_records_wait() {
     std::fs::copy(p.dir.path().join("b.db"), &copy).unwrap();
     let b = Database::open(p.dir.path().join("b.db")).unwrap();
     b.resume_sync(&p.b_keys).unwrap();
+    b.claim_writer_now().unwrap();
     let clone = Database::open(&copy).unwrap();
     clone.resume_sync(&p.b_keys).unwrap();
+    clone.claim_writer_now().unwrap();
     let a_id = keys(&p.a_keys).id();
     deliver_controls(&b, &p.a, &a_id);
     // The clone's handoff competes with B's from the same predecessor.

@@ -233,6 +233,8 @@ fn a_member_with_history_accepts_a_checkpoint_and_imports_nothing() {
 fn a_fresh_device_starts_from_a_checkpoint_and_follows_the_tail() {
     let p = pair();
     p.b.add_task(&mut Task::new(id(3), "from B", 2.0)).unwrap();
+    // B's first write claimed its writer: A learns of it first.
+    deliver_controls(&p.b, &p.a);
     for r in records(&p.b) {
         p.a.receive_record(&r).unwrap();
     }
@@ -824,9 +826,11 @@ fn a_checkpoint_naming_a_writer_not_yet_admitted_waits_for_it() {
     for r in records(&a) {
         p.b.receive_record(&r).unwrap();
     }
-    // B, a writer D knows, makes a checkpoint listing A's new chain.
+    // B makes a checkpoint listing A's new chain. Making it claimed B's
+    // writer, which D then receives.
     acknowledge_all(&p.b);
     p.b.create_checkpoint(cursor(5)).unwrap().unwrap();
+    deliver_controls(&p.b, &d);
     assert_eq!(
         outcome(d.receive_record(&parts(&p.b)[0]).unwrap()),
         Checkpointed::Part,

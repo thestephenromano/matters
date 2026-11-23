@@ -17,6 +17,7 @@
 use rusqlite::{params, Connection, Transaction};
 
 use super::db::{Database, AREA_COLUMNS, PROJECT_COLUMNS, TASK_COLUMNS};
+use super::membership::{claim, Claim, Joined};
 use super::sealing::{seal_update, Sealing};
 use crate::crdt::{Command, Document};
 use crate::error::{MattersError, Result};
@@ -157,21 +158,31 @@ fn creations(tx: &Transaction<'_>) -> Result<Vec<(i64, Vec<Command>)>> {
 }
 
 /// Apply every row's creation to `doc`, journal the updates and seal them
-/// as `sealing`, in batches, all in `tx`.
+/// as `sealing`, in batches, all in `tx`. The first seal claims the writer
+/// as `joined`'s device; the claim is returned, for the caller to keep once
+/// `tx` commits, or `None` when there was nothing to seal.
 pub(super) fn import_rows(
     tx: &Transaction<'_>,
     doc: &mut Document,
     sealing: &Sealing,
-) -> Result<()> {
+    joined: &Joined,
+) -> Result<Option<Claim>> {
     let mut since = doc.version();
     let mut pending = 0usize;
-    let flush = |doc: &Document, since: &loro::VersionVector| -> Result<()> {
+    let mut claimed: Option<Claim> = None;
+    let mut flush = |doc: &Document, since: &loro::VersionVector| -> Result<()> {
         let update = doc.updates_since(since)?;
         tx.execute(
             "INSERT INTO sync_journal (bytes, outgoing) VALUES (?1, 1)",
             params![update],
         )?;
-        seal_update(tx, sealing, tx.last_insert_rowid(), &update)?;
+        let seq = tx.last_insert_rowid();
+        let made = match claimed.take() {
+            Some(made) => made,
+            None => claim(tx, sealing, Some(joined), doc.peer())?,
+        };
+        seal_update(tx, sealing, &made, seq, &update)?;
+        claimed = Some(made);
         Ok(())
     };
     for (at, commands) in creations(tx)? {
@@ -190,7 +201,7 @@ pub(super) fn import_rows(
     if pending > 0 {
         flush(doc, &since)?;
     }
-    Ok(())
+    Ok(claimed)
 }
 
 /// One table's rows as text, list keys replaced by order within the list.
