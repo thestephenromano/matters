@@ -443,3 +443,18 @@ fn the_encoding_matches_the_independent_oracle() {
         ]
     );
 }
+
+#[test]
+fn a_relay_cursor_reads_back_exactly() {
+    let at = Cursor {
+        generation: [7; 16],
+        sequence: 300,
+    };
+    let bytes = at.relay_cursor();
+    assert_eq!(Cursor::from_relay_cursor(&bytes), Some(at));
+    let mut longer = bytes.clone();
+    longer.push(0);
+    assert_eq!(Cursor::from_relay_cursor(&longer), None);
+    assert_eq!(Cursor::from_relay_cursor(&bytes[1..]), None);
+    assert_eq!(Cursor::from_relay_cursor(&[0x83, 0, 0, 0]), None);
+}

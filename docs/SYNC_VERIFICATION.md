@@ -36,6 +36,8 @@ The expected outcome is defined by the domain, independently of the engine: the 
 Records and controls a device has no right to apply are refused before anything changes:
 - forged and malformed records, another actor's update under a writer's signature, a snapshot posing as an update (`matters-core/tests/receive_tests.rs`);
 - records after a writer's signed close, and a cloned device's frozen lineage (also `receive_tests.rs`);
+- a frozen lineage applying only the closed prefix an admin's closing frontier recovers, and a replacement writer's content waiting for the closing head it follows (`receive_limits_tests.rs`);
+- a genuine record that a flood of forgeries pushed out of the unauthenticated budget, read again from the relay once its manifest arrives, once for each change (`receive_limits_tests.rs`, and the client's rewind in `matters-sync-client/tests/hostile_relay_tests.rs`);
 - outsiders' writer claims, and claims under unknown manifests (`matters-sync/tests/authority_tests.rs`);
 - dishonest and wrong-epoch checkpoints (`matters-core/tests/checkpoint_tests.rs`).
 

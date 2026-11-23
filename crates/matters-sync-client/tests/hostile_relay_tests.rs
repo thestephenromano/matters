@@ -403,3 +403,76 @@ async fn a_device_its_own_authority_removed_is_not_a_member() {
     }
     assert!(mock.unauthenticated_puts.lock().unwrap().is_empty());
 }
+
+/// A record naming a manifest nobody knows, signed by nobody known.
+fn forgery(document: &[u8; 16]) -> Vec<u8> {
+    let (sk, _) = matters_sync::generate_signing_key([3; 32]);
+    let route = support::route();
+    let mut record_id = [0; 32];
+    record_id[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    let header = matters_sync::wire::Header {
+        context: route.content(document),
+        kind: matters_sync::wire::Kind::Data,
+        epoch: 99,
+        manifest: &[0xAB; 48],
+        author: &[0xCD; 48],
+        incarnation: &[0x11; 32],
+        record_id: &record_id,
+        logical_batch: &[0x22; 32],
+        previous: None,
+    };
+    matters_sync::seal(
+        header,
+        &matters_sync::ContentKey::new([1; 32]),
+        b"junk",
+        &sk,
+        [4; 32],
+    )
+    .unwrap()
+}
+
+/// A relay that serves a record before the rotation it is sealed under,
+/// then a flood of forgeries that pushes it out of the device's budget:
+/// once the rotation arrives, the client reads the log again from the
+/// record, and it applies (#45).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_record_a_flood_pushed_out_is_read_again_after_the_rotation() {
+    let p = pair();
+    p.a.add_task(&mut Task::new(id(1), "before", 0.0)).unwrap();
+    let before = published(&p.a);
+    p.a.rotate_epoch().unwrap();
+    p.a.add_task(&mut Task::new(id(2), "after the rotation", 1.0))
+        .unwrap();
+    let document = p.b.sync_membership().unwrap().document;
+    let mock = Arc::new(Mock::default());
+    *mock.authority.lock().unwrap() = before;
+    {
+        let mut log = mock.records.lock().unwrap();
+        log.extend(p.a.outgoing_records().unwrap().into_iter().map(|r| r.bytes));
+        for _ in 0..=matters_core::storage::receive::UNAUTHENTICATED_ROWS {
+            log.push(forgery(&document));
+        }
+    }
+    let client = Client::new(&serve(mock.clone()).await, p.b.clone()).unwrap();
+    client.sync_once().await.unwrap();
+    assert!(p.b.get_task(&id(1)).unwrap().is_some());
+    assert!(p.b.get_task(&id(2)).unwrap().is_none());
+    // The rotation reaches the relay's authority log.
+    {
+        let mut log = mock.authority.lock().unwrap();
+        for control in published(&p.a) {
+            if !log.contains(&control) {
+                log.push(control);
+            }
+        }
+    }
+    client.sync_once().await.unwrap();
+    assert_eq!(
+        p.b.get_task(&id(2)).unwrap().map(|t| t.title).as_deref(),
+        Some("after the rotation")
+    );
+    // Nothing new arrives: the next round reads on from the end.
+    let pages = mock.count("GET records");
+    client.sync_once().await.unwrap();
+    assert_eq!(mock.count("GET records"), pages + 1);
+}

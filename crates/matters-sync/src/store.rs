@@ -85,6 +85,27 @@ pub trait LocalStore: Send + Sync {
     fn receive_records(&self, records: &[Vec<u8>]) -> StoreResult<Vec<StoreResult<()>>> {
         Ok(records.iter().map(|r| self.receive_record(r)).collect())
     }
+    /// Receive a page of the record log of storage `generation`: each
+    /// record with its sequence in the log, as `receive_records` does. A
+    /// store that lets a record go before it can check it (Matters' keeps
+    /// only a budget of records it cannot authenticate yet) remembers where
+    /// the record was, to read it again ([`Self::rewind_records`]).
+    fn receive_page(
+        &self,
+        _generation: [u8; 16],
+        records: &[(u64, Vec<u8>)],
+    ) -> StoreResult<Vec<StoreResult<()>>> {
+        let bytes: Vec<Vec<u8>> = records.iter().map(|(_, b)| b.clone()).collect();
+        self.receive_records(&bytes)
+    }
+    /// Called before the record log is read: move the records cursor back
+    /// to the earliest record the store let go of, if what it has received
+    /// since may let it take that record now. At most once for each such
+    /// change, so a flood of records it cannot check never makes it read
+    /// the log again and again.
+    fn rewind_records(&self) -> StoreResult<()> {
+        Ok(())
+    }
     fn cursor(&self, log: Log) -> StoreResult<Option<Vec<u8>>>;
     /// Save a page's cursor after the page's entries are durably applied.
     fn save_cursor(&self, log: Log, cursor: &[u8]) -> StoreResult<()>;

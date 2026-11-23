@@ -114,6 +114,21 @@ impl Cursor {
             .expect("writing to a Vec cannot fail");
         e.into_writer()
     }
+
+    /// The cursor a relay cursor names, if it is exactly `CBOR([generation,
+    /// sequence])`.
+    pub fn from_relay_cursor(bytes: &[u8]) -> Option<Self> {
+        let mut d = Decoder::new(bytes);
+        if d.array().ok()? != Some(2) {
+            return None;
+        }
+        let generation = d.bytes().ok()?.try_into().ok()?;
+        let sequence = d.u64().ok()?;
+        (d.position() == bytes.len()).then_some(Self {
+            generation,
+            sequence,
+        })
+    }
 }
 
 /// What a checkpoint holds. Its canonical encoding's SHA-384 is the

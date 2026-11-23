@@ -329,6 +329,7 @@ A writer already handed off at a signed head needs no entry of its own. Its pref
 - A writer handed off at a signed head admits records up to that head, if the handoffs after it lead to a named writer.
 - Any other writer admits nothing: `authenticate_at` refuses its records with `Revoked`, after their signature verifies.
 - A new `writer_start` or `writer_handoff` is refused with `Revoked`.
+- A lineage frozen on fork evidence (a second signed successor, or competing handoffs) is recovered this way. Its writers admitted within such a prefix are admitted again, and the receiver applies only the records on the chain that ends at the closing head, leading on from what it applied. The rest wait `AfterClose` ([durable receive](SYNC_DURABLE_RECEIVE.md#recovering-a-frozen-lineage)). Removing the device is how an admin recovers its fork; the device can be invited again as a new member.
 
 The first signed entry for an incarnation binds, and a later one changes nothing. A removed device ID is never added back: rejoining is a fresh enrollment under new keys. These rules depend only on which controls were accepted, not on the order replicas read claims and transitions in.
 
@@ -353,3 +354,4 @@ Past either cap, joining or recovery fails with a retry. Nothing is lost, but a 
 - `revocation_tests.rs` (`matters-core`):
   - After A removes B, a record B signs under the old epoch, chained on its head, waits `AfterClose` on A and on a third device C. A record within the frontier still applies on C. B's claim after it reopens is refused by both.
   - The same holds for a generation-0 device after a root recovery that holds its records.
+- `receive_limits_tests.rs` (`matters-core`): a lineage frozen on a second signed successor, and one frozen on competing handoffs, recovered by the admin's removal up to its closing head, with nothing off the closed prefix applied.

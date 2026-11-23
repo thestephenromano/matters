@@ -71,14 +71,16 @@ impl Database {
         })
     }
 
-    /// The relay's storage generation changed: forget the cursors and
-    /// queue every sealed record, checkpoint part and published control
-    /// for upload again.
+    /// The relay's storage generation changed: forget the cursors, and
+    /// where in the old log kept records were read, and queue every sealed
+    /// record, checkpoint part and published control for upload again.
     /// The relay deduplicates what it still holds.
     pub fn sync_generation_changed(&self) -> Result<()> {
         self.with_sealing(|conn, _, _| {
             let tx = conn.transaction()?;
             tx.execute("DELETE FROM sync_cursors", [])?;
+            tx.execute("DELETE FROM sync_rewind", [])?;
+            tx.execute("UPDATE sync_pending SET origin = NULL", [])?;
             tx.execute("UPDATE sync_records SET acked = 0", [])?;
             tx.execute("UPDATE sync_publish SET acked = 0", [])?;
             tx.execute("UPDATE sync_checkpoint_out SET acked = 0", [])?;
@@ -167,6 +169,23 @@ impl LocalStore for Database {
             .into_iter()
             .map(|outcome| outcome.map(|_| ()).map_err(Into::into))
             .collect())
+    }
+
+    fn receive_page(
+        &self,
+        generation: [u8; 16],
+        records: &[(u64, Vec<u8>)],
+    ) -> StoreResult<Vec<StoreResult<()>>> {
+        let borrowed: Vec<(u64, &[u8])> = records.iter().map(|(s, b)| (*s, b.as_slice())).collect();
+        Ok(Database::receive_page(self, generation, &borrowed)?
+            .into_iter()
+            .map(|outcome| outcome.map(|_| ()).map_err(Into::into))
+            .collect())
+    }
+
+    fn rewind_records(&self) -> StoreResult<()> {
+        Database::rewind_records(self)?;
+        Ok(())
     }
 
     fn cursor(&self, log: Log) -> StoreResult<Option<Vec<u8>>> {

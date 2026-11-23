@@ -463,3 +463,19 @@ CREATE TABLE IF NOT EXISTS batch_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_batch_requests_created ON batch_requests(created_at);
 "#;
+
+/// v21: limits of durable receive closed (#45, docs/SYNC_DURABLE_RECEIVE.md).
+/// `sync_pending.origin` is where in the relay's record log a kept record
+/// was read, in the storage generation the records cursor reads.
+/// `sync_rewind` is the earliest such place of a record let go of while it
+/// could not be authenticated, with the manifest that was current then: once
+/// the manifest changes, the records cursor moves back to read it again.
+pub const MIGRATION_V21: &str = r#"
+ALTER TABLE sync_pending ADD COLUMN origin INTEGER;
+CREATE TABLE IF NOT EXISTS sync_rewind (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    generation BLOB NOT NULL CHECK (length(generation) = 16),
+    sequence INTEGER NOT NULL,
+    manifest BLOB NOT NULL CHECK (length(manifest) = 48)
+);
+"#;
