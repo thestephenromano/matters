@@ -1,0 +1,258 @@
+name: Release
+
+# A tag v* builds the release, attests its build provenance and publishes it:
+# the Flatpak bundles for x86_64 and aarch64 with their SHA256SUMS as a GitHub
+# Release, and the relay image (linux/amd64 and linux/arm64) on ghcr.io.
+# A manual run builds and attests the same files without publishing anything;
+# a pull request that changes this workflow builds them only.
+# docs/RELEASING.md describes cutting a release and verifying one.
+#
+# The jobs that compile hold a read-only token and no OIDC token, so no build
+# script can sign or publish. Only the jobs after them, which run no project
+# code, attest and publish.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths: [.github/workflows/release.yml]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/thestephenromano/matters-relay
+
+jobs:
+  flatpak:
+    name: Flatpak bundle (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: fedora:44
+      # flatpak-builder and flatpak run sandbox with bubblewrap, which needs
+      # namespaces a default container doesn't allow.
+      options: --privileged
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - run: dnf -y install --setopt=install_weak_deps=False git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash ci/fedora-deps.sh --flatpak
+      # The same script as CI's Flatpak job: the bundle is the build it then
+      # installs, starts and updates, and the job fails unless all of that
+      # passes.
+      - name: Build, bundle and check
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          version="$GITHUB_REF_NAME"
+          [ "$GITHUB_REF_TYPE" = tag ] || version="g${GITHUB_SHA::12}"
+          MATTERS_FLATPAK_BUNDLE="target/dist/matters-$version-$ARCH.flatpak" \
+            ci/flatpak.sh target/flatpak
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flatpak-${{ matrix.arch }}
+          path: target/dist/*.flatpak
+          retention-days: 14
+          if-no-files-found: error
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flatpak-logs-${{ matrix.arch }}
+          path: target/flatpak/*.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+  image:
+    name: relay image (linux/${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # packaging/relay/Containerfile, built natively for each platform and
+      # written as an OCI archive; the publish job pushes it. BuildKit is
+      # pinned by digest, as the Containerfile's base images are.
+      - name: Build
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker buildx create --name release --driver docker-container --use \
+            --driver-opt image=docker.io/moby/buildkit:v0.35.1@sha256:baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c
+          mkdir -p target/dist
+          docker buildx build --platform "linux/$ARCH" \
+            --provenance=false --sbom=false \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --output "type=oci,dest=target/dist/relay-$ARCH.tar" \
+            -f packaging/relay/Containerfile .
+          echo "linux/$ARCH manifest: $(tar -xOf "target/dist/relay-$ARCH.tar" index.json | jq -r '.manifests[0].digest')"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: relay-image-${{ matrix.arch }}
+          path: target/dist/relay-${{ matrix.arch }}.tar
+          retention-days: 14
+          if-no-files-found: error
+
+  # Checksums for the bundles, and their provenance. On a pull request the
+  # checksums only: nothing is attested.
+  attest:
+    name: checksums and provenance
+    needs: [flatpak]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: flatpak-*
+          merge-multiple: true
+          path: dist
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum -- *.flatpak > SHA256SUMS
+          cat SHA256SUMS
+      - if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.flatpak
+            dist/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error
+
+  # Tags only: push each platform's image, then the multi-platform index
+  # under the tag, and attest the index's digest.
+  publish-image:
+    name: publish the relay image
+    if: github.ref_type == 'tag'
+    needs: [image, attest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: relay-image-*
+          merge-multiple: true
+          path: images
+      - name: Log in to ghcr.io
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          echo "$TOKEN" | skopeo login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Push
+        id: push
+        run: |
+          refs=()
+          for arch in amd64 arm64; do
+            skopeo copy --digestfile "images/$arch.digest" \
+              "oci-archive:images/relay-$arch.tar" "docker://$IMAGE:$GITHUB_REF_NAME-$arch"
+            refs+=("$IMAGE@$(cat "images/$arch.digest")")
+          done
+          docker buildx imagetools create --tag "$IMAGE:$GITHUB_REF_NAME" "${refs[@]}"
+          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
+          case "$digest" in sha256:*) ;; *) echo "no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1 ;; esac
+          docker buildx imagetools inspect "$IMAGE@$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      # The attestation goes to GitHub and, beside the image, to ghcr.io.
+      # Storage records are for organization-owned repositories only.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+  # Tags only: the GitHub Release, with the bundles, SHA256SUMS and the
+  # image's digest.
+  release:
+    name: publish the release
+    if: github.ref_type == 'tag'
+    needs: [attest, publish-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.publish-image.outputs.digest }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          repo="$GITHUB_REPOSITORY"
+          {
+            echo "Built by [this workflow run]($GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID) from \`$GITHUB_SHA\`."
+            echo
+            echo "## Files"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+            echo
+            echo "## Relay image"
+            echo
+            echo '```'
+            echo "$IMAGE@$DIGEST"
+            echo '```'
+            echo
+            echo "\`$IMAGE:$tag\`, for linux/amd64 and linux/arm64."
+            echo
+            echo "## Verify"
+            echo
+            echo '```sh'
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
+            echo "gh attestation verify <bundle> --repo $repo"
+            echo "gh attestation verify oci://$IMAGE@$DIGEST --repo $repo"
+            echo '```'
+            echo
+            echo "See [docs/RELEASING.md]($GITHUB_SERVER_URL/$repo/blob/$tag/docs/RELEASING.md) for what these check."
+          } > notes.md
+          prerelease=()
+          case "$tag" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$tag" --repo "$repo" --verify-tag \
+            --title "Matters $tag" --notes-file notes.md "${prerelease[@]}" \
+            dist/*.flatpak dist/SHA256SUMS

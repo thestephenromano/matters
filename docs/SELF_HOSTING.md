@@ -13,7 +13,7 @@ The relay stores only what clients have already encrypted and signed: records, a
 | Service | Image | Role |
 | --- | --- | --- |
 | `postgres` | `postgres:18.7` | The relay's store: every acknowledgement is a committed transaction (ADR 0003). Data in the `postgres` volume. |
-| `relay` | built from `packaging/relay/Containerfile` | The relay, distroless and unprivileged, on the private network only. API on 8484, metrics on 9484. |
+| `relay` | built from `packaging/relay/Containerfile`, or a released image (*Using a released image* below) | The relay, distroless and unprivileged, on the private network only. API on 8484, metrics on 9484. |
 | `caddy` | `caddy:2.11` | TLS in front, with certificates from a public CA, or its own CA with `internal`. It publishes 443 and 80, and forwards only `/v0/*`, `/healthz` and `/readyz`, except export (`/v0/routes/*/export`), which it answers `404`. |
 
 The image build pins its inputs, so that the same source can build the same binary:
@@ -51,6 +51,32 @@ Each service gets only what it needs:
 - `postgres_password`, a compose secret mounted into PostgreSQL (which is initialized from it) and the relay (`MATTERS_RELAY_DATABASE_PASSWORD_FILE`), so the password is in no environment and in no file but this one.
 
 With rootless Docker or Podman, give the file to the uid that 65532 maps to on the host instead. None of these files is committed (`packaging/relay/.gitignore`), and none, nor any `*.dump`, is sent to an image build (`.dockerignore`). `MATTERS_RELAY_HTTPS_PORT` and `MATTERS_RELAY_HTTP_PORT` change the published ports.
+
+### Using a released image
+
+Each release publishes the relay's image as `ghcr.io/thestephenromano/matters-relay:<tag>`, for linux/amd64 and linux/arm64, built from the same Containerfile by the release workflow. Its digest is in the release notes, and it carries a build provenance attestation ([RELEASING.md](RELEASING.md)). Check it before you run it:
+
+```sh
+gh attestation verify oci://ghcr.io/thestephenromano/matters-relay@sha256:<digest> \
+  --repo thestephenromano/matters
+```
+
+Then run that digest instead of building. Next to `compose.yaml`, write `packaging/relay/compose.release.yaml`:
+
+```yaml
+services:
+  relay:
+    build: !reset null
+    image: ghcr.io/thestephenromano/matters-relay@sha256:<digest>
+```
+
+and start the stack with both files (Docker Compose 2.24.4 or later reads `!reset`):
+
+```sh
+docker compose -f packaging/relay/compose.yaml -f packaging/relay/compose.release.yaml up -d
+```
+
+Name the image by digest, not by tag: a digest names exactly the image that was verified. To upgrade, verify the new release's digest and replace it in that file (*Upgrades* below).
 
 **A database elsewhere.** The stack's PostgreSQL is on the stack's private network, so its URL needs no TLS. A database on any other host must be reached with `sslmode=verify-full`, which encrypts the connection and checks the server's certificate and name: `postgres://relay@db.example.org:5432/relay?sslmode=verify-full`. The relay trusts the operating system's roots; for a private CA, add `&sslrootcert=/path/to/ca.pem` and mount that file. `sslmode=require` encrypts without checking who answers, and `prefer` (the default) silently falls back to cleartext, so use neither across a network.
 
