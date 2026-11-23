@@ -1,3 +1,5 @@
+mod batch;
+pub use batch::{Writer, MAX_BATCH_BYTES};
 pub mod checkpoint;
 pub mod db;
 pub mod enrollment;
@@ -11,7 +13,7 @@ pub mod sealing;
 pub(crate) mod sync;
 mod sync_store;
 pub use sync_store::{Enrolling, Recovering};
-mod tags;
+pub(crate) mod tags;
 mod task_actions;
 pub(crate) mod trash;
 

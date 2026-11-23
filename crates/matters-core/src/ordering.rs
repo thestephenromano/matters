@@ -31,7 +31,7 @@ use crate::query::QueryEngine;
 use crate::storage::db::{
     checklist_end_key, checklist_keys, checklist_title, insert_checklist_item,
 };
-use crate::storage::Database;
+use crate::storage::{Database, Writer};
 
 /// Smallest gap between neighbouring keys that still takes a midpoint.
 const MIN_GAP: f64 = 1e-6;
@@ -46,7 +46,264 @@ pub fn place_task(
     id: &str,
     after: Option<&str>,
 ) -> Result<()> {
-    let (column, list) = section_of(db, view, today, id)?;
+    db.batch(|w| w.place_task(view, today, id, after))
+}
+
+/// Move a task `step` places up (negative) or down (positive) in `view`,
+/// stopping at the ends of the list. A task moved past the end of its
+/// section goes into the next one (Today: daytime, This Evening; a project:
+/// above the headings, then each heading): one step down from the
+/// last daytime task is the top of This Evening, and one step up from a
+/// heading's first task is the end of the section above it.
+pub fn move_task(db: &Database, view: &View, today: Date, id: &str, step: isize) -> Result<()> {
+    db.batch(|w| w.move_task(view, today, id, step))
+}
+
+/// Put a task of project `project_id` under `heading` (`None` for the part
+/// above the headings), right after `after` within it (first when `None`).
+/// `after` must be under that heading already.
+pub fn place_in_heading(
+    db: &Database,
+    project_id: &str,
+    today: Date,
+    id: &str,
+    heading: Option<&str>,
+    after: Option<&str>,
+) -> Result<()> {
+    db.batch(|w| w.place_in_heading(project_id, today, id, heading, after))
+}
+
+/// Move a heading, with its tasks, so it follows `after` (or comes first)
+/// among its project's headings.
+pub fn place_heading(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
+    db.batch(|w| w.place_heading(id, after))
+}
+
+/// Move a heading `step` places up (negative) or down (positive) among its
+/// project's headings, stopping at the ends.
+pub fn move_heading(db: &Database, id: &str, step: isize) -> Result<()> {
+    db.batch(|w| w.move_heading(id, step))
+}
+
+/// Move heading `id`, with the tasks under it, to project `project_id`,
+/// last among its headings (#169), in one transaction. The project must be
+/// live and not the heading's own.
+pub fn move_heading_to_project(db: &Database, id: &str, project_id: &str) -> Result<()> {
+    db.batch(|w| w.move_heading_to_project(id, project_id))
+}
+
+/// Add a captured task (from `View::new_task`) right below `below` in
+/// `view` (Enter on a selected task, SPEC §4). In Today the new task joins
+/// `below`'s section, so a task added below an evening task is scheduled for
+/// This Evening too. `below` must be listed in `view`, which must be arranged
+/// by hand; nothing is created otherwise.
+pub fn add_task_below(
+    db: &Database,
+    view: &View,
+    today: Date,
+    task: &mut Task,
+    below: &str,
+) -> Result<()> {
+    db.batch(|w| w.add_task_below(view, today, task, below))
+}
+
+/// Give task `id` back the order keys it had, in its home list
+/// (`sort_order`) and in Today (`today_order`), so it is listed where it
+/// was: Undo (#64, [`crate::TaskSnapshot`]).
+pub fn restore_task_order(
+    db: &Database,
+    id: &str,
+    sort_order: f64,
+    today_order: f64,
+) -> Result<()> {
+    db.batch(|w| w.restore_task_order(id, sort_order, today_order))
+}
+
+/// Put a Today task in the daytime section or This Evening, right after
+/// `after` within that section (first when `None`). Changing section changes
+/// only This Evening: the task's date is kept, so an overdue task stays
+/// overdue. A task listed in Today only because of a due deadline has no
+/// start date; moving it into This Evening schedules it for `today`.
+pub fn place_in_today(
+    db: &Database,
+    today: Date,
+    id: &str,
+    evening: bool,
+    after: Option<&str>,
+) -> Result<()> {
+    db.batch(|w| w.place_in_today(today, id, evening, after))
+}
+
+/// Move a project in the sidebar so it follows `after` (or comes first).
+pub fn place_project(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
+    db.batch(|w| w.place_project(id, after))
+}
+
+/// File project `id` in `area` (or in none) and place it right after
+/// `after` among that area's projects, or first when `after` is `None`
+/// (dragging in the sidebar, #164), in one transaction. The area must be
+/// live, and `after` one of its projects.
+pub fn place_project_in_area(
+    db: &Database,
+    id: &str,
+    area: Option<&str>,
+    after: Option<&str>,
+) -> Result<()> {
+    db.batch(|w| w.place_project_in_area(id, area, after))
+}
+
+/// Move an area in the sidebar so it follows `after` (or comes first).
+pub fn place_area(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
+    db.batch(|w| w.place_area(id, after))
+}
+
+/// Move a checklist item so it follows `after` (or comes first) in its
+/// task's checklist.
+pub fn place_checklist_item(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
+    db.batch(|w| w.place_checklist_item(id, after))
+}
+
+/// Move a checklist item `step` places up (negative) or down (positive),
+/// stopping at the ends of its checklist.
+pub fn move_checklist_item(db: &Database, id: &str, step: isize) -> Result<()> {
+    db.batch(|w| w.move_checklist_item(id, step))
+}
+
+/// Add `item` to its task's checklist right below `below`, which must be in
+/// that checklist; nothing is added otherwise. The item is stored with its
+/// final key in one transaction, so a failure leaves the checklist unchanged.
+pub fn add_checklist_item_below(
+    db: &Database,
+    item: &mut ChecklistItem,
+    below: &str,
+) -> Result<()> {
+    db.batch(|w| w.add_checklist_item_below(item, below))
+}
+
+impl Writer<'_> {
+    /// [`place_task`], in this batch.
+    pub fn place_task(
+        &mut self,
+        view: &View,
+        today: Date,
+        id: &str,
+        after: Option<&str>,
+    ) -> Result<()> {
+        self.op(|w| place_task_in(w, view, today, id, after))
+    }
+
+    /// [`move_task`], in this batch.
+    pub fn move_task(&mut self, view: &View, today: Date, id: &str, step: isize) -> Result<()> {
+        self.op(|w| move_task_in(w, view, today, id, step))
+    }
+
+    /// [`place_in_heading`], in this batch.
+    pub fn place_in_heading(
+        &mut self,
+        project_id: &str,
+        today: Date,
+        id: &str,
+        heading: Option<&str>,
+        after: Option<&str>,
+    ) -> Result<()> {
+        self.op(|w| place_in_heading_in(w, project_id, today, id, heading, after))
+    }
+
+    /// [`place_heading`], in this batch.
+    pub fn place_heading(&mut self, id: &str, after: Option<&str>) -> Result<()> {
+        self.op(|w| place_heading_in(w, id, after))
+    }
+
+    /// [`move_heading`], in this batch.
+    pub fn move_heading(&mut self, id: &str, step: isize) -> Result<()> {
+        self.op(|w| move_heading_in(w, id, step))
+    }
+
+    /// [`move_heading_to_project`], in this batch.
+    pub fn move_heading_to_project(&mut self, id: &str, project_id: &str) -> Result<()> {
+        self.op(|w| move_heading_to_project_in(w, id, project_id))
+    }
+
+    /// [`add_task_below`], in this batch.
+    pub fn add_task_below(
+        &mut self,
+        view: &View,
+        today: Date,
+        task: &mut Task,
+        below: &str,
+    ) -> Result<()> {
+        self.op(|w| add_task_below_in(w, view, today, task, below))
+    }
+
+    /// [`restore_task_order`], in this batch.
+    pub fn restore_task_order(
+        &mut self,
+        id: &str,
+        sort_order: f64,
+        today_order: f64,
+    ) -> Result<()> {
+        self.op(|w| restore_task_order_in(w, id, sort_order, today_order))
+    }
+
+    /// [`place_in_today`], in this batch.
+    pub fn place_in_today(
+        &mut self,
+        today: Date,
+        id: &str,
+        evening: bool,
+        after: Option<&str>,
+    ) -> Result<()> {
+        self.op(|w| place_in_today_in(w, today, id, evening, after))
+    }
+
+    /// [`place_project`], in this batch.
+    pub fn place_project(&mut self, id: &str, after: Option<&str>) -> Result<()> {
+        self.op(|w| place_project_in(w, id, after))
+    }
+
+    /// [`place_project_in_area`], in this batch.
+    pub fn place_project_in_area(
+        &mut self,
+        id: &str,
+        area: Option<&str>,
+        after: Option<&str>,
+    ) -> Result<()> {
+        self.op(|w| place_project_in_area_in(w, id, area, after))
+    }
+
+    /// [`place_area`], in this batch.
+    pub fn place_area(&mut self, id: &str, after: Option<&str>) -> Result<()> {
+        self.op(|w| place_area_in(w, id, after))
+    }
+
+    /// [`place_checklist_item`], in this batch.
+    pub fn place_checklist_item(&mut self, id: &str, after: Option<&str>) -> Result<()> {
+        self.op(|w| place_checklist_item_in(w, id, after))
+    }
+
+    /// [`move_checklist_item`], in this batch.
+    pub fn move_checklist_item(&mut self, id: &str, step: isize) -> Result<()> {
+        self.op(|w| move_checklist_item_in(w, id, step))
+    }
+
+    /// [`add_checklist_item_below`], in this batch.
+    pub fn add_checklist_item_below(
+        &mut self,
+        item: &mut ChecklistItem,
+        below: &str,
+    ) -> Result<()> {
+        self.op(|w| add_checklist_item_below_in(w, item, below))
+    }
+}
+
+fn place_task_in(
+    w: &mut Writer<'_>,
+    view: &View,
+    today: Date,
+    id: &str,
+    after: Option<&str>,
+) -> Result<()> {
+    let (column, list) = section_of(w, view, today, id)?;
     if let Some(after) = after {
         if !list.iter().any(|t| t.id == after) {
             return Err(invalid(format!(
@@ -58,23 +315,17 @@ pub fn place_task(
         .iter()
         .map(|t| (t.id.clone(), key(t, column)))
         .collect();
-    write(db, "tasks", column, &place(&keyed, id, after))
+    write(w, "tasks", column, &place(&keyed, id, after))
 }
 
-/// Move a task `step` places up (negative) or down (positive) in `view`,
-/// stopping at the ends of the list. A task moved past the end of its
-/// section goes into the next one (Today: daytime, This Evening; a project:
-/// above the headings, then each heading): one step down from the
-/// last daytime task is the top of This Evening, and one step up from a
-/// heading's first task is the end of the section above it.
-pub fn move_task(db: &Database, view: &View, today: Date, id: &str, step: isize) -> Result<()> {
+fn move_task_in(w: &mut Writer<'_>, view: &View, today: Date, id: &str, step: isize) -> Result<()> {
     if matches!(view, View::Today | View::Project(_)) {
-        return move_across_sections(db, view, today, id, step);
+        return move_across_sections(w, view, today, id, step);
     }
-    let (_, list) = section_of(db, view, today, id)?;
+    let (_, list) = section_of(w, view, today, id)?;
     let ids: Vec<&str> = list.iter().map(|t| t.id.as_str()).collect();
     match after_step(&ids, id, step) {
-        Some(after) => place_task(db, view, today, id, after),
+        Some(after) => place_task_in(w, view, today, id, after),
         None => Ok(()),
     }
 }
@@ -104,8 +355,8 @@ enum Section {
 /// The sections of Today (daytime, This Evening) or of a project (above the
 /// headings, then each heading, empty ones included), in order, each with
 /// its tasks' ids in order.
-fn sections(db: &Database, view: &View, today: Date) -> Result<Vec<(Section, Vec<String>)>> {
-    let list = QueryEngine::new(db).tasks_in(view, today)?;
+fn sections(w: &mut Writer<'_>, view: &View, today: Date) -> Result<Vec<(Section, Vec<String>)>> {
+    let list = QueryEngine::within(w.tx()).tasks_in(view, today)?;
     let ids_where = |keep: &dyn Fn(&Task) -> bool| -> Vec<String> {
         list.iter()
             .filter(|t| keep(t))
@@ -123,7 +374,7 @@ fn sections(db: &Database, view: &View, today: Date) -> Result<Vec<(Section, Vec
             })
             .collect(),
         View::Project(project_id) => {
-            let headings = db.list_headings_for_project(project_id)?;
+            let headings = w.list_headings_for_project(project_id)?;
             // Whether `t` is under `heading`; a heading that no longer
             // exists counts as none.
             let under = |t: &Task, heading: Option<&str>| {
@@ -152,13 +403,13 @@ fn sections(db: &Database, view: &View, today: Date) -> Result<Vec<(Section, Vec
 /// [`move_task`] in a list with sections: within the task's section, or
 /// into the next or previous one when moved past its end.
 fn move_across_sections(
-    db: &Database,
+    w: &mut Writer<'_>,
     view: &View,
     today: Date,
     id: &str,
     step: isize,
 ) -> Result<()> {
-    let sections = sections(db, view, today)?;
+    let sections = sections(w, view, today)?;
     let Some(s) = sections
         .iter()
         .position(|(_, ids)| ids.iter().any(|i| i == id))
@@ -174,37 +425,37 @@ fn move_across_sections(
     let len = ids.len() as isize;
 
     // Within the section, or past an end of the list: stop at the end.
-    let within = |step| match after_step(&ids, id, step) {
-        Some(after) => place_task(db, view, today, id, after),
+    let within = |w: &mut Writer<'_>, step| match after_step(&ids, id, step) {
+        Some(after) => place_task_in(w, view, today, id, after),
         None => Ok(()),
     };
     if (0..len).contains(&target) {
-        return within(step);
+        return within(w, step);
     }
     if target >= len {
         // Down past the section's last task: into the next section, `k`
         // places below its top.
         let Some((next, others)) = sections.get(s + 1) else {
-            return within(step);
+            return within(w, step);
         };
         let k = ((target - len) as usize).min(others.len());
         let after = k.checked_sub(1).map(|i| others[i].as_str());
-        return place_in_section(db, view, today, id, next, after);
+        return place_in_section(w, view, today, id, next, after);
     }
     // Up past the section's first task (`target` is negative): into the
     // previous section, `k` places above its end.
     let Some(previous) = s.checked_sub(1) else {
-        return within(step);
+        return within(w, step);
     };
     let (section, others) = &sections[previous];
     let k = (-target - 1) as usize;
     let at = others.len().saturating_sub(k);
     let after = at.checked_sub(1).map(|i| others[i].as_str());
-    place_in_section(db, view, today, id, section, after)
+    place_in_section(w, view, today, id, section, after)
 }
 
 fn place_in_section(
-    db: &Database,
+    w: &mut Writer<'_>,
     view: &View,
     today: Date,
     id: &str,
@@ -212,26 +463,23 @@ fn place_in_section(
     after: Option<&str>,
 ) -> Result<()> {
     match (section, view) {
-        (Section::Today { evening }, _) => place_in_today(db, today, id, *evening, after),
+        (Section::Today { evening }, _) => place_in_today_in(w, today, id, *evening, after),
         (Section::Heading(heading), View::Project(project_id)) => {
-            place_in_heading(db, project_id, today, id, heading.as_deref(), after)
+            place_in_heading_in(w, project_id, today, id, heading.as_deref(), after)
         }
         (Section::Heading(_), _) => Err(invalid(format!("{} has no headings", view.title()))),
     }
 }
 
-/// Put a task of project `project_id` under `heading` (`None` for the part
-/// above the headings), right after `after` within it (first when `None`).
-/// `after` must be under that heading already.
-pub fn place_in_heading(
-    db: &Database,
+fn place_in_heading_in(
+    w: &mut Writer<'_>,
     project_id: &str,
     today: Date,
     id: &str,
     heading: Option<&str>,
     after: Option<&str>,
 ) -> Result<()> {
-    let list = QueryEngine::new(db).project_tasks(project_id)?;
+    let list = QueryEngine::within(w.tx()).project_tasks(project_id)?;
     let Some(task) = list.iter().find(|t| t.id == id) else {
         return Err(invalid(format!("task '{id}' is not in this project")));
     };
@@ -251,35 +499,28 @@ pub fn place_in_heading(
             project: project_id.to_string(),
             heading: heading.map(str::to_string),
         };
-        db.set_task_home(id, &home)?;
+        w.set_task_home(id, &home)?;
     }
-    place_task(db, &View::Project(project_id.to_string()), today, id, after)
+    place_task_in(w, &View::Project(project_id.to_string()), today, id, after)
 }
 
-/// Move a heading, with its tasks, so it follows `after` (or comes first)
-/// among its project's headings.
-pub fn place_heading(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
-    let list = headings_beside(db, id)?;
+fn place_heading_in(w: &mut Writer<'_>, id: &str, after: Option<&str>) -> Result<()> {
+    let list = headings_beside(w, id)?;
     check_member(&list, id, after)?;
-    write(db, "headings", "sort_order", &place(&list, id, after))
+    write(w, "headings", "sort_order", &place(&list, id, after))
 }
 
-/// Move a heading `step` places up (negative) or down (positive) among its
-/// project's headings, stopping at the ends.
-pub fn move_heading(db: &Database, id: &str, step: isize) -> Result<()> {
-    let list = headings_beside(db, id)?;
+fn move_heading_in(w: &mut Writer<'_>, id: &str, step: isize) -> Result<()> {
+    let list = headings_beside(w, id)?;
     let ids: Vec<&str> = list.iter().map(|(i, _)| i.as_str()).collect();
     match after_step(&ids, id, step) {
-        Some(after) => place_heading(db, id, after),
+        Some(after) => place_heading_in(w, id, after),
         None => Ok(()),
     }
 }
 
-/// Move heading `id`, with the tasks under it, to project `project_id`,
-/// last among its headings (#169), in one transaction. The project must be
-/// live and not the heading's own.
-pub fn move_heading_to_project(db: &Database, id: &str, project_id: &str) -> Result<()> {
-    let Some(heading) = db.get_heading(id)? else {
+fn move_heading_to_project_in(w: &mut Writer<'_>, id: &str, project_id: &str) -> Result<()> {
+    let Some(heading) = w.get_heading(id)? else {
         return Err(MattersError::NotFound {
             entity: "heading",
             id: id.to_string(),
@@ -290,18 +531,18 @@ pub fn move_heading_to_project(db: &Database, id: &str, project_id: &str) -> Res
             "heading '{id}' is already in project '{project_id}'"
         )));
     }
-    if !QueryEngine::new(db).project_is_live(project_id)? {
+    if !QueryEngine::within(w.tx()).project_is_live(project_id)? {
         return Err(MattersError::NotFound {
             entity: "project",
             id: project_id.to_string(),
         });
     }
-    let key = db
+    let key = w
         .list_headings_for_project(project_id)?
         .last()
         .map_or(1.0, |h| h.sort_order + 1.0);
     let now = crate::clock::now_millis();
-    db.write(
+    w.write(
         now,
         |tx| {
             tx.execute(
@@ -319,27 +560,21 @@ pub fn move_heading_to_project(db: &Database, id: &str, project_id: &str) -> Res
 }
 
 /// The headings of heading `id`'s project, in order, with their keys.
-fn headings_beside(db: &Database, id: &str) -> Result<Vec<(String, f64)>> {
-    let Some(heading) = db.get_heading(id)? else {
+fn headings_beside(w: &mut Writer<'_>, id: &str) -> Result<Vec<(String, f64)>> {
+    let Some(heading) = w.get_heading(id)? else {
         return Err(MattersError::NotFound {
             entity: "heading",
             id: id.to_string(),
         });
     };
-    Ok(db
-        .list_headings_for_project(&heading.project_id)?
+    Ok(w.list_headings_for_project(&heading.project_id)?
         .into_iter()
         .map(|h| (h.id, h.sort_order))
         .collect())
 }
 
-/// Add a captured task (from `View::new_task`) right below `below` in
-/// `view` (Enter on a selected task, SPEC §4). In Today the new task joins
-/// `below`'s section, so a task added below an evening task is scheduled for
-/// This Evening too. `below` must be listed in `view`, which must be arranged
-/// by hand; nothing is created otherwise.
-pub fn add_task_below(
-    db: &Database,
+fn add_task_below_in(
+    w: &mut Writer<'_>,
     view: &View,
     today: Date,
     task: &mut Task,
@@ -348,7 +583,7 @@ pub fn add_task_below(
     if !view.is_reorderable() {
         return Err(invalid(format!("{} is not arranged by hand", view.title())));
     }
-    let list = QueryEngine::new(db).tasks_in(view, today)?;
+    let list = QueryEngine::within(w.tx()).tasks_in(view, today)?;
     let Some(anchor) = list.iter().find(|t| t.id == below) else {
         return Err(invalid(format!(
             "task '{below}' is not in {}",
@@ -359,25 +594,22 @@ pub fn add_task_below(
     if matches!(view, View::Project(_)) {
         task.heading_id = anchor.heading_id.clone();
     }
-    db.add_task(task)?;
+    w.add_task(task)?;
     if *view == View::Today {
-        place_in_today(db, today, &task.id, evening, Some(below))
+        place_in_today_in(w, today, &task.id, evening, Some(below))
     } else {
-        place_task(db, view, today, &task.id, Some(below))
+        place_task_in(w, view, today, &task.id, Some(below))
     }
 }
 
-/// Give task `id` back the order keys it had, in its home list
-/// (`sort_order`) and in Today (`today_order`), so it is listed where it
-/// was: Undo (#64, [`crate::TaskSnapshot`]).
-pub fn restore_task_order(
-    db: &Database,
+fn restore_task_order_in(
+    w: &mut Writer<'_>,
     id: &str,
     sort_order: f64,
     today_order: f64,
 ) -> Result<()> {
     let id = id.to_string();
-    db.write(
+    w.write(
         crate::clock::now_millis(),
         |tx| {
             update_keys(tx, "tasks", "sort_order", &[(id.clone(), sort_order)])?;
@@ -397,19 +629,14 @@ pub fn restore_task_order(
     )
 }
 
-/// Put a Today task in the daytime section or This Evening, right after
-/// `after` within that section (first when `None`). Changing section changes
-/// only This Evening: the task's date is kept, so an overdue task stays
-/// overdue. A task listed in Today only because of a due deadline has no
-/// start date; moving it into This Evening schedules it for `today`.
-pub fn place_in_today(
-    db: &Database,
+fn place_in_today_in(
+    w: &mut Writer<'_>,
     today: Date,
     id: &str,
     evening: bool,
     after: Option<&str>,
 ) -> Result<()> {
-    let list = QueryEngine::new(db).tasks_in(&View::Today, today)?;
+    let list = QueryEngine::within(w.tx()).tasks_in(&View::Today, today)?;
     let Some(task) = list.iter().find(|t| t.id == id) else {
         return Err(invalid(format!("task '{id}' is not in Today")));
     };
@@ -424,33 +651,28 @@ pub fn place_in_today(
         }
     }
     if task.is_evening() != evening {
-        db.set_task_evening(id, evening, today)?;
+        w.set_task_evening(id, evening, today)?;
     }
-    place_task(db, &View::Today, today, id, after)
+    place_task_in(w, &View::Today, today, id, after)
 }
 
-/// Move a project in the sidebar so it follows `after` (or comes first).
-pub fn place_project(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
-    let list: Vec<(String, f64)> = db
+fn place_project_in(w: &mut Writer<'_>, id: &str, after: Option<&str>) -> Result<()> {
+    let list: Vec<(String, f64)> = w
         .list_projects()?
         .into_iter()
         .map(|p| (p.id, p.sort_order))
         .collect();
     check_member(&list, id, after)?;
-    write(db, "projects", "sort_order", &place(&list, id, after))
+    write(w, "projects", "sort_order", &place(&list, id, after))
 }
 
-/// File project `id` in `area` (or in none) and place it right after
-/// `after` among that area's projects, or first when `after` is `None`
-/// (dragging in the sidebar, #164), in one transaction. The area must be
-/// live, and `after` one of its projects.
-pub fn place_project_in_area(
-    db: &Database,
+fn place_project_in_area_in(
+    w: &mut Writer<'_>,
     id: &str,
     area: Option<&str>,
     after: Option<&str>,
 ) -> Result<()> {
-    let projects = db.list_projects()?;
+    let projects = w.list_projects()?;
     let Some(project) = projects.iter().find(|p| p.id == id) else {
         return Err(MattersError::NotFound {
             entity: "project",
@@ -458,7 +680,7 @@ pub fn place_project_in_area(
         });
     };
     if let Some(area) = area {
-        if !db.list_areas()?.iter().any(|a| a.id == area) {
+        if !w.list_areas()?.iter().any(|a| a.id == area) {
             return Err(MattersError::NotFound {
                 entity: "area",
                 id: area.to_string(),
@@ -477,7 +699,7 @@ pub fn place_project_in_area(
     check_member(&list, id, after)?;
     let changes = place(&list, id, after);
     let now = crate::clock::now_millis();
-    db.write(
+    w.write(
         now,
         |tx| {
             tx.execute(
@@ -505,52 +727,39 @@ pub fn place_project_in_area(
     )
 }
 
-/// Move an area in the sidebar so it follows `after` (or comes first).
-pub fn place_area(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
-    let list: Vec<(String, f64)> = db
+fn place_area_in(w: &mut Writer<'_>, id: &str, after: Option<&str>) -> Result<()> {
+    let list: Vec<(String, f64)> = w
         .list_areas()?
         .into_iter()
         .map(|a| (a.id, a.sort_order))
         .collect();
     check_member(&list, id, after)?;
-    write(db, "areas", "sort_order", &place(&list, id, after))
+    write(w, "areas", "sort_order", &place(&list, id, after))
 }
 
-/// Move a checklist item so it follows `after` (or comes first) in its
-/// task's checklist.
-pub fn place_checklist_item(db: &Database, id: &str, after: Option<&str>) -> Result<()> {
-    let list = checklist_of(db, id)?;
+fn place_checklist_item_in(w: &mut Writer<'_>, id: &str, after: Option<&str>) -> Result<()> {
+    let list = checklist_of(w, id)?;
     check_member(&list, id, after)?;
-    write(
-        db,
-        "checklist_items",
-        "sort_order",
-        &place(&list, id, after),
-    )
+    write(w, "checklist_items", "sort_order", &place(&list, id, after))
 }
 
-/// Move a checklist item `step` places up (negative) or down (positive),
-/// stopping at the ends of its checklist.
-pub fn move_checklist_item(db: &Database, id: &str, step: isize) -> Result<()> {
-    let list = checklist_of(db, id)?;
+fn move_checklist_item_in(w: &mut Writer<'_>, id: &str, step: isize) -> Result<()> {
+    let list = checklist_of(w, id)?;
     let ids: Vec<&str> = list.iter().map(|(i, _)| i.as_str()).collect();
     match after_step(&ids, id, step) {
-        Some(after) => place_checklist_item(db, id, after),
+        Some(after) => place_checklist_item_in(w, id, after),
         None => Ok(()),
     }
 }
 
-/// Add `item` to its task's checklist right below `below`, which must be in
-/// that checklist; nothing is added otherwise. The item is stored with its
-/// final key in one transaction, so a failure leaves the checklist unchanged.
-pub fn add_checklist_item_below(
-    db: &Database,
+fn add_checklist_item_below_in(
+    w: &mut Writer<'_>,
     item: &mut ChecklistItem,
     below: &str,
 ) -> Result<()> {
     item.title = checklist_title(&item.title)?;
     let at = item.updated_at;
-    db.write(
+    w.write(
         at,
         |tx| {
             let mut list = checklist_keys(tx, &item.task_id)?;
@@ -590,15 +799,14 @@ pub fn add_checklist_item_below(
 }
 
 /// The checklist holding item `id`, in order, with each item's key.
-fn checklist_of(db: &Database, id: &str) -> Result<Vec<(String, f64)>> {
-    let Some(item) = db.get_checklist_item(id)? else {
+fn checklist_of(w: &mut Writer<'_>, id: &str) -> Result<Vec<(String, f64)>> {
+    let Some(item) = w.get_checklist_item(id)? else {
         return Err(MattersError::NotFound {
             entity: "checklist item",
             id: id.to_string(),
         });
     };
-    Ok(db
-        .list_checklist_items(&item.task_id)?
+    Ok(w.list_checklist_items(&item.task_id)?
         .into_iter()
         .map(|i| (i.id, i.sort_order))
         .collect())
@@ -606,7 +814,7 @@ fn checklist_of(db: &Database, id: &str) -> Result<Vec<(String, f64)>> {
 
 /// The tasks `id` is ordered among in `view`, and the key column for it.
 fn section_of(
-    db: &Database,
+    w: &mut Writer<'_>,
     view: &View,
     today: Date,
     id: &str,
@@ -614,7 +822,7 @@ fn section_of(
     if !view.is_reorderable() {
         return Err(invalid(format!("{} is not arranged by hand", view.title())));
     }
-    let mut list = QueryEngine::new(db).tasks_in(view, today)?;
+    let mut list = QueryEngine::within(w.tx()).tasks_in(view, today)?;
     let Some(task) = list.iter().find(|t| t.id == id) else {
         return Err(invalid(format!("task '{id}' is not in {}", view.title())));
     };
@@ -695,11 +903,11 @@ fn place(list: &[(String, f64)], id: &str, after: Option<&str>) -> Vec<(String, 
 
 /// Apply key changes in one transaction, recording the new order for sync.
 /// `table` and `column` are fixed names.
-fn write(db: &Database, table: &str, column: &str, changes: &[(String, f64)]) -> Result<()> {
+fn write(w: &mut Writer<'_>, table: &str, column: &str, changes: &[(String, f64)]) -> Result<()> {
     if changes.is_empty() {
         return Ok(());
     }
-    db.write(
+    w.write(
         crate::clock::now_millis(),
         |tx| update_keys(tx, table, column, changes),
         |tx, ()| crate::storage::sync::reorder(tx, table, column, &changed(changes)),

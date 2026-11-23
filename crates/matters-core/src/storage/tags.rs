@@ -4,6 +4,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
+use super::batch::Writer;
 use super::Database;
 use crate::domain::{Tag, Tagged, Task};
 use crate::error::{MattersError, Result};
@@ -16,44 +17,7 @@ impl Database {
     /// a blank name, a name already taken (ignoring case) or a missing
     /// parent is refused, and nothing is added.
     pub fn add_tag(&self, tag: &mut Tag) -> Result<()> {
-        tag.name = clean_name(&tag.name)?;
-        let at = tag.updated_at;
-        self.write(
-            at,
-            |tx| {
-                check_name_free(tx, &tag.name, None)?;
-                if let Some(parent) = &tag.parent_id {
-                    get_tag(tx, parent)?;
-                }
-                tag.sort_order = tx.query_row(
-                    "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tags",
-                    [],
-                    |r| r.get(0),
-                )?;
-                tx.execute(
-                    &format!("INSERT INTO tags ({TAG_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
-                    params![
-                        tag.id,
-                        tag.name,
-                        tag.parent_id,
-                        tag.sort_order,
-                        tag.created_at,
-                        tag.updated_at
-                    ],
-                )?;
-                Ok(tag.clone())
-            },
-            |tx, tag| {
-                Ok(vec![crate::crdt::Command::CreateTag {
-                    id: tag.id.clone(),
-                    name: tag.name.clone(),
-                    parent: tag.parent_id.clone(),
-                    at: super::sync::tag_anchor(tx, &tag.id)?,
-                    created_at: tag.created_at,
-                }])
-            },
-        )
-        .map(|_| ())
+        self.batch(|w| w.add_tag(tag))
     }
 
     pub fn get_tag(&self, id: &str) -> Result<Option<Tag>> {
@@ -67,22 +31,7 @@ impl Database {
     /// Every tag, parents before their children and siblings in their
     /// order: a depth-first walk of the tree, as a tag list shows it.
     pub fn list_tags(&self) -> Result<Vec<Tag>> {
-        let all = self.with_conn(|conn| {
-            let mut stmt = conn.prepare(&format!(
-                "SELECT {TAG_COLUMNS} FROM tags ORDER BY sort_order ASC, name COLLATE NOCASE ASC, id ASC"
-            ))?;
-            let rows = stmt.query_map([], map_tag_row)?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })?;
-        let mut ordered = Vec::with_capacity(all.len());
-        fn walk(all: &[Tag], parent: Option<&str>, out: &mut Vec<Tag>) {
-            for tag in all.iter().filter(|t| t.parent_id.as_deref() == parent) {
-                out.push(tag.clone());
-                walk(all, Some(&tag.id), out);
-            }
-        }
-        walk(&all, None, &mut ordered);
-        Ok(ordered)
+        self.with_conn(tags_in)
     }
 
     /// Rename a tag; the name is cleaned and checked as for
@@ -181,39 +130,13 @@ impl Database {
     /// Give `item` the tag `tag_id`; giving it a tag it has changes nothing.
     /// The item and the tag must exist.
     pub fn add_tag_to(&self, item: Tagged<'_>, tag_id: &str) -> Result<()> {
-        let (_, _, item_id) = item.item();
-        self.write(
-            crate::clock::now_millis(),
-            |tx| {
-                check_item(tx, item)?;
-                get_tag(tx, tag_id)?;
-                let (table, column) = item.table();
-                Ok(tx.execute(
-                    &format!("INSERT OR IGNORE INTO {table} ({column}, tag_id) VALUES (?1, ?2)"),
-                    params![item_id, tag_id],
-                )? > 0)
-            },
-            |_, added| Ok(super::sync::link(*added, item_id, tag_id, true)),
-        )
-        .map(|_| ())
+        self.batch(|w| w.add_tag_to(item, tag_id))
     }
 
     /// Take the tag `tag_id` off `item`; removing a tag it hasn't got
     /// changes nothing.
     pub fn remove_tag_from(&self, item: Tagged<'_>, tag_id: &str) -> Result<()> {
-        let (table, column) = item.table();
-        let (_, _, item_id) = item.item();
-        self.write(
-            crate::clock::now_millis(),
-            |tx| {
-                Ok(tx.execute(
-                    &format!("DELETE FROM {table} WHERE {column} = ?1 AND tag_id = ?2"),
-                    params![item_id, tag_id],
-                )? > 0)
-            },
-            |_, removed| Ok(super::sync::link(*removed, item_id, tag_id, false)),
-        )
-        .map(|_| ())
+        self.batch(|w| w.remove_tag_from(item, tag_id))
     }
 
     /// The tags given to each of `task_ids` itself, in tag-list order, for
@@ -291,6 +214,114 @@ impl Database {
             .filter(|t| mine.contains(&t.id))
             .collect())
     }
+}
+
+impl Writer<'_> {
+    /// [`Database::add_tag`], in this batch.
+    pub fn add_tag(&mut self, tag: &mut Tag) -> Result<()> {
+        self.op(|w| {
+            tag.name = clean_name(&tag.name)?;
+            let at = tag.updated_at;
+            w.write(
+                at,
+                |tx| {
+                    check_name_free(tx, &tag.name, None)?;
+                    if let Some(parent) = &tag.parent_id {
+                        get_tag(tx, parent)?;
+                    }
+                    tag.sort_order = tx.query_row(
+                        "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tags",
+                        [],
+                        |r| r.get(0),
+                    )?;
+                    tx.execute(
+                        &format!(
+                            "INSERT INTO tags ({TAG_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+                        ),
+                        params![
+                            tag.id,
+                            tag.name,
+                            tag.parent_id,
+                            tag.sort_order,
+                            tag.created_at,
+                            tag.updated_at
+                        ],
+                    )?;
+                    Ok(tag.clone())
+                },
+                |tx, tag| {
+                    Ok(vec![crate::crdt::Command::CreateTag {
+                        id: tag.id.clone(),
+                        name: tag.name.clone(),
+                        parent: tag.parent_id.clone(),
+                        at: super::sync::tag_anchor(tx, &tag.id)?,
+                        created_at: tag.created_at,
+                    }])
+                },
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// [`Database::add_tag_to`], in this batch.
+    pub fn add_tag_to(&mut self, item: Tagged<'_>, tag_id: &str) -> Result<()> {
+        self.op(|w| {
+            let (_, _, item_id) = item.item();
+            w.write(
+                crate::clock::now_millis(),
+                |tx| {
+                    check_item(tx, item)?;
+                    get_tag(tx, tag_id)?;
+                    let (table, column) = item.table();
+                    Ok(tx.execute(
+                        &format!(
+                            "INSERT OR IGNORE INTO {table} ({column}, tag_id) VALUES (?1, ?2)"
+                        ),
+                        params![item_id, tag_id],
+                    )? > 0)
+                },
+                |_, added| Ok(super::sync::link(*added, item_id, tag_id, true)),
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// [`Database::remove_tag_from`], in this batch.
+    pub fn remove_tag_from(&mut self, item: Tagged<'_>, tag_id: &str) -> Result<()> {
+        self.op(|w| {
+            let (table, column) = item.table();
+            let (_, _, item_id) = item.item();
+            w.write(
+                crate::clock::now_millis(),
+                |tx| {
+                    Ok(tx.execute(
+                        &format!("DELETE FROM {table} WHERE {column} = ?1 AND tag_id = ?2"),
+                        params![item_id, tag_id],
+                    )? > 0)
+                },
+                |_, removed| Ok(super::sync::link(*removed, item_id, tag_id, false)),
+            )
+            .map(|_| ())
+        })
+    }
+}
+
+/// Every tag in `conn`, in [`Database::list_tags`] order.
+pub(crate) fn tags_in(conn: &Connection) -> Result<Vec<Tag>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {TAG_COLUMNS} FROM tags ORDER BY sort_order ASC, name COLLATE NOCASE ASC, id ASC"
+    ))?;
+    let rows = stmt.query_map([], map_tag_row)?;
+    let all = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut ordered = Vec::with_capacity(all.len());
+    fn walk(all: &[Tag], parent: Option<&str>, out: &mut Vec<Tag>) {
+        for tag in all.iter().filter(|t| t.parent_id.as_deref() == parent) {
+            out.push(tag.clone());
+            walk(all, Some(&tag.id), out);
+        }
+    }
+    walk(&all, None, &mut ordered);
+    Ok(ordered)
 }
 
 fn map_tag_row(row: &Row) -> rusqlite::Result<Tag> {

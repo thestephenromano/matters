@@ -29,6 +29,6 @@ pub use settings::{
     AppearanceSettings, CalendarSettings, ColorScheme, LogPolicy, LogbookSettings, Settings,
     SettingsFile, SettingsProblem, SyncSettings,
 };
-pub use storage::Database;
+pub use storage::{Database, Writer, MAX_BATCH_BYTES};
 pub use undo::TaskSnapshot;
 pub use visit::Visit;

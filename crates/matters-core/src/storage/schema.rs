@@ -448,3 +448,18 @@ CREATE TABLE sync_checkpoint_waits (
 ALTER TABLE sync_checkpoints ADD COLUMN verified INTEGER NOT NULL DEFAULT 1
     CHECK (verified IN (0, 1));
 "#;
+
+/// v20: request IDs of batches (#203, `Database::batch_once`). A caller
+/// that retries a batch whose answer it never got names the request, and
+/// the retry returns the stored result instead of changing anything again.
+/// Rows belong to this device, are never synced, and are dropped after a
+/// day.
+pub const MIGRATION_V20: &str = r#"
+CREATE TABLE IF NOT EXISTS batch_requests (
+    id TEXT PRIMARY KEY,
+    digest BLOB NOT NULL CHECK (length(digest) = 32),
+    result BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_batch_requests_created ON batch_requests(created_at);
+"#;
