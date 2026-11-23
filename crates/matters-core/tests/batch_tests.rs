@@ -302,3 +302,66 @@ fn request_ids_are_remembered_for_a_day() {
     // Forgotten: the ID is free again.
     assert_eq!(send([2; 32]).unwrap(), [2; 32]);
 }
+
+#[test]
+fn queries_in_a_batch_see_its_own_changes_and_match_the_database() {
+    use matters_core::{Area, ChecklistItem, QueryEngine, Tag, Tagged};
+    let db = synced();
+    db.add_tag(&mut Tag::new(id("tag"), "Errand", None))
+        .unwrap();
+
+    db.batch(|w| {
+        w.add_area(&mut Area::new(id("area"), "Home", 0.0))?;
+        w.add_project(&mut Project::new(id("p"), "Garden", 0.0))?;
+        w.add_task(&mut Task::new(id("t"), "Dig", 0.0))?;
+        w.add_tag_to(Tagged::Task(&id("t")), &id("tag"))?;
+        w.add_checklist_item(&mut ChecklistItem::new(id("c"), id("t"), "Spade", 0.0))?;
+        w.set_checklist_item_done(&id("c"), true)?;
+
+        // Not committed yet, but the batch's queries see all of it.
+        let q = w.query();
+        assert_eq!(q.task(&id("t"))?.map(|t| t.title), Some("Dig".into()));
+        assert_eq!(q.project(&id("p"))?.map(|p| p.title), Some("Garden".into()));
+        assert_eq!(q.area(&id("area"))?.map(|a| a.title), Some("Home".into()));
+        assert_eq!(q.task(&id("p"))?, None);
+        assert_eq!(q.project(&id("t"))?, None);
+        assert_eq!(q.area(&id("t"))?, None);
+        assert_eq!(q.tag_named("  errand ")?.map(|t| t.id), Some(id("tag")));
+        assert_eq!(q.tag_named("missing")?, None);
+        assert_eq!(q.tag_named("   ")?, None);
+        let ids = [id("t")];
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        assert_eq!(q.tags_of_tasks(&ids)?[&id("t")][0].name, "Errand");
+        let progress = &q.checklist_progress(&ids)?[&id("t")];
+        assert_eq!((progress.done, progress.total), (1, 1));
+        assert_eq!(q.inbox()?.len(), 1);
+        Ok(())
+    })
+    .unwrap();
+
+    // And outside it, the same reads through the database agree.
+    let q = QueryEngine::new(&db);
+    let ids = [id("t")];
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    assert_eq!(q.task(&id("t")).unwrap(), db.get_task(&id("t")).unwrap());
+    assert_eq!(
+        q.project(&id("p")).unwrap(),
+        db.get_project(&id("p")).unwrap()
+    );
+    assert_eq!(
+        q.area(&id("area")).unwrap(),
+        db.get_area(&id("area")).unwrap()
+    );
+    assert_eq!(
+        q.tags_of_tasks(&ids).unwrap(),
+        db.tags_of_tasks(&ids).unwrap()
+    );
+    assert_eq!(
+        q.checklist_progress(&ids).unwrap(),
+        db.checklist_progress(&ids).unwrap()
+    );
+    assert_eq!(
+        q.tag_named("ERRAND").unwrap(),
+        db.tag_named("errand").unwrap()
+    );
+}

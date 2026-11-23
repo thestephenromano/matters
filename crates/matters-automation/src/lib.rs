@@ -7,12 +7,14 @@
 //! gets a new interface (`Automation2`), and the old one keeps working for
 //! at least one release.
 
+mod changes;
 pub mod clients;
 pub mod error;
 pub mod items;
 mod service;
 
-pub use clients::{Client, Clients, MemoryClients, Permission, Permissions, Token};
+pub use changes::{MAX_CHANGES, MAX_REQUEST_ID};
+pub use clients::{Client, Clients, MemoryClients, Permission, Permissions, Token, LINKS_CLIENT};
 pub use error::Error;
 pub use items::Item;
 pub use service::{Automation, TodayEvents, LOGBOOK_LIMIT};

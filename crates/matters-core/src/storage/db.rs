@@ -282,7 +282,11 @@ impl Database {
     }
 
     pub fn get_area(&self, id: &str) -> Result<Option<Area>> {
-        let conn = self.lock_conn();
+        Self::area_in(&self.lock_conn(), id)
+    }
+
+    /// [`Self::get_area`] in `conn`.
+    pub(crate) fn area_in(conn: &Connection, id: &str) -> Result<Option<Area>> {
         let mut stmt = conn.prepare(&format!("SELECT {AREA_COLUMNS} FROM areas WHERE id = ?1"))?;
         let area = stmt.query_row(params![id], Self::map_area_row).optional()?;
         Ok(area)
@@ -368,7 +372,11 @@ impl Database {
     }
 
     pub fn get_project(&self, id: &str) -> Result<Option<Project>> {
-        let conn = self.lock_conn();
+        Self::project_in(&self.lock_conn(), id)
+    }
+
+    /// [`Self::get_project`] in `conn`.
+    pub(crate) fn project_in(conn: &Connection, id: &str) -> Result<Option<Project>> {
         let mut stmt = conn.prepare(&format!(
             "SELECT {PROJECT_COLUMNS} FROM projects WHERE id = ?1"
         ))?;
@@ -665,7 +673,11 @@ impl Database {
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
-        let conn = self.lock_conn();
+        Self::task_in(&self.lock_conn(), id)
+    }
+
+    /// [`Self::get_task`] in `conn`.
+    pub(crate) fn task_in(conn: &Connection, id: &str) -> Result<Option<Task>> {
         let mut stmt = conn.prepare(&format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"))?;
         let task = stmt.query_row(params![id], Self::map_task_row).optional()?;
         Ok(task)
@@ -935,7 +947,14 @@ impl Database {
         &self,
         task_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, ChecklistProgress>> {
-        let conn = self.lock_conn();
+        Self::checklist_progress_in(&self.lock_conn(), task_ids)
+    }
+
+    /// [`Self::checklist_progress`] in `conn`.
+    pub(crate) fn checklist_progress_in(
+        conn: &Connection,
+        task_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, ChecklistProgress>> {
         let mut progress = std::collections::HashMap::new();
         for chunk in task_ids.chunks(PROGRESS_CHUNK) {
             let marks = vec!["?"; chunk.len()].join(",");
