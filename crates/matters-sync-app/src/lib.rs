@@ -165,6 +165,9 @@ struct Inner {
     keys: Arc<dyn KeyStore + Send + Sync>,
     data_dir: PathBuf,
     view: Mutex<View>,
+    /// Held from reading the database to showing what it read, so a
+    /// refresh never replaces a later one's counts with older ones.
+    refreshing: Mutex<()>,
     running: Mutex<Option<Running>>,
     /// Bumped to stop an invitation's or a join's polling.
     attempt: Mutex<u64>,
@@ -301,6 +304,7 @@ impl SyncApp {
                     endpoint: endpoint.clone(),
                     ..View::default()
                 }),
+                refreshing: Mutex::new(()),
                 running: Mutex::new(None),
                 attempt: Mutex::new(0),
                 changed: Box::new(changed),
@@ -385,8 +389,16 @@ impl SyncApp {
         message
     }
 
-    /// The device list and admin flag, from the database.
+    /// The unsent count, device list and admin flag, from the database.
     fn refresh(&self) {
+        self.show(None);
+    }
+
+    /// Show the database as it is now, with the client's `health` when it
+    /// changed: in one change of the view, so it never shows a new health
+    /// with counts read before it.
+    fn show(&self, health: Option<Health>) {
+        let _refreshing = self.inner.refreshing.lock().unwrap();
         let db = &self.inner.db;
         // Edits, and membership changes signed here, not yet on the relay.
         let unsent = db.outgoing_records().map(|r| r.len()).unwrap_or(0)
@@ -408,6 +420,9 @@ impl SyncApp {
             })
         });
         self.update(|v| {
+            if let Some(health) = health {
+                v.health = health;
+            }
             v.unsent = unsent;
             match &membership {
                 Some(m) => {
@@ -440,8 +455,7 @@ impl SyncApp {
         self.inner.runtime.spawn(async move {
             loop {
                 let now = health(&status.borrow());
-                app.update(|v| v.health = now);
-                app.refresh();
+                app.show(Some(now));
                 if status.changed().await.is_err() {
                     break;
                 }
@@ -482,8 +496,11 @@ impl SyncApp {
             .map(|r| r.client.clone())
     }
 
-    /// Sync now, as after an edit.
+    /// Sync now, as after an edit. The edit counts as unsent from here:
+    /// until a round has sent it, the view says so, whatever the last round
+    /// left it saying.
     pub fn sync_now(&self) {
+        self.refresh();
         if let Some(client) = self.client() {
             client.waker().notify_one();
         }
@@ -758,7 +775,6 @@ impl SyncApp {
             .db
             .remove_member(device)
             .map_err(|e| self.fail(e))?;
-        self.refresh();
         self.sync_now();
         Ok(())
     }
