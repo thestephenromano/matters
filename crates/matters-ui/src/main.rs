@@ -3,6 +3,14 @@ use matters_core::calendar::{CalendarSource, FakeCalendarSource};
 use matters_core::{Database, SettingsFile};
 
 fn main() {
+    // An engine checker's child (#45) stops here, before Qt or anything
+    // else starts. Every other start decodes other members' engine bytes
+    // through such a child, this binary run again in check mode.
+    matters_core::crdt::isolation::run_if_requested();
+    matters_core::crdt::isolation::install(std::sync::Arc::new(
+        matters_core::crdt::isolation::ChildProcess::this_executable(),
+    ));
+
     // Read before the application starts: the user's explicit style choice.
     let explicit_style = std::env::var_os("QT_QUICK_CONTROLS_STYLE");
 

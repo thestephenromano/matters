@@ -9,6 +9,7 @@
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use super::db::Database;
+use crate::crdt::isolation::{self, Blob, Verdict};
 use crate::crdt::{Anchor, Command, Document, Kind};
 use crate::domain::{Area, ChecklistItem, Heading, Project, Status, Task};
 use crate::error::{MattersError, Result};
@@ -683,12 +684,19 @@ impl Database {
     /// Apply an engine update from another replica: it is journalled as
     /// received (never sent back out), merged, and the rows are rebuilt
     /// from the engine, in one transaction. An update whose dependencies
-    /// have not arrived stays in the journal and applies once they do.
+    /// have not arrived stays in the journal and applies once they do. The
+    /// engine checker decodes it first (`crdt::isolation`): one it refuses
+    /// is not taken.
     pub fn receive_update(&self, bytes: &[u8]) -> Result<()> {
         self.with_engine(|conn, engine| {
             let Some(doc) = engine.as_mut() else {
                 return Err(MattersError::Validation("sync is off".into()));
             };
+            if let Verdict::Refuse(reason) = isolation::vet_one(Blob::Update, bytes)? {
+                return Err(MattersError::Validation(format!(
+                    "update refused: {reason}"
+                )));
+            }
             let tx = conn.transaction()?;
             let applied = (|| {
                 tx.execute(

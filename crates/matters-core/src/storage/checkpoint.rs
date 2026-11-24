@@ -15,8 +15,10 @@
 //! 1. each listed writer must be admitted, under its listed author: one not
 //!    admitted yet makes the checkpoint wait, recorded, before its snapshot
 //!    is imported, and it is judged again only once that writer arrives;
-//! 2. the snapshot's own version and frontier must be the statement's, and
-//!    every actor in the version must be a listed writer's;
+//! 2. the snapshot must decode within the engine checker's budget
+//!    (`crdt::isolation`), its own version and frontier must be the
+//!    statement's, and every actor in the version must be a listed
+//!    writer's;
 //! 3. where this device holds a listed chain as far, the record at the
 //!    listed length must be the listed head;
 //! 4. each writer's counter must agree with the chain lengths.
@@ -60,6 +62,7 @@ use super::db::Database;
 use super::membership::{Joined, HOME_DOCUMENT};
 use super::sealing::seal_snapshot;
 use super::sync::{crash_point, rebuild_rows};
+use crate::crdt::isolation::{self, Blob};
 use crate::crdt::{self, Document};
 use crate::error::{MattersError, Result};
 
@@ -269,40 +272,45 @@ enum Verdict {
 
 /// Checks 1 and 2: the parts of the judgement that need no history. The
 /// writers are checked first, so a checkpoint that must wait imports no
-/// snapshot.
-fn consistent(joined: &Joined, c: &Checkpoint) -> std::result::Result<(), Verdict> {
+/// snapshot. The outer `Err` is the engine checker's failure to check,
+/// which judges nothing.
+fn consistent(joined: &Joined, c: &Checkpoint) -> Result<std::result::Result<(), Verdict>> {
     let coverage = &c.coverage;
     if coverage.engine != ENGINE {
-        return Err(Verdict::Refuse(format!(
+        return Ok(Err(Verdict::Refuse(format!(
             "unknown engine {}",
             coverage.engine
-        )));
+        ))));
     }
     if coverage.schema > DOCUMENT_SCHEMA {
-        return Err(Verdict::Supersede);
+        return Ok(Err(Verdict::Supersede));
     }
     let histories = joined.authority.writer_histories(HOME_DOCUMENT);
     let mut actors = BTreeMap::new();
     for w in &coverage.writers {
         let Some(history) = histories.get(&w.incarnation) else {
-            return Err(Verdict::Wait(w.incarnation));
+            return Ok(Err(Verdict::Wait(w.incarnation)));
         };
         if history.device != w.author {
-            return Err(Verdict::Refuse(
+            return Ok(Err(Verdict::Refuse(
                 "a writer listed under another author".into(),
-            ));
+            )));
         }
         actors.insert(history.actor, w);
     }
     let Ok(version) = crdt::decode_version(&coverage.version) else {
-        return Err(Verdict::Refuse("a malformed version".into()));
+        return Ok(Err(Verdict::Refuse("a malformed version".into())));
     };
     if version.keys().any(|actor| !actors.contains_key(actor)) {
-        return Err(Verdict::Refuse(
+        return Ok(Err(Verdict::Refuse(
             "operations of an actor no listed writer holds".into(),
-        ));
+        )));
     }
-    match crdt::snapshot_version(&c.snapshot) {
+    // Nothing member-authored is decoded here before the checker has.
+    if let isolation::Verdict::Refuse(reason) = isolation::vet_one(Blob::Snapshot, &c.snapshot)? {
+        return Ok(Err(Verdict::Refuse(reason)));
+    }
+    Ok(match crdt::snapshot_version(&c.snapshot) {
         Ok((version, frontiers))
             if version == coverage.version && frontiers == coverage.frontiers =>
         {
@@ -312,11 +320,11 @@ fn consistent(joined: &Joined, c: &Checkpoint) -> std::result::Result<(), Verdic
             "the snapshot does not match its coverage".into(),
         )),
         Err(_) => Err(Verdict::Refuse("not a full-history snapshot".into())),
-    }
+    })
 }
 
 fn judge(conn: &Connection, joined: &Joined, doc: &Document, c: &Checkpoint) -> Result<Verdict> {
-    if let Err(verdict) = consistent(joined, c) {
+    if let Err(verdict) = consistent(joined, c)? {
         return Ok(verdict);
     }
     let coverage = &c.coverage;
@@ -968,7 +976,7 @@ impl Database {
                     return Err(invalid("the checkpoint is incomplete"))
                 }
             };
-            match consistent(joined, &checkpoint) {
+            match consistent(joined, &checkpoint)? {
                 Ok(()) => {}
                 Err(Verdict::Refuse(reason)) => {
                     return Err(invalid(format!("checkpoint refused: {reason}")))

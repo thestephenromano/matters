@@ -37,4 +37,11 @@ exclude_re = [
     # part on each arrival, work quadratic in a checkpoint's 512 parts.
     'replace == with != in keep_part$',
     'replace < with > in keep_part$',
+    # The engine checker's child decodes every block of a snapshot's
+    # history (#45), in case Loro left some encoded. Loro 1.18 already
+    # decodes them when it imports a snapshot into an empty document
+    # (measured: 32 MB of deleted text took the same 32 MiB with or without
+    # it), so skipping it changes nothing a test can observe today; it
+    # keeps the child's bound if a later Loro defers the work.
+    'replace Document::read_history with \(\)$',
 ]

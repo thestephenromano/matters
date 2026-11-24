@@ -316,6 +316,19 @@ fn session(db: Database, keys: Arc<MemoryKeyStore>, dir: &std::path::Path) -> Sy
     SyncApp::open(Arc::new(db), keys, None, dir, || {}, |_| {}).unwrap()
 }
 
+/// A relay that takes connections and never answers.
+fn silent_relay() -> String {
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", silent.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in silent.incoming() {
+            held.push(stream);
+        }
+    });
+    endpoint
+}
+
 fn retrying(v: &matters_sync_app::View) -> bool {
     matches!(v.health, Health::Retrying(_))
 }
@@ -371,20 +384,38 @@ fn a_refused_leave_shows_what_is_unsent_now() {
     assert_eq!(app.view().phase, Phase::On);
 }
 
+/// An edit counts as unsent as soon as sync is asked for, whatever the
+/// last round left the view saying: waiting for nothing unsent after an
+/// edit waits for the relay to have it. Here the client is held in a round
+/// by a relay that never answers, so nothing else refreshes the view.
+#[test]
+fn an_edit_is_unsent_as_soon_as_sync_is_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = session(
+        Database::open_in_memory().unwrap(),
+        Arc::default(),
+        dir.path(),
+    );
+    app.create(&silent_relay()).unwrap();
+    assert!(app.wait_for(WAIT, |v| v.health == Health::Syncing));
+    let shown = app.view().unsent;
+    app.database()
+        .add_task(&mut Task::new(id(1), "just now", 0.0))
+        .unwrap();
+    app.sync_now();
+    let db = app.database();
+    let now = db.outgoing_records().unwrap().len() + db.outgoing_controls().unwrap().len();
+    assert!(now > shown);
+    assert_eq!(app.view().unsent, now);
+    assert_eq!(app.view().health, Health::Syncing);
+}
+
 /// Registering an invitation never holds up the caller (the interface's
 /// thread), however long the relay takes: the view says it is pending,
 /// and cancelling it drops whatever the relay answers later.
 #[test]
 fn an_invitation_is_registered_off_the_callers_thread() {
-    // A relay that takes connections and never answers.
-    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}", silent.local_addr().unwrap());
-    std::thread::spawn(move || {
-        let mut held = Vec::new();
-        for stream in silent.incoming() {
-            held.push(stream);
-        }
-    });
+    let endpoint = silent_relay();
     let dir = tempfile::tempdir().unwrap();
     let app = session(
         Database::open_in_memory().unwrap(),

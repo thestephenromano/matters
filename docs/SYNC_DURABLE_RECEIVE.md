@@ -27,7 +27,7 @@ The outer `Err` of `receive_records` is a failure of the store itself: an SQLite
 5. Its signature, its author's membership in that epoch and its writer's admission (`Authority::authenticate_at`, `authenticate_snapshot_at`). A record a removed author signed outside every signed closing prefix waits as `revoked`. Every other refusal there is final.
 6. Its writer's lineage. If it is frozen here on evidence, the record waits as `frozen`, unless an admin's closing frontier has recovered the writer and the record lies on its closed prefix (below). If the chain was closed, by a handoff or an admin's closing frontier, at a head this device already holds (or closed empty), it waits as `after-close`. A second signed successor of a record this device holds freezes the lineage (below).
 7. Its place in its writer's chain: its predecessor must be the chain's head here, or it waits for it. The first record of a replacement writer also waits, as `handoff`, until this device holds the closing head of the writer it replaced (below).
-8. Its engine update must carry only its writer's admitted actor, and the engine must already hold every operation the update depends on, read from the update's metadata without importing it. Otherwise it waits for them.
+8. The engine checker must have decoded its engine update within its budget, in a child process (below, "Engine resources"); otherwise it is refused. The update must carry only its writer's admitted actor, and the engine must already hold every operation the update depends on, read from the update's metadata without importing it. Otherwise it waits for them.
 
 The record then applies.
 
@@ -66,6 +66,27 @@ An update applies only when the engine holds every operation it depends on, so t
 The page's updates are merged unindexed. At the page's end the document is reindexed and projected once. If that fails, the page is rolled back and received again with each update's effect on the document checked on its own. The update that leaves the document unreadable is refused, so the engine and the rows stay in step. That second pass costs one projection per applied record of the page. A document that cannot be projected before the page is reported as the page's failure.
 
 Engine work on member-authored bytes runs under `catch_unwind`: decoding an update's metadata, importing it, reading a snapshot's version, reindexing and projecting. A panic there refuses the record, and the engine is rebuilt from the journal, keeping its engine actor. An engine that panicked can hold poisoned locks, on which Loro's own drop panics again, so a document's engine is dropped under `catch_unwind` too (`Document`'s `Drop`). A panic elsewhere, while the database's locks are held, poisons them. The next call takes them back: it rolls back any transaction the panicking call left open, clears `query_only`, and rebuilds the engine from the journal. The sealing state is kept as last set; a membership the panicking call had taken out reads as sync not resumed until the next resume.
+
+## Engine resources
+
+Loro bounds neither the memory nor the processor time of a decode, and no input cap supplies a bound: a member-signed update under 100 bytes can decode to gigabytes ([checkpoints](SYNC_CHECKPOINTS.md#limits) gives the measurements). A bound cannot be kept inside the process, since a failed allocation aborts it on stable Rust, and an out-of-memory kill records nothing: the device would meet the same record on every start.
+
+So nothing member-authored is decoded in the app before the **engine checker** has decoded it (`crdt::isolation`, #45). Matters' binaries (`matters-ui`, `matters-syncd`) install one at startup that runs the binary itself (`/proc/self/exe`) again in check mode: `main` enters it first, before Qt or the async runtime starts, so check mode never starts the interface. The child limits its own address space (`RLIMIT_AS`, on top of what it already uses) and processor time (`RLIMIT_CPU`) for each blob, writes no core file, follows the app if it dies, and is first in line for the out-of-memory killer; the app kills it at a wall-clock deadline. For an update the child decodes its metadata (as the actor and dependency checks do) and imports it into a scratch document (as merging does). It reports each blob as it finishes, so when one stops it, the blobs before it have passed and the culprit is known: the rest go on in a new child.
+
+- **One child for a page.** Before the first record's turn, each fresh data record of the page is authenticated and opened once, keeping what that found for its turn, and the checker decodes all their updates in one child. A record kept waiting meets its verdict again when it applies. Verdicts are kept by the hash of the bytes for the life of the process (the latest 4,096), so a refused record delivered again is refused without a child, and records kept waiting across pages need none.
+- **A verdict is final.** An update that ran out of memory or processor time, outlived its deadline or stopped the decoder is refused and quarantined, with the reason "the engine could not decode it within its budget" and the cause. The rest of the page goes on.
+- **No verdict is no refusal.** A child that cannot be started, that does not greet in check mode, that cannot limit itself, or that something else kills (the system's out-of-memory killer, say) judges nothing: the page fails as a store failure, refusing nothing, and is received again later. With no checker installed, receiving fails the same way, so a binary that installs none cannot decode untrusted bytes without limits. Only builds with the `test-support` feature, which no application enables, decode in-process when none is installed.
+
+**The update budget** is 256 MiB of address space and 10 s of processor time, never more than half the machine's memory; the wall clock allows 20 s to start, and each update 20 s beyond twice its processor time. An update is at most 1 MiB (`MAX_PLAINTEXT_BYTES`). The largest honest updates, measured on one shared development host ([evidence record](evidence/sync-engine-budget-2026-11-23.json): i9-10920X, release build, one run each), took:
+
+| One commit of 1 MiB | Address space | Processor time |
+| --- | ---: | ---: |
+| creating tasks, titles only | 32.0 MiB | 0.20 s |
+| creating tasks and moving each | 32.5 MiB | 0.21 s |
+| renaming one task again and again | 48.5 MiB | 0.42 s |
+| one task's notes | 2.0 MiB | 0.00 s |
+
+The budget allows the most of these 5.3 times its memory and 24 times its time. The hostile update above reaches the memory budget at about 2×10^6 ops, in about a second.
 
 ## Forks, closing heads and duplicates
 
@@ -115,6 +136,19 @@ A writer's first record waits, as `handoff`, until this device holds the closing
 
 `crates/matters-core/tests/revocation_tests.rs` covers records within and past an admin's closing frontier.
 
+`crates/matters-core/tests/engine_isolation.rs` is its own engine checker: its `main` enters check mode first, as Matters' binaries do. Against a real child, with deliberately low budgets, it covers:
+- a hostile update (one change whose op columns hold 10^6 zero-length map deletions, under 100 bytes) refused for its memory, while honest updates before and after it in the same child pass;
+- the running binary, with the default budgets, passing an honest update of 2,000 created tasks and refusing the hostile one;
+- processor time and the wall-clock deadline as budgets, and a blob's reading kept out of its budget;
+- the child's own limits, read from `/proc`: no core file, first for the out-of-memory killer, and each blob's address space and processor time;
+- a child that does not greet, is killed from outside, cannot limit itself, or is no program, judging nothing; one that quits early refusing its blob;
+- a page holding the hostile update: refused and quarantined, the page's genuine record applied, its updates checked in one child, a second delivery refused on the verdict kept, and the database reopening on what it took;
+- records met twice in a page, or held already, not authenticated ahead;
+- records kept waiting applying on the verdicts reached when they arrived;
+- the same hostile update, with no isolation installed, waiting instead (what the tests above rely on);
+- the hostile update handed to `receive_update`, not taken;
+- a snapshot past its budget refused as a checkpoint ([checkpoints](SYNC_CHECKPOINTS.md)).
+
 `crates/matters-core/tests/receive_limits_tests.rs` covers:
 - a genuine record a flood evicted, read again after its rotation arrives, once for each change of manifest;
 - the rewind kept to the earliest place of a generation, never moving the cursor forward or into another generation, and forgotten on a generation change;
@@ -137,7 +171,7 @@ The `receive` fuzz target drives a joined database through fuzzed sequences of r
 - **Fork evidence** keeps the contradicting record's signed bytes, and only the digest of the record already applied: signed bytes are not retained once applied.
 - **Recovering a frozen lineage** needs the admin to remove the device. A device that applied another branch before the fork became visible keeps it, and applies nothing more of that writer. Of a lineage frozen on competing handoffs, only writers this device admitted are recovered: the records of a writer whose claim it refused stay frozen. A record whose place was unknown when it was tried stays frozen until the next membership change, unless the walk reaches it first.
 - **Replacement writers.** A refused or frozen record in a closed prefix blocks the replacement's content for good, as in the prototype.
-- **Engine resources.** A Loro decode has no memory or CPU bound, and no input cap supplies one: a member-signed update under 100 bytes can decode to gigabytes. The measurements are in [checkpoints](SYNC_CHECKPOINTS.md#limits).
+- **Engine resources.** The engine checker bounds a member's update only within its budget (above): a hostile update may take 256 MiB and 10 s of processor time in the child, once, before it is refused. An update that passed is decoded again in the app, which takes about what it took in the child, so the app's own decoding of a page is bounded by the page's updates' budgets. What the child cannot reproduce is merging: it imports the update into an empty document, where its operations wait for their dependencies, while the app applies them to its state. So the state that applying an update's operations builds is not bounded by the checker, only their decoding is. The checker runs while the database is locked, so a page holds other writes for as long as its child runs: a debug build of `matters-ui` started in check mode in 0.8 s and checked a page of 256 small honest updates in 0.9 s, on the host above. Linux only: the limits are `RLIMIT_AS` and `RLIMIT_CPU`, and the binary is `/proc/self/exe`.
 
 ## The earlier experiment
 

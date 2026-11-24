@@ -1,0 +1,177 @@
+{
+  "date": "2026-11-23",
+  "issue": 45,
+  "what": "Same-host cost of the engine checker's decoding (matters_core::crdt::isolation::decode, which is the receiver's own decoding of a member's engine bytes and more) for the largest honest updates and for honest snapshots of growing collections, from which the checker's budgets are chosen",
+  "source_commit": "branch core/engine-isolation, built on cc4f89c; the commits it was then rebased onto (#265, #266, #268) do not change the decoding measured",
+  "command": [
+    "cargo",
+    "run",
+    "--release",
+    "-p",
+    "matters-core",
+    "--example",
+    "engine_budget",
+    "--",
+    "<scratch directory>"
+  ],
+  "method": "Each blob is written to a file and decoded in a fresh process, which reads it first, as the checker's child does. address_space_growth is VmPeak after decoding less VmSize before it: what RLIMIT_AS must allow on top of the child's own address space. resident_peak is VmHWM, the whole process included. cpu_seconds is user and system time from /proc/self/stat, in 10 ms ticks.",
+  "host": {
+    "name": "betelgeuse",
+    "cpu": "Intel(R) Core(TM) i9-10920X CPU @ 3.50GHz",
+    "logical_cpus": 23,
+    "memory_kb": 65529560,
+    "kernel": "Linux 7.3.4-200.fc44.x86_64",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "loro": "1.18.0",
+    "conditions": "shared development host with other sessions building; no CPU pinning; one run per workload, so wall time is not a measure of the decoding alone"
+  },
+  "workloads": {
+    "update-creates": "one commit creating tasks with titles only, as large as fits in 1 MiB (MAX_PLAINTEXT_BYTES)",
+    "update-notes": "one commit creating a task with notes of about 1 MiB",
+    "update-renames": "one commit creating a task and renaming it again and again, as many times as fit in 1 MiB",
+    "update-moves": "one commit creating tasks and moving each to the top, as many as fit in 1 MiB",
+    "snapshot-words-N": "N tasks, each created in its own commit with 1 KiB notes of varied words; every second renamed and every tenth completed, each its own commit",
+    "snapshot-repeated-N": "as snapshot-words-N, with notes of 1 KiB of one repeated letter, which LZ4 compresses furthest",
+    "snapshot-titles-N": "as snapshot-words-N, with no notes"
+  },
+  "runs": [
+    {
+      "workload": "update-creates",
+      "bytes": 1048386,
+      "address_space_growth_bytes": 33595392,
+      "resident_peak_bytes": 39317504,
+      "cpu_seconds": 0.2,
+      "wall_seconds": 0.47
+    },
+    {
+      "workload": "update-notes",
+      "bytes": 1047990,
+      "address_space_growth_bytes": 2113536,
+      "resident_peak_bytes": 9629696,
+      "cpu_seconds": 0.0,
+      "wall_seconds": 0.02
+    },
+    {
+      "workload": "update-renames",
+      "bytes": 1048575,
+      "address_space_growth_bytes": 50827264,
+      "resident_peak_bytes": 58236928,
+      "cpu_seconds": 0.42,
+      "wall_seconds": 0.59
+    },
+    {
+      "workload": "update-moves",
+      "bytes": 1048569,
+      "address_space_growth_bytes": 34082816,
+      "resident_peak_bytes": 39170048,
+      "cpu_seconds": 0.21,
+      "wall_seconds": 0.37
+    },
+    {
+      "workload": "snapshot-words-1000",
+      "bytes": 1212963,
+      "address_space_growth_bytes": 16302080,
+      "resident_peak_bytes": 23994368,
+      "cpu_seconds": 0.05,
+      "wall_seconds": 0.18
+    },
+    {
+      "workload": "snapshot-repeated-1000",
+      "bytes": 337350,
+      "address_space_growth_bytes": 15339520,
+      "resident_peak_bytes": 22028288,
+      "cpu_seconds": 0.05,
+      "wall_seconds": 0.2
+    },
+    {
+      "workload": "snapshot-titles-1000",
+      "bytes": 155574,
+      "address_space_growth_bytes": 11079680,
+      "resident_peak_bytes": 17498112,
+      "cpu_seconds": 0.03,
+      "wall_seconds": 0.16
+    },
+    {
+      "workload": "snapshot-words-10000",
+      "bytes": 12250903,
+      "address_space_growth_bytes": 133496832,
+      "resident_peak_bytes": 148684800,
+      "cpu_seconds": 0.97,
+      "wall_seconds": 2.34
+    },
+    {
+      "workload": "snapshot-repeated-10000",
+      "bytes": 3498567,
+      "address_space_growth_bytes": 124768256,
+      "resident_peak_bytes": 130347008,
+      "cpu_seconds": 0.85,
+      "wall_seconds": 1.95
+    },
+    {
+      "workload": "snapshot-titles-10000",
+      "bytes": 1665438,
+      "address_space_growth_bytes": 92102656,
+      "resident_peak_bytes": 94859264,
+      "cpu_seconds": 0.65,
+      "wall_seconds": 1.49
+    },
+    {
+      "workload": "snapshot-words-50000",
+      "bytes": 61390255,
+      "address_space_growth_bytes": 627728384,
+      "resident_peak_bytes": 683237376,
+      "cpu_seconds": 6.5,
+      "wall_seconds": 11.13
+    },
+    {
+      "workload": "snapshot-repeated-50000",
+      "bytes": 17684035,
+      "address_space_growth_bytes": 583839744,
+      "resident_peak_bytes": 592093184,
+      "cpu_seconds": 6.04,
+      "wall_seconds": 11.89
+    },
+    {
+      "workload": "snapshot-titles-50000",
+      "bytes": 8612887,
+      "address_space_growth_bytes": 410648576,
+      "resident_peak_bytes": 414044160,
+      "cpu_seconds": 5.53,
+      "wall_seconds": 12.83
+    },
+    {
+      "workload": "snapshot-words-100000",
+      "bytes": 122582532,
+      "address_space_growth_bytes": 1258573824,
+      "resident_peak_bytes": 1356877824,
+      "cpu_seconds": 14.71,
+      "wall_seconds": 41.98
+    },
+    {
+      "workload": "snapshot-repeated-100000",
+      "bytes": 35180631,
+      "address_space_growth_bytes": 1171124224,
+      "resident_peak_bytes": 1182150656,
+      "cpu_seconds": 13.65,
+      "wall_seconds": 39.72
+    },
+    {
+      "workload": "snapshot-titles-100000",
+      "bytes": 17212983,
+      "address_space_growth_bytes": 831209472,
+      "resident_peak_bytes": 827244544,
+      "cpu_seconds": 12.34,
+      "wall_seconds": 36.38
+    }
+  ],
+  "budgets": {
+    "update": "256 MiB of address space and 10 s of processor time per update; the most an honest update took is 48.5 MiB and 0.42 s (update-renames): 5.3 and 24 times that",
+    "snapshot": "512 MiB plus 96 MiB per MiB of snapshot, and 10 s plus 2 s per MiB; the most memory for its size was snapshot-titles-100000 (16.4 MiB, 793 MiB, 12.3 s), allowed 2,144 MiB and 44 s: 2.7 and 3.6 times that",
+    "both": "the wall clock allows the start, and each blob 20 s beyond twice its processor budget; no budget is more than half the machine's memory"
+  },
+  "findings": [
+    "Memory grows with the collection, not the snapshot's bytes: about 8 KiB per task without notes and 11 to 12 KiB with 1 KiB notes, so the ratio of memory to snapshot size depends on how far the content compresses (10 times for varied words, 33 for repeated letters, 48 for titles only).",
+    "An honest 1 MiB update took at most 48.5 MiB; one holding a single large text took 2 MiB.",
+    "Processor time is about 0.12 to 0.15 s per 1,000 tasks of a snapshot on this host."
+  ]
+}
